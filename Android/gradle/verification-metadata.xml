@@ -262,6 +262,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.animation" name="animation-android" version="1.10.4">
+         <artifact name="animation-1.10.4-samples-sources.jar">
+            <sha256 value="0f24b3f848c1c0008509e994aa53a7f2a1721832bbdc38ca60bb0ef4d7f325d8" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="animation-android-1.10.4-sources.jar">
             <sha256 value="1e6e38910e5579511e648e9e31238ea8164dc185bcd2b3a57df4f51994e69f37" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -281,6 +284,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.animation" name="animation-core-android" version="1.10.4">
+         <artifact name="animation-core-1.10.4-samples-sources.jar">
+            <sha256 value="cbd4b9814d7e2af91b3a22f554e75281beaf23c3f47016f98a79b1ac0f3cb6b2" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="animation-core-android-1.10.4-sources.jar">
             <sha256 value="12c1db9f74f744f4c33d04ab7272226dc1e67a1e5cfafbe808036718ac954fe1" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -300,6 +306,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.foundation" name="foundation-android" version="1.10.4">
+         <artifact name="foundation-1.10.4-samples-sources.jar">
+            <sha256 value="4d4246a8ab50357d37a07ba37960e99c893e1008658ca21489843291168f50a3" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="foundation-android-1.10.4-sources.jar">
             <sha256 value="b918e13fb35df24fcfcdcbbe8cb4115cb41e97c854151d55af0ef92317d642a9" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -319,6 +328,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.foundation" name="foundation-layout-android" version="1.10.4">
+         <artifact name="foundation-layout-1.10.4-samples-sources.jar">
+            <sha256 value="b58c161d02d590a00d629e5e9a12d722fec07f8a162dba9ec6fc61471fa587ca" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="foundation-layout-android-1.10.4-sources.jar">
             <sha256 value="783cf0bcb1261e922f15815f02942c06583cfeaadb1612dc3cefdfc24fb08c3e" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -338,6 +350,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.material" name="material-android" version="1.10.4">
+         <artifact name="material-1.10.4-samples-sources.jar">
+            <sha256 value="4c67d55eb6cde6ac0486cbef241b9d87a0cb522b88959dd9fb27a050a8628a16" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="material-android-1.10.4-sources.jar">
             <sha256 value="2b77964a1b185e7405b008f6b2c41581f1c77e540958e9c0f321c51b31d2906f" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -376,6 +391,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.material3" name="material3-android" version="1.4.0">
+         <artifact name="material3-1.4.0-samples-sources.jar">
+            <sha256 value="699d0ca959a2705434836bfac343d20cdb2973e9dc23656fa9c0993a8b54909b" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="material3-android-1.4.0-sources.jar">
             <sha256 value="3e3209422a382566a780e2c1410edd866e4474498098fdbcf942c690ade1ddaa" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -395,6 +413,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.runtime" name="runtime-android" version="1.10.4">
+         <artifact name="runtime-1.10.4-samples-sources.jar">
+            <sha256 value="3f71dd389969806994dfe865c46e7c486d72a64f2a078e1566e1e3a5365676cc" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="runtime-android-1.10.4-sources.jar">
             <sha256 value="7596b9060c0d4271a37d2b4ff5e60eaabb663469f86bfcf3429d49083c70703d" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -414,6 +435,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.runtime" name="runtime-annotation-android" version="1.10.4">
+         <artifact name="runtime-annotation-1.10.4-samples-sources.jar">
+            <sha256 value="728e5ed27524324dc79b771f67891f711058041ef3d6b805edbe0e4c0fea3fd4" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="runtime-annotation-android-1.10.4-sources.jar">
             <sha256 value="faddbe6240e43542fcccfb4106f15b36494facbd81dc18e58124c1327dfe4fb1" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -433,6 +457,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.runtime" name="runtime-retain-android" version="1.10.4">
+         <artifact name="runtime-retain-1.10.4-samples-sources.jar">
+            <sha256 value="e9c89b9b7c7c631dedbe038084e9695af827d963e249ee069b04ed3f558bd26b" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="runtime-retain-android-1.10.4-sources.jar">
             <sha256 value="5acfa51320a00d8db46a2c54f67beaf636c5320274f4d76b3499161b0b7eb018" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -452,6 +479,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.runtime" name="runtime-saveable-android" version="1.10.4">
+         <artifact name="runtime-saveable-1.10.4-samples-sources.jar">
+            <sha256 value="d0bd72443e52be73b831a94052e2a1fa733d6dfbbfa9ff57c67075b75c02de0d" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="runtime-saveable-android-1.10.4-sources.jar">
             <sha256 value="6d8d50f5fbdf4ae9ba0602328c9cd9e3ac1beaf64fe40d8890712d7b208fe39d" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -471,6 +501,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.ui" name="ui-android" version="1.10.4">
+         <artifact name="ui-1.10.4-samples-sources.jar">
+            <sha256 value="49d116dcd77d64a33f7137ab7c1fe97eb293d7b087946ee5ff2a43ecff3c2e34" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="ui-android-1.10.4-sources.jar">
             <sha256 value="1396efef9df0f5558d31aad1792a37303ba3221c2fa7eb6bdbae11b51cf99086" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -509,6 +542,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.ui" name="ui-graphics-android" version="1.10.4">
+         <artifact name="ui-graphics-1.10.4-samples-sources.jar">
+            <sha256 value="1065b28a74543f305ddbd5c7018c719d894dd60c974b14f8ef76702af72f3343" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="ui-graphics-android-1.10.4-sources.jar">
             <sha256 value="963de783dc1a7f8274e9eb9e3125092238cd784d4470e78a34d01fcf1624c0e7" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -528,6 +564,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.ui" name="ui-test-android" version="1.10.4">
+         <artifact name="ui-test-1.10.4-samples-sources.jar">
+            <sha256 value="d3ed348ff689e0cc554a49e77dcde14fb863951710a46fa2ef950d64f371d1d5" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="ui-test-android-1.10.4-sources.jar">
             <sha256 value="7bf08c206d0d96b4df7320ae6a0cf0af7b11c88bcf173fa9df66bc387bbe768c" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -577,6 +616,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.ui" name="ui-text-android" version="1.10.4">
+         <artifact name="ui-text-1.10.4-samples-sources.jar">
+            <sha256 value="2540d3b6b926b0dc2047e93c62b30b954ab865d3f58870463925141323b3c85b" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="ui-text-android-1.10.4-sources.jar">
             <sha256 value="9440b0cae0c4d7f811d840bde40c3eeeb466d53a78a266932fe5f4b3ce6503a5" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -596,6 +638,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.ui" name="ui-tooling-android" version="1.10.4">
+         <artifact name="ui-tooling-1.10.4-samples-sources.jar">
+            <sha256 value="0f24b3f848c1c0008509e994aa53a7f2a1721832bbdc38ca60bb0ef4d7f325d8" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="ui-tooling-android-1.10.4-sources.jar">
             <sha256 value="b1fae6fb3a172ea399823ac4085d7cdd14aa2e670d5e702d6c75adc8f0c4690f" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -653,6 +698,9 @@
          </artifact>
       </component>
       <component group="androidx.compose.ui" name="ui-unit-android" version="1.10.4">
+         <artifact name="ui-unit-1.10.4-samples-sources.jar">
+            <sha256 value="fdcf3d785b1f0fad25368f9152c1c1e03c02071ee3e9155f998752f1abfa2300" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="ui-unit-android-1.10.4-sources.jar">
             <sha256 value="8a124fbc5b090990a96116d1190fb5cef817e7fec200ce2c91c19844b51a31d0" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -732,6 +780,9 @@
          </artifact>
       </component>
       <component group="androidx.core" name="core" version="1.16.0">
+         <artifact name="core-1.16.0-samples-sources.jar">
+            <sha256 value="7b42513b7a33535365c4606d46e5dd9c0c747ed704bcdc39ae1db665c3d00b8d" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="core-1.16.0-sources.jar">
             <sha256 value="ed8ec0b5d74352b852c5eda44a6f21cdb726fd2a94293dc2609219330136b207" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -1139,6 +1190,9 @@
          </artifact>
       </component>
       <component group="androidx.lifecycle" name="lifecycle-runtime-compose-android" version="2.9.4">
+         <artifact name="lifecycle-runtime-compose-2.9.4-samples-sources.jar">
+            <sha256 value="2d1bc5290f1147a6dce424c708c0a536d58c03f51e3af6d809f2d0b404b39ca4" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="lifecycle-runtime-compose-android-2.9.4-sources.jar">
             <sha256 value="60f77ad98798c212db32fc534e3e481f7f517b002ab293a31ba36f749dc7e8d1" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -1260,6 +1314,9 @@
          </artifact>
       </component>
       <component group="androidx.lifecycle" name="lifecycle-viewmodel-compose-android" version="2.9.4">
+         <artifact name="lifecycle-viewmodel-compose-2.9.4-samples-sources.jar">
+            <sha256 value="107f3cf7d1f85088b2c2d0bf8d634285cf7d3f6544eab5dc2ce85652b41f2e4c" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="lifecycle-viewmodel-compose-android-2.9.4-sources.jar">
             <sha256 value="e35a34887df735b4c00eee74d2d1e6c3b1a69dcf602fadeebf5e37b631c830b3" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -1336,6 +1393,9 @@
          </artifact>
       </component>
       <component group="androidx.lifecycle" name="lifecycle-viewmodel-savedstate-android" version="2.9.4">
+         <artifact name="lifecycle-viewmodel-savedstate-2.9.4-samples-sources.jar">
+            <sha256 value="db875f4851cbc4a6c89085aa0acc8b9517c9df7ad2c987da1c9111c2121247bb" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="lifecycle-viewmodel-savedstate-android-2.9.4-sources.jar">
             <sha256 value="743019a7d172beaa5823675df52affcef66ccc4ef8716e4494fd46bf5a315a13" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -1396,6 +1456,9 @@
          </artifact>
       </component>
       <component group="androidx.navigation" name="navigation-compose-android" version="2.9.7">
+         <artifact name="navigation-compose-2.9.7-samples-sources.jar">
+            <sha256 value="79934d38ec38c22f77123063169fa7f29a7826030e0e193b643936f99aca2e8e" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="navigation-compose-android-2.9.7-sources.jar">
             <sha256 value="27718d4eed4efd282e8219e4bbbceccda7d95a0883fcfbb0b6da416c143810ac" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -1561,6 +1624,9 @@
          </artifact>
       </component>
       <component group="androidx.savedstate" name="savedstate-android" version="1.3.2">
+         <artifact name="savedstate-1.3.2-samples-sources.jar">
+            <sha256 value="53346ce0ace2e73c49030da45c03357ed857ec819d82f6da43ba8a22539b39e6" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="savedstate-android-1.3.2-sources.jar">
             <sha256 value="6749d720e67c3bcfef3380ba4b98ccafb6a9a57d9298d8abaa17242351a53224" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -1600,6 +1666,9 @@
          </artifact>
       </component>
       <component group="androidx.savedstate" name="savedstate-compose-android" version="1.3.2">
+         <artifact name="savedstate-compose-1.3.2-samples-sources.jar">
+            <sha256 value="87632984d47b10696a5b49c80c6876e0e1e65713695807959e10496b8912ba45" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="savedstate-compose-android-1.3.2-sources.jar">
             <sha256 value="e5e73c5468cb23da524156e64051417342e21c9bcfdefc1ae3a939a54c7ad5f5" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -1907,6 +1976,9 @@
          </artifact>
       </component>
       <component group="androidx.window" name="window" version="1.5.0">
+         <artifact name="window-1.5.0-samples-sources.jar">
+            <sha256 value="78d7db2d1392f884e22181fc4692ff360fe007c1fb0131b12f18edaea7ace25f" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="window-1.5.0-sources.jar">
             <sha256 value="37d85fa5e68b3bc28c88b05dc2b0d5d7caf0af3d7692bd0bc0c56a8dc6ca6a33" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>
@@ -1926,6 +1998,9 @@
          </artifact>
       </component>
       <component group="androidx.window" name="window-core-android" version="1.5.0">
+         <artifact name="window-core-1.5.0-samples-sources.jar">
+            <sha256 value="9d380bee44d8ab4077a9e94d116d01cea672c18a68ec9b0b20df618f8bf192f3" origin="Compared with fresh publisher download (2026-09-09)"/>
+         </artifact>
          <artifact name="window-core-android-1.5.0-sources.jar">
             <sha256 value="df2d830a33d04300574b65d7a87904458a910b879af3d13022def0a627a22df6" origin="Compared with fresh publisher download (2026-09-09)"/>
          </artifact>

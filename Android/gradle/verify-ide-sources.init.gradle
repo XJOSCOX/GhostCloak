@@ -1,6 +1,6 @@
 // Android Studio resolves source attachments that assemble/test tasks do not request.
 // Run from Android/: ./gradlew -I gradle/verify-ide-sources.init.gradle verifyIdeSources
-// Discover settings/build-plugin and JVM sources, then check recorded source classifiers.
+// Discover plugin and Android/JVM sources and Javadocs, then check recorded classifiers.
 // This task never generates or bypasses checksums.
 def settingsBuildscript
 gradle.settingsEvaluated { settings ->
@@ -22,7 +22,7 @@ gradle.projectsEvaluated {
     def root = gradle.rootProject
     root.tasks.register('verifyIdeSources') {
         group = 'verification'
-        description = 'Discover plugin/JVM sources and verify all recorded IDE source JARs.'
+        description = 'Discover Android/JVM/plugin sources and Javadocs and verify recorded IDE attachments.'
         notCompatibleWithConfigurationCache('Explicit maintenance task resolves detached configurations.')
         doLast {
             def distribution = root.configurations.detachedConfiguration(
@@ -30,15 +30,18 @@ gradle.projectsEvaluated {
             distribution.transitive = false
             distribution.resolve()
             logger.lifecycle("Verified Gradle ${gradle.gradleVersion} source ZIP.")
+            def resolvedAttachments = new LinkedHashSet()
             def verifySources = { handler, componentIds, label ->
                 def result = handler.createArtifactResolutionQuery().forComponents(componentIds)
-                    .withArtifacts(org.gradle.jvm.JvmLibrary, org.gradle.language.base.artifact.SourcesArtifact).execute()
+                    .withArtifacts(org.gradle.jvm.JvmLibrary, org.gradle.language.base.artifact.SourcesArtifact, org.gradle.language.java.artifact.JavadocArtifact).execute()
                 result.components.each { component ->
                     if (component instanceof org.gradle.api.artifacts.result.UnresolvedComponentResult) throw component.failure
-                    component.getArtifacts(org.gradle.language.base.artifact.SourcesArtifact).each { artifact ->
+                    [org.gradle.language.base.artifact.SourcesArtifact, org.gradle.language.java.artifact.JavadocArtifact].collectMany { component.getArtifacts(it) }.each { artifact ->
                         if (artifact instanceof org.gradle.api.artifacts.result.UnresolvedArtifactResult) {
                             throw artifact.failure
                         }
+                        def id = component.id
+                        resolvedAttachments.add("${id.group}:${id.module}:${id.version}:${artifact.file.name}".toString())
                     }
                 }
                 logger.lifecycle("Checked ${componentIds.size()} ${label} components.")
@@ -59,7 +62,7 @@ gradle.projectsEvaluated {
             settingsIds.each { pluginScopes["${it.group}:${it.module}:${it.version}".toString()] = settingsBuildscript }
             def ids = new LinkedHashSet()
             root.allprojects.each { project ->
-                ['compileClasspath', 'runtimeClasspath', 'testCompileClasspath', 'testRuntimeClasspath'].each { name ->
+                project.configurations.findAll { it.canBeResolved && it.name.toLowerCase().endsWith('classpath') && (it.name.toLowerCase().contains('compile') || it.name.toLowerCase().contains('runtime')) }.collect { it.name }.each { name ->
                     def configuration = project.configurations.findByName(name)
                     if (configuration != null && configuration.canBeResolved) {
                         configuration.incoming.resolutionResult.allComponents.each { component ->
@@ -68,7 +71,7 @@ gradle.projectsEvaluated {
                     }
                 }
             }
-            verifySources(root.dependencies, ids, 'JVM classpath')
+            verifySources(root.dependencies, ids, 'Android/JVM compile/runtime/test classpath')
             def factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
             factory.setFeature('http://apache.org/xml/features/disallow-doctype-decl', true)
             def document = factory.newDocumentBuilder().parse(root.file('gradle/verification-metadata.xml'))
@@ -79,7 +82,7 @@ gradle.projectsEvaluated {
                 def artifacts = component.getElementsByTagName('artifact')
                 for (int j = 0; j < artifacts.length; j++) {
                     def artifact = artifacts.item(j)
-                    if (!artifact.getAttribute('name').endsWith('-sources.jar')) continue
+                    if (!artifact.getAttribute('name').endsWith('-sources.jar') && !artifact.getAttribute('name').endsWith('-javadoc.jar')) continue
                     def name = component.getAttribute('name')
                     def version = component.getAttribute('version')
                     def fileName = artifact.getAttribute('name')
@@ -88,14 +91,19 @@ gradle.projectsEvaluated {
                     // Kotlin Gradle plugins publish variant classifiers such as gradle813-sources.
                     def classifier = fileName.substring(prefix.length(), fileName.length() - 4)
                     def module = "${component.getAttribute('group')}:${name}:${version}".toString()
+                    // Queries already selected the correct Android/KMP documentation variant.
+                    if (resolvedAttachments.contains("${module}:${fileName}".toString())) {
+                        count++
+                        continue
+                    }
                     def coordinate = "${module}:${classifier}@jar"
                     // Keep settings-only artifacts in their original repository scope.
                     def scope = pluginScopes[module] ?: root
                     def configuration = scope.configurations.detachedConfiguration(scope.dependencies.create(coordinate))
                     configuration.transitive = false
-                    // Select the JVM variant for multi-platform modules such as Guava;
+                    // Guava publishes both Android and JRE variants; select JRE for its tools;
                     // the explicit classifier still selects the recorded source JAR.
-                    configuration.attributes {
+                    if (component.getAttribute('group') == 'com.google.guava' && name == 'guava') configuration.attributes {
                         attribute(org.gradle.api.attributes.Usage.USAGE_ATTRIBUTE, root.objects.named(org.gradle.api.attributes.Usage, org.gradle.api.attributes.Usage.JAVA_RUNTIME))
                         attribute(org.gradle.api.attributes.java.TargetJvmEnvironment.TARGET_JVM_ENVIRONMENT_ATTRIBUTE, root.objects.named(org.gradle.api.attributes.java.TargetJvmEnvironment, org.gradle.api.attributes.java.TargetJvmEnvironment.STANDARD_JVM))
                     }
@@ -103,8 +111,8 @@ gradle.projectsEvaluated {
                     count++
                 }
             }
-            if (count == 0) throw new GradleException('No IDE source artifacts recorded.')
-            logger.lifecycle("Verified ${count} IDE source artifacts.")
+            if (count == 0) throw new GradleException('No IDE attachments recorded.')
+            logger.lifecycle("Verified ${count} IDE source/Javadoc artifacts.")
         }
     }
 }

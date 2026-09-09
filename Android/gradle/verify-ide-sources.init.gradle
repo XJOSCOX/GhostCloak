@@ -1,14 +1,43 @@
 // Android Studio resolves source attachments that assemble/test tasks do not request.
 // Run from Android/: ./gradlew -I gradle/verify-ide-sources.init.gradle verifyIdeSources
-// Discover JVM classpath sources as well as checking recorded IDE/build-tool sources.
+// Discover settings/build-plugin and JVM sources, then check recorded source classifiers.
 // This task never generates or bypasses checksums.
+def settingsBuildscript
+gradle.settingsEvaluated { settings -> settingsBuildscript = settings.buildscript }
 gradle.projectsEvaluated {
     def root = gradle.rootProject
     root.tasks.register('verifyIdeSources') {
         group = 'verification'
-        description = 'Discover JVM classpath sources and verify all recorded IDE source JARs.'
+        description = 'Discover plugin/JVM sources and verify all recorded IDE source JARs.'
         notCompatibleWithConfigurationCache('Explicit maintenance task resolves detached configurations.')
         doLast {
+            def verifySources = { handler, componentIds, label ->
+                def result = handler.createArtifactResolutionQuery().forComponents(componentIds)
+                    .withArtifacts(org.gradle.jvm.JvmLibrary, org.gradle.language.base.artifact.SourcesArtifact).execute()
+                result.components.each { component ->
+                    if (component instanceof org.gradle.api.artifacts.result.UnresolvedComponentResult) throw component.failure
+                    component.getArtifacts(org.gradle.language.base.artifact.SourcesArtifact).each { artifact ->
+                        if (artifact instanceof org.gradle.api.artifacts.result.UnresolvedArtifactResult) {
+                            throw artifact.failure
+                        }
+                    }
+                }
+                logger.lifecycle("Checked ${componentIds.size()} ${label} components.")
+            }
+            def componentIds = { configuration ->
+                configuration.incoming.resolutionResult.allComponents.collect { it.id }
+                    .findAll { it instanceof org.gradle.api.artifacts.component.ModuleComponentIdentifier }.toSet()
+            }
+            // Settings plugins (for example Foojay) have a separate repository/classpath scope.
+            def settingsIds = componentIds(settingsBuildscript.configurations.getByName('classpath'))
+            verifySources(settingsBuildscript.dependencies, settingsIds, 'settings-plugin')
+            def pluginScopes = [:]
+            root.allprojects.each { project ->
+                def pluginIds = componentIds(project.buildscript.configurations.getByName('classpath'))
+                pluginIds.each { pluginScopes["${it.group}:${it.module}:${it.version}".toString()] = project.buildscript }
+                verifySources(project.buildscript.dependencies, pluginIds, "${project.path} build-plugin")
+            }
+            settingsIds.each { pluginScopes["${it.group}:${it.module}:${it.version}".toString()] = settingsBuildscript }
             def ids = new LinkedHashSet()
             root.allprojects.each { project ->
                 ['compileClasspath', 'runtimeClasspath', 'testCompileClasspath', 'testRuntimeClasspath'].each { name ->
@@ -20,15 +49,7 @@ gradle.projectsEvaluated {
                     }
                 }
             }
-            def sources = root.dependencies.createArtifactResolutionQuery().forComponents(ids)
-                .withArtifacts(org.gradle.jvm.JvmLibrary, org.gradle.language.base.artifact.SourcesArtifact).execute()
-            sources.components.each { component ->
-                if (component instanceof org.gradle.api.artifacts.result.UnresolvedComponentResult) throw component.failure
-                component.getArtifacts(org.gradle.language.base.artifact.SourcesArtifact).each { artifact ->
-                    if (artifact instanceof org.gradle.api.artifacts.result.UnresolvedArtifactResult) throw artifact.failure
-                }
-            }
-            logger.lifecycle("Discovered and verified sources for ${ids.size()} JVM classpath components.")
+            verifySources(root.dependencies, ids, 'JVM classpath')
             def factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
             factory.setFeature('http://apache.org/xml/features/disallow-doctype-decl', true)
             def document = factory.newDocumentBuilder().parse(root.file('gradle/verification-metadata.xml'))
@@ -47,9 +68,18 @@ gradle.projectsEvaluated {
                     if (!fileName.startsWith(prefix)) throw new GradleException("Unexpected source artifact name: ${fileName}")
                     // Kotlin Gradle plugins publish variant classifiers such as gradle813-sources.
                     def classifier = fileName.substring(prefix.length(), fileName.length() - 4)
-                    def coordinate = "${component.getAttribute('group')}:${name}:${version}:${classifier}@jar"
-                    def configuration = root.configurations.detachedConfiguration(root.dependencies.create(coordinate))
+                    def module = "${component.getAttribute('group')}:${name}:${version}".toString()
+                    def coordinate = "${module}:${classifier}@jar"
+                    // Keep settings-only artifacts in their original repository scope.
+                    def scope = pluginScopes[module] ?: root
+                    def configuration = scope.configurations.detachedConfiguration(scope.dependencies.create(coordinate))
                     configuration.transitive = false
+                    // Select the JVM variant for multi-platform modules such as Guava;
+                    // the explicit classifier still selects the recorded source JAR.
+                    configuration.attributes {
+                        attribute(org.gradle.api.attributes.Usage.USAGE_ATTRIBUTE, root.objects.named(org.gradle.api.attributes.Usage, org.gradle.api.attributes.Usage.JAVA_RUNTIME))
+                        attribute(org.gradle.api.attributes.java.TargetJvmEnvironment.TARGET_JVM_ENVIRONMENT_ATTRIBUTE, root.objects.named(org.gradle.api.attributes.java.TargetJvmEnvironment, org.gradle.api.attributes.java.TargetJvmEnvironment.STANDARD_JVM))
+                    }
                     configuration.resolve()
                     count++
                 }

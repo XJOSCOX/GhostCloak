@@ -1,6 +1,6 @@
 plugins { alias(libs.plugins.kotlin.jvm) }
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21) } }
-dependencies { testImplementation(project(":crypto")); testImplementation(project(":transport")); testImplementation(project(":backend")); testImplementation(libs.junit); testImplementation(libs.signal.client) }
+dependencies { testImplementation(project(":crypto")); testImplementation(project(":messaging")); testImplementation(project(":transport")); testImplementation(project(":backend")); testImplementation(libs.junit); testImplementation(libs.signal.client) }
 tasks.test {
     systemProperty("ghostcloak.root", rootProject.projectDir.parentFile.absolutePath)
     testLogging { events("passed", "failed"); showStandardStreams = true }

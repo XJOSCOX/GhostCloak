@@ -1,0 +1,37 @@
+package org.ghostcloak.app.ui.screens
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import org.ghostcloak.app.application.AppState
+import org.ghostcloak.app.ui.components.*
+
+@Composable fun SettingsScreen(state: AppState, rename: (String) -> Unit, developerAvailable: Boolean,
+    demo: () -> Unit, leave: () -> Unit) {
+    var username by remember(state.identity?.username) { mutableStateOf(state.identity?.username.orEmpty()) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Wordmark()
+        ScreenHeader("Settings", "Your identity, on your terms.")
+        SectionLabel("PROFILE")
+        OutlinedTextField(username, onValueChange = { if (it.length <= 32) username = it }, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        FullButton("Save username", !state.loading && username != state.identity?.username) { rename(username) }
+        Text("This changes your display name only. Your device identity, keys and safety numbers stay the same.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ErrorNotice(state.error)
+        SectionLabel("ON THIS DEVICE")
+        InfoPanel("Encrypted local history", "Contacts and messages stay inside the SQLCipher database. An unlocked or compromised endpoint can still access them.")
+        Text("Keystore: ${state.protection.lowercase()}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        InfoPanel("Privacy controls under review", "App lock and screenshot protection are not enabled. Be mindful of screen sharing, your keyboard and device access.")
+        if (developerAvailable) {
+            HorizontalDivider(); SectionLabel("DEVELOPER TOOLS · DEBUG ONLY")
+            Text("An isolated two-endpoint sandbox demonstrates encrypted text delivery on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedButton(onClick = if (state.demo) leave else demo, enabled = !state.loading, modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)) {
+                Text(if (state.demo) "Return to my identity" else "Open local demo")
+            }
+        }
+        Text("Ghost Cloak · Phase 1B\nLocal prototype. Not independently audited.\nNo network service, notifications or Ghost Mode.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}

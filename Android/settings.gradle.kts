@@ -26,4 +26,5 @@ dependencyResolutionManagement {
 rootProject.name = "GhostCloak"
 include(":app")
 include(":identity", ":crypto", ":storage", ":protocol", ":transport", ":test-support", ":backend")
+include(":messaging")
 project(":backend").projectDir = file("../backend")

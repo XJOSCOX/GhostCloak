@@ -38,6 +38,9 @@ android {
 }
 
 dependencies {
+    implementation(project(":messaging"))
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.viewmodel.compose)
     coreLibraryDesugaring(libs.desugar)
     implementation(project(":storage"))
     implementation(libs.signal.android)

@@ -1,0 +1,43 @@
+[Unit]
+Description=Ghost Cloak encrypted mailbox
+After=network.target postgresql.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ghostcloak
+Group=ghostcloak
+EnvironmentFile=/etc/ghostcloak/ghostcloak.env
+Environment="JAVA_OPTS=-Xms128m -Xmx512m -XX:MaxDirectMemorySize=128m -XX:-HeapDumpOnOutOfMemoryError -XX:ErrorFile=/dev/null"
+WorkingDirectory=/opt/ghostcloak/current
+ExecStart=/opt/ghostcloak/current/bin/backend
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitCORE=0
+LimitNOFILE=4096
+TasksMax=128
+MemoryMax=1G
+CPUQuota=200%
+# No exception/body dumps through third-party launchers. Monitor health and exit status.
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

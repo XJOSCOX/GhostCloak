@@ -8,7 +8,8 @@ interface Rows<T> { fun get(id: String): T?; fun put(id: String, row: T); fun re
 interface AccountRepository { val accounts: Rows<AccountRow> }
 interface DeviceRepository { val devices: Rows<DeviceRow> }
 interface PreKeyRepository { val prekeys: Rows<PrekeyRow> }
-interface MailboxRepository { val mailbox: Rows<MailboxRow>; val submissions: Rows<SubmissionRow> }
+interface DedupeRepository { val submissions: Rows<SubmissionRow> }
+interface MailboxRepository : DedupeRepository { val mailbox: Rows<MailboxRow> }
 interface ChallengeRepository { val challenges: Rows<ChallengeRow> }
 interface SessionRepository { val sessions: Rows<SessionRow> }
 interface BackendDatabase : AccountRepository, DeviceRepository, PreKeyRepository, MailboxRepository, ChallengeRepository, SessionRepository {

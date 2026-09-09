@@ -8,12 +8,26 @@ import org.ghostcloak.identity.RandomIdentifiers
 import org.ghostcloak.messaging.*
 import org.ghostcloak.protocol.*
 import org.ghostcloak.storage.EncryptedEndpointStore
+import org.ghostcloak.storage.KeystoreDeviceAuth
 import org.ghostcloak.transport.IdempotentMessageTransport
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
 
 class NetworkStorageTest {
+    @Test fun legacyAuthRequiresExplicitResetWithoutReplacingKey()=runBlocking {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        EncryptedEndpointStore.open(context,"l-${RandomIdentifiers.create()}").use {store->
+            val engine=SignalProtocolEngine(store);engine.createIdentity("alice")
+            val legacy=EndpointNetworkState(store,"ghostcloak.local")
+            val original=legacy.registration("alice",listOf(engine.publicBundle().publicData()))
+            val key=store.keys("network/").single {it.endsWith("auth-private")}
+            val before=store.read(key)
+            try {EndpointNetworkState(store,"ghostcloak.local",KeystoreDeviceAuth()).registration("alice",original.bundles);fail()}
+            catch(e:ApiFailure){assertEquals("legacy_auth_requires_reset",e.code)}
+            assertArrayEquals(before,store.read(key));assertTrue(store.keys("network/").none {it.endsWith("auth-alias")})
+        }
+    }
     @Test fun authCredentialTokenAndOutboxSurviveEncryptedReopen() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val name = "n-${RandomIdentifiers.create()}"
@@ -25,8 +39,11 @@ class NetworkStorageTest {
         }
         try {
             val engine = SignalProtocolEngine(store); engine.createIdentity("alice")
-            val state = EndpointNetworkState(store, "ghostcloak.local")
+            val state = EndpointNetworkState(store, "ghostcloak.local", KeystoreDeviceAuth())
             val registration = state.registration("alice", listOf(engine.publicBundle().publicData()))
+            assertTrue(store.keys("network/").none {it.endsWith("auth-private")})
+            val alias=store.read(store.keys("network/").single {it.endsWith("auth-alias")})!!.decodeToString()
+            assertNull(java.security.KeyStore.getInstance("AndroidKeyStore").apply {load(null)}.getKey(alias,null).encoded)
             val token = "test-token-only-" + RandomIdentifiers.create(); state.save(token)
             val id = DurableOutbox(store, engine, fakeTransport).enqueue(RandomIdentifiers.create(), "outbox secret fixture".toByteArray())
             val challenge = Challenge(RandomIdentifiers.create(), java.security.SecureRandom().generateSeed(32), System.currentTimeMillis() + 60000,
@@ -36,11 +53,15 @@ class NetworkStorageTest {
             val disk = File(context.noBackupFilesDir, "$name.db").readBytes().toString(Charsets.ISO_8859_1)
             assertFalse(disk.contains(token)); assertFalse(disk.contains("outbox secret fixture"))
             store = EncryptedEndpointStore.open(context, name)
-            val reopened = EndpointNetworkState(store, "ghostcloak.local")
+            val reopened = EndpointNetworkState(store, "ghostcloak.local", KeystoreDeviceAuth())
             assertEquals(token, reopened.read())
             assertTrue(DeviceAuth.verify(registration.authPublicKey, challenge, reopened.sign(challenge)))
             assertEquals(OutboxState.LOCAL, DurableOutbox(store, SignalProtocolEngine(store), fakeTransport).get(id).state)
             assertNull(EndpointNetworkState(store, "other.example").read())
+            store.transaction {store.remove(store.keys("network/").single {it.endsWith("auth-public")})}
+            try {reopened.registration("alice",registration.bundles);fail("Partial credential metadata replaced")}
+            catch(e:ApiFailure){assertEquals("credential_missing",e.code)}
+            assertArrayEquals(registration.authPublicKey,KeystoreDeviceAuth().publicKey(alias,false))
         } finally { store.close() }
     }
 }

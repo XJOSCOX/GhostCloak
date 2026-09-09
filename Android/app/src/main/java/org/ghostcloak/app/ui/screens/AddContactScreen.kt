@@ -13,12 +13,19 @@ import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.privacy.copySensitive
 import org.ghostcloak.messaging.ContactCardCodec
 
-@Composable fun AddContactScreen(state: AppState, back: () -> Unit, export: () -> Unit, import: (String) -> Unit) {
+@Composable fun AddContactScreen(state: AppState, back: () -> Unit, export: () -> Unit, lookup:((String)->Unit)?=null, import: (String) -> Unit) {
     var draft by remember { mutableStateOf("") }; var tooLarge by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
     val context = LocalContext.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         ScreenHeader("Add a contact", "A public card. A direct connection.", back)
+        if(state.networkConnected && !state.demo && lookup!=null) {
+            var username by remember {mutableStateOf("")}
+            SectionLabel("FIND BY USERNAME")
+            OutlinedTextField(username,{if(it.length<=24) username=it},label={Text("Exact username")},singleLine=true,modifier=Modifier.fillMaxWidth())
+            FullButton("Find and add contact",!state.loading && username.isNotBlank()) {lookup(username)}
+            Text("Compare safety numbers through a separate trusted channel before relying on this identity.",style=MaterialTheme.typography.bodyMedium)
+        }
         InfoPanel("Exchange public material", "Cards contain public identity and prekeys only. Share through a trusted channel, then compare your safety number.")
         SectionLabel("IMPORT THEIR CARD")
         OutlinedTextField(draft, onValueChange = { tooLarge = it.length > ContactCardCodec.MAX_TEXT; if (!tooLarge) draft = it },

@@ -68,6 +68,47 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         repository.contacts().map { ContactStatus(it, engine.getRemoteIdentityStatus(it.remoteDeviceId), engine.getSessionLifecycle(it.remoteDeviceId)) }
     }
     suspend fun messages(id: String) = action { repository.contact(id); repository.messages(id) }
+    suspend fun sendNetwork(id:String,body:String,outbox:DurableOutbox):Message=action {
+        networkAllowed(id)
+        repository.capacity()
+        val bytes=TextRules.encode(body)
+        val submission=try {outbox.enqueue(id,bytes)} finally {bytes.fill(0)}
+        val message=Message(submission,id,Direction.OUTGOING,body,System.currentTimeMillis(),MessageState.PENDING)
+        repository.save(message)
+        val result=try {outbox.process(submission)} catch(_:org.ghostcloak.protocol.ApiFailure) {return@action message}
+        message.copy(state=if(result.state==OutboxState.SERVER_ACCEPTED) MessageState.SERVER_ACCEPTED else MessageState.FAILED).also {
+            repository.save(it);outbox.removeFinished(submission)
+        }
+    }
+    private suspend fun networkAllowed(id:String) {
+        if(repository.contact(id).blocked) throw AppFailure(AppError.BLOCKED)
+        if(engine.getRemoteIdentityStatus(id)?.trustState==IdentityTrustState.CHANGED) throw CryptoFailure(CryptoError.IdentityChanged)
+        if(engine.getSessionLifecycle(id)!=SessionLifecycle.ACTIVE) throw CryptoFailure(CryptoError.UnknownSession)
+    }
+    suspend fun retryNetwork(outbox:DurableOutbox)=action {
+        for(id in outbox.pendingIds()) {
+            val entry=outbox.get(id); networkAllowed(entry.deviceId)
+            val result=outbox.process(id)
+            repository.messages(entry.deviceId).firstOrNull {it.localId==id}?.let { message ->
+                repository.save(message.copy(state=if(result.state==OutboxState.SERVER_ACCEPTED) MessageState.SERVER_ACCEPTED else MessageState.FAILED))
+            }
+            if(result.state in setOf(OutboxState.SERVER_ACCEPTED,OutboxState.FAILED)) outbox.removeFinished(id)
+        }
+    }
+    suspend fun acceptNetwork(envelope:EncryptedEnvelope)=action {
+        val hash=org.ghostcloak.protocol.DeviceAuth.digest(org.ghostcloak.protocol.EnvelopeCodec.encode(envelope))
+        if(repository.accepted(envelope.senderDeviceId,envelope.envelopeId,hash)) return@action
+        val contact=repository.contact(envelope.senderDeviceId)
+        if(contact.blocked) throw AppFailure(AppError.BLOCKED)
+        repository.capacity()
+        val bytes=engine.decrypt(envelope)
+        try {
+            val body=bytes.decodeToString(throwOnInvalidSequence=true)
+            TextRules.encode(body).fill(0)
+            repository.saveAccepted(Message(envelope.envelopeId,contact.remoteDeviceId,Direction.INCOMING,body,
+                System.currentTimeMillis(),MessageState.RECEIVED,envelope.envelopeId),hash)
+        } finally {bytes.fill(0)}
+    }
     suspend fun fingerprint(id: String, pending: Boolean = false) = action {
         repository.contact(id)
         if (pending) engine.getPendingFingerprint(id) else engine.getRemoteFingerprint(id)

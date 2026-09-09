@@ -11,6 +11,25 @@ import java.security.KeyStore
 import java.util.UUID
 
 class EndpointStorageTest {
+    @Test fun deviceAuthIsNonExportableAndMissingKeyFailsClosed() {
+        val alias="ghostcloak.test.auth."+UUID.randomUUID()
+        val keys=KeyStore.getInstance("AndroidKeyStore").apply {load(null)}
+        try {
+            val auth=KeystoreDeviceAuth()
+            val publicKey=auth.publicKey(alias,true)
+            assertNull(keys.getKey(alias,null).encoded)
+            val statement=ByteArray(32).also {java.security.SecureRandom().nextBytes(it)}
+            val signature=auth.sign(alias,statement)
+            val verifier=java.security.Signature.getInstance("SHA256withECDSA")
+            verifier.initVerify(java.security.KeyFactory.getInstance("EC").generatePublic(java.security.spec.X509EncodedKeySpec(publicKey)))
+            verifier.update(statement); assertTrue(verifier.verify(signature))
+            assertArrayEquals(publicKey,KeystoreDeviceAuth().publicKey(alias,false))
+            keys.deleteEntry(alias)
+            try {auth.publicKey(alias,false); fail("Missing key regenerated")} catch(_:EndpointStorageFailure) {}
+            try {auth.sign(alias,statement); fail("Missing key signed")} catch(_:EndpointStorageFailure) {}
+            assertFalse(keys.containsAlias(alias))
+        } finally {keys.deleteEntry(alias)}
+    }
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private fun name() = "t-${UUID.randomUUID()}"
 

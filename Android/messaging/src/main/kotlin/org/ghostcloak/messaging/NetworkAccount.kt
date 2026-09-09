@@ -8,7 +8,8 @@ import java.security.*
 import java.security.spec.*
 
 /** EndpointRecords implementations must encrypt at rest (SQLCipher/Keystore on Android). */
-class EndpointNetworkState(private val records: EndpointRecords, private val audience: String) : AccessTokenStore, RoutingDirectory {
+class EndpointNetworkState(private val records: EndpointRecords, private val audience: String,
+    private val credential: DeviceAuthCredential? = null) : AccessTokenStore, RoutingDirectory {
     private val prefix = "network/${DeviceAuth.digest(audience.toByteArray()).joinToString("") { "%02x".format(it) }}/"
     override fun read(): String? = records.transaction { records.read(prefix + "token")?.decodeToString() }
     override fun save(token: String?) = records.transaction { if (token == null) records.remove(prefix + "token") else records.write(prefix + "token", token.toByteArray()) }
@@ -21,6 +22,24 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
     }
     fun registration(username: String, bundles: List<PublicBundle>): Registration = records.transaction {
         requireApi(records.read("local/device") != null, "identity_required")
+        if (credential != null) {
+            val legacy=records.read(prefix+"auth-private")
+            if(legacy!=null) {legacy.fill(0); throw ApiFailure(409,"legacy_auth_requires_reset")}
+            val storedAlias=records.read(prefix+"auth-alias")?.decodeToString()
+            val existingPublic=records.read(prefix+"auth-public")
+            requireApi((storedAlias==null)==(existingPublic==null),"credential_missing")
+            if(storedAlias==null) requireApi(records.read(prefix+"account")==null && records.read(prefix+"routing")==null && records.read(prefix+"registered")==null,"credential_missing")
+            val alias=storedAlias ?: ("ghostcloak.auth."+prefix.removePrefix("network/").removeSuffix("/")+"."+records.read("local/device")!!.decodeToString())
+            val publicKey=credential.publicKey(alias,create=existingPublic==null)
+            requireApi(existingPublic==null || MessageDigest.isEqual(existingPublic,publicKey),"credential_changed")
+            if(existingPublic==null) {
+                records.write(prefix+"auth-alias",alias.toByteArray()); records.write(prefix+"auth-public",publicKey)
+                records.write(prefix+"account",RandomIdentifiers.create().toByteArray()); records.write(prefix+"routing",RandomIdentifiers.create().toByteArray())
+            }
+            return@transaction Registration(records.read(prefix+"account")!!.decodeToString(),records.read("local/device")!!.decodeToString(),
+                records.read(prefix+"routing")!!.decodeToString(),Usernames.normalize(username),publicKey,bundles)
+        }
+        requireApi(records.read(prefix+"auth-alias")==null,"platform_credential_required")
         var encoded = records.read(prefix + "auth-private")
         if (encoded == null) {
             requireApi(records.read(prefix + "account") == null && records.read(prefix + "auth-public") == null, "credential_missing")
@@ -38,12 +57,20 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
     fun sign(c: Challenge): ByteArray = records.transaction {
         requireApi(c.audience == audience && c.accountId == records.read(prefix + "account")?.decodeToString() && c.deviceId == records.read("local/device")?.decodeToString(), "challenge_binding")
         requireApi(c.random.size == 32 && c.purpose in setOf("register", "login") && c.expiresAt > System.currentTimeMillis(), "invalid_challenge")
+        if(credential!=null) {
+            if(records.read(prefix+"auth-private")!=null) throw ApiFailure(409,"legacy_auth_requires_reset")
+            val alias=records.read(prefix+"auth-alias")?.decodeToString() ?: throw ApiFailure(401,"credential_missing")
+            return@transaction credential.sign(alias,DeviceAuth.statement(c))
+        }
         val secret = records.read(prefix + "auth-private") ?: throw ApiFailure(401, "credential_missing")
         try {
             val privateKey = KeyFactory.getInstance("EC").generatePrivate(PKCS8EncodedKeySpec(secret))
             Signature.getInstance("SHA256withECDSA").run { initSign(privateKey); update(DeviceAuth.statement(c)); sign() }
         } finally { secret.fill(0) }
     }
+    fun registered():Boolean=records.transaction {records.read(prefix+"registered")!=null}
+    fun markRegistered()=records.transaction {records.write(prefix+"registered",byteArrayOf(1))}
+    fun accountId():String=records.transaction {records.read(prefix+"account")?.decodeToString() ?: throw ApiFailure(401,"credential_missing")}
 }
 class NetworkAccount(private val client: HttpGhostClient, private val state: EndpointNetworkState) {
     suspend fun register(registration: Registration) {
@@ -51,6 +78,7 @@ class NetworkAccount(private val client: HttpGhostClient, private val state: End
         val c = client.unauthenticated(ApiRequest.Issue(registration.accountId, registration.deviceId, "register", hash)).challenge ?: throw ApiFailure(502, "invalid_response")
         requireApi(c.purpose == "register" && c.registrationHash.contentEquals(hash), "challenge_binding")
         client.unauthenticated(ApiRequest.Register(registration, c.id, state.sign(c)))
+        state.markRegistered()
     }
     suspend fun login(accountId: String, deviceId: String) {
         val c = client.unauthenticated(ApiRequest.Issue(accountId, deviceId, "login")).challenge ?: throw ApiFailure(502, "invalid_response")

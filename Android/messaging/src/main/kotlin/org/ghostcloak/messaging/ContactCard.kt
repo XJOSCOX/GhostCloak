@@ -23,7 +23,7 @@ object ContactCardCodec {
     private val format = Cbor { encodeDefaults = true; ignoreUnknownKeys = false }
     private fun validate(card: ContactCard) {
         if (card.version != 1 || !RandomIdentifiers.valid(card.userId) || !RandomIdentifiers.valid(card.deviceId) ||
-            !card.username.matches(Regex("[A-Za-z0-9_]{1,32}")) || card.registrationId !in 1..16380 ||
+            !card.username.matches(Regex("[A-Za-z0-9_][A-Za-z0-9_.]{0,31}")) || card.registrationId !in 1..16380 ||
             listOf(card.preKeyId, card.signedId, card.kyberId).any { it <= 0 } ||
             listOf(card.identity, card.preKey, card.signedKey).any { it.size != 33 } ||
             card.signature.size != 64 || card.kyberSignature.size != 64 || card.kyberKey.size !in 1000..2000)

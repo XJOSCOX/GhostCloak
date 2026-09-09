@@ -33,8 +33,8 @@ import org.ghostcloak.app.ui.screens.*
                 if (state.identity == null) FirstLaunchScreen(state, model::create)
                 else NavHost(nav, startDestination = "contacts") {
                     composable("contacts") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }) }
-                    composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard) { text -> model.importCard(text) { nav.popBackStack() } } }
-                    composable("settings") { SettingsScreen(state, model::rename, model.developerAvailable, model::startDemo, model::leaveDemo) }
+                    composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard, {name->model.addNetwork(name) {nav.popBackStack()}}) { text -> model.importCard(text) { nav.popBackStack() } } }
+                    composable("settings") { SettingsScreen(state, model::rename, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork) }
                     composable("conversation/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable
                         val contact = state.contacts.firstOrNull { it.contact.remoteDeviceId == id } ?: return@composable

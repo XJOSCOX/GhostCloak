@@ -39,4 +39,12 @@ class LocalRepository(private val records: EndpointRecords) {
     }
     fun delete(id: String, localId: String) = records.transaction { records.remove("app/message/$id/$localId") }
     fun capacity() = records.transaction { if (records.keys("app/message/").size >= 5000) throw AppFailure(AppError.LOCAL_CAPACITY) }
+    fun accepted(sender:String,id:String,hash:ByteArray):Boolean=records.transaction {
+        val existing=records.read("app/accepted/$sender/$id") ?: return@transaction false
+        require(java.security.MessageDigest.isEqual(existing,hash)) {"Envelope receipt conflict"}; true
+    }
+    fun saveAccepted(message:Message,hash:ByteArray)=records.transaction {
+        require(records.keys("app/accepted/").size<10000)
+        save(message); records.write("app/accepted/${message.conversationId}/${message.envelopeId}",hash)
+    }
 }

@@ -1,0 +1,9 @@
+# Logging policy
+
+Production uses no access logger, SLF4J NOP, disabled JDBC JUL logging and null service stdout/stderr. Exceptions return fixed protocol errors without stack traces. nginx access and error logging are disabled because native error records can contain request URLs and client addresses. Do not enable request tracing, HTTP debug, SQL parameter logging, heap dumps or core dumps. PostgreSQL settings suppress statements, bind parameters and routine connection records; audit the effective server settings and any provider agent, pgAudit or query-statistics extension before staging.
+
+Health returns only ok/unavailable. Monitor process exit status, health availability, disk capacity, certificate expiry and coarse infrastructure load. Loss of detailed logs makes incident diagnosis and abuse attribution harder; that is an explicit prototype tradeoff. Operator debugging must be separately reviewed, restricted, scrubbed before storage and deleted within 24 hours. Never record tokens, challenges, bundles, safety numbers, plaintext or ciphertext bodies.
+
+nginx keeps bounded volatile IP buckets for connection/rate limiting. Buckets are not an IP reputation database; old idle entries are reclaimed and all disappear on restart. PostgreSQL rate buckets use the existing anonymous/device-hash principal, operation and minute, with scheduled expiry. Root, nginx, the VPS network stack and hosting provider can still observe client IPs and traffic. Disabling logs is not anonymity.
+
+System service status/OS audit logs may retain account, process and administrative login metadata. Set an operator-reviewed short journal retention (recommended seven days) without weakening required security auditing. Do not claim provider-side retention is controlled by these files. See [PostgreSQL logging controls](https://www.postgresql.org/docs/17/runtime-config-logging.html).

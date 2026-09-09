@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -34,8 +36,16 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
+
+val apiOrigin=providers.gradleProperty("ghostcloakApiOrigin").orElse("").get()
+if(apiOrigin.isNotEmpty()) {
+    val origin=URI(apiOrigin)
+    require(origin.scheme=="https" && origin.host!=null && origin.host.matches(Regex("[a-z0-9][a-z0-9.-]{0,99}")) && !origin.host.matches(Regex("[0-9.]+")) && origin.rawUserInfo==null && origin.rawQuery==null && origin.rawFragment==null && origin.path in setOf("","/"))
+}
+android.defaultConfig.buildConfigField("String","API_ORIGIN","\"$apiOrigin\"")
 
 dependencies {
     implementation(project(":messaging"))

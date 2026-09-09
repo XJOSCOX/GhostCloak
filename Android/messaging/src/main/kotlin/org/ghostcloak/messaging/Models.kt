@@ -11,7 +11,7 @@ data class Contact(val contactId: String, val publicUserId: String, val displayN
 }
 data class ContactStatus(val contact: Contact, val identity: RemoteIdentityStatus?, val session: SessionLifecycle?)
 @Serializable enum class Direction { INCOMING, OUTGOING }
-@Serializable enum class MessageState { PENDING, ENCRYPTED, SENT_TO_TRANSPORT, DELIVERED_LOCAL_SIMULATION, FAILED }
+@Serializable enum class MessageState { PENDING, ENCRYPTED, SENT_TO_TRANSPORT, DELIVERED_LOCAL_SIMULATION, FAILED, SERVER_ACCEPTED, RECEIVED }
 @Serializable
 data class Message(val localId: String, val conversationId: String, val direction: Direction,
     val body: String, val timestamp: Long, val state: MessageState, val envelopeId: String? = null) {

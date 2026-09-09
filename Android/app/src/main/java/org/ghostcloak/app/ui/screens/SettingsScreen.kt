@@ -11,7 +11,7 @@ import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 
 @Composable fun SettingsScreen(state: AppState, rename: (String) -> Unit, developerAvailable: Boolean,
-    demo: () -> Unit, leave: () -> Unit) {
+    demo: () -> Unit, leave: () -> Unit, connect:()->Unit={}, sync:()->Unit={}, publish:()->Unit={}, logout:()->Unit={}) {
     var username by remember(state.identity?.username) { mutableStateOf(state.identity?.username.orEmpty()) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         Wordmark()
@@ -21,6 +21,19 @@ import org.ghostcloak.app.ui.components.*
         FullButton("Save username", !state.loading && username != state.identity?.username) { rename(username) }
         Text("This changes your display name only. Your device identity, keys and safety numbers stay the same.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         ErrorNotice(state.error)
+        if(!state.demo) {
+            SectionLabel("NETWORK")
+            if(!state.networkConfigured) Text("A server is not configured in this build.")
+            else {
+                InfoPanel("Encrypted network messaging", "Your messages are encrypted on your device. The service still sees connection IPs and routing metadata.")
+                FullButton(if(state.networkConnected) "Reconnect securely" else "Register or connect",!state.loading,connect)
+                if(state.networkConnected) {
+                    FullButton("Sync messages and retry pending",!state.loading,sync)
+                    OutlinedButton(onClick=publish,enabled=!state.loading) {Text("Publish another contact prekey")}
+                    TextButton(onClick=logout,enabled=!state.loading) {Text("Disconnect and revoke session")}
+                }
+            }
+        }
         SectionLabel("ON THIS DEVICE")
         InfoPanel("Encrypted local history", "Contacts and messages stay inside the SQLCipher database. An unlocked or compromised endpoint can still access them.")
         Text("Keystore: ${state.protection.lowercase()}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -32,6 +45,6 @@ import org.ghostcloak.app.ui.components.*
                 Text(if (state.demo) "Return to my identity" else "Open local demo")
             }
         }
-        Text("Ghost Cloak · Phase 1B\nLocal prototype. Not independently audited.\nNo network service, notifications or Ghost Mode.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Ghost Cloak · Phase 1C.2\nNot independently audited. Not anonymous.\nNo notifications or Ghost Mode.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

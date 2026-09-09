@@ -16,7 +16,8 @@ import org.ghostcloak.transport.TransportFailure
 data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? = null,
     val contacts: List<ContactStatus> = emptyList(), val messages: List<Message> = emptyList(),
     val error: String? = null, val card: String = "", val fingerprint: String = "",
-    val demo: Boolean = false, val protection: String = "", val ready: Boolean = false) {
+    val demo: Boolean = false, val protection: String = "", val ready: Boolean = false,
+    val networkConfigured:Boolean=false,val networkConnected:Boolean=false) {
     override fun toString() = "AppState(redacted)"
 }
 
@@ -39,12 +40,15 @@ class GhostViewModel(application: Application) : AndroidViewModel(application) {
                     catch (e: AppFailure) { failure = appError(e.error) }
                     catch (e: CryptoFailure) { failure = cryptoError(e.error) }
                     catch (e: TransportFailure) { failure = "Recipient is not connected to this local simulator. Nothing was delivered." }
+                    catch (e: org.ghostcloak.protocol.ApiFailure) { failure=if(e.code=="legacy_auth_requires_reset") "This prototype has an older exportable account credential. Follow the documented development migration; no key was replaced." else if(e.status==401) "Connect again to renew your session." else "The network operation could not complete. Pending messages can be retried with Sync." }
+                    catch (e: IllegalArgumentException) {failure="The network response or account settings were rejected."}
                     val active = runtime.currentService()
                     val identity = runtime.open(active)
                     val contacts = if (identity != null) active.contacts() else emptyList()
                     mutable.value = mutable.value.copy(identity = identity, contacts = contacts,
                         messages = selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.messages(it) } ?: emptyList(),
-                        demo = runtime.inDemo, protection = runtime.protection, ready = true)
+                        demo = runtime.inDemo, protection = runtime.protection, ready = true,
+                        networkConfigured=runtime.networkConfigured,networkConnected=runtime.networkConnected)
                 }
             } catch (e: EndpointStorageFailure) { failure = "Encrypted storage is unavailable. Your identity was not reset. Close the app and investigate before continuing." }
             catch (e: CryptoFailure) { failure = cryptoError(e.error) }
@@ -52,6 +56,11 @@ class GhostViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun refresh() = run()
+    fun connectNetwork()=run {runtime.connectNetwork(it)}
+    fun syncNetwork()=run {runtime.syncNetwork(it)}
+    fun publishNetwork()=run {runtime.publishNetwork()}
+    fun logoutNetwork()=run {runtime.logoutNetwork()}
+    fun addNetwork(username:String,success:()->Unit)=run {runtime.addNetwork(username,it);withContext(Dispatchers.Main) {success()}}
     fun create(username: String) = run { it.create(username) }
     fun rename(username: String) = run { it.rename(username) }
     fun select(id: String) { selected = id; mutable.value = mutable.value.copy(messages = emptyList(), fingerprint = ""); refresh() }

@@ -16,6 +16,9 @@ class AppRuntime(private val context: Context) {
     private val mutex = Mutex()
     private var store: EncryptedEndpointStore? = null
     private var local: ConversationService? = null
+    private var network: NetworkController? = null
+    val networkConfigured get()=org.ghostcloak.app.BuildConfig.API_ORIGIN.isNotEmpty()
+    var networkConnected=false; private set
     private var demo: DemoSession? = null
     private val router = LocalEncryptedRouter()
     private var attached = false
@@ -28,7 +31,9 @@ class AppRuntime(private val context: Context) {
             if (local == null) {
                 val records = EncryptedEndpointStore.open(context, "local")
                 store = records
-                local = ConversationService(SignalProtocolEngine(records), LocalRepository(records))
+                val engine=SignalProtocolEngine(records)
+                local = ConversationService(engine, LocalRepository(records))
+                network=NetworkController(records,engine)
             }
             block(demo?.service ?: local!!)
         }
@@ -39,7 +44,13 @@ class AppRuntime(private val context: Context) {
     suspend fun startDemo() { if (demo == null) demo = DeveloperMode.create(context) }
     fun leaveDemo() { demo = null }
     suspend fun send(service: ConversationService, id: String, text: String) {
+        if(!inDemo && networkConfigured) {network!!.send(service,id,text); return}
         val message = service.send(id, text)
         demo?.deliver(message)
     }
+    suspend fun connectNetwork(service:ConversationService) {network!!.connect(service.open()!!.username); networkConnected=true}
+    suspend fun syncNetwork(service:ConversationService) {network!!.sync(service)}
+    suspend fun addNetwork(username:String,service:ConversationService) {network!!.add(username,service)}
+    suspend fun publishNetwork(){network!!.publish()}
+    suspend fun logoutNetwork(){network!!.logout(); networkConnected=false}
 }

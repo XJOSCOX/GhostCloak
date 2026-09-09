@@ -1,0 +1,6 @@
+# Ordered rules for a dedicated cluster; retain verified local administrator access.
+local all postgres peer
+host ghostcloak ghostcloak_app 127.0.0.1/32 scram-sha-256
+host ghostcloak ghostcloak_migrator 127.0.0.1/32 scram-sha-256
+host all all 0.0.0.0/0 reject
+host all all ::/0 reject

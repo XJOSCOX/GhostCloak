@@ -1,13 +1,34 @@
 // Android Studio resolves source attachments that assemble/test tasks do not request.
 // Run from Android/: ./gradlew -I gradle/verify-ide-sources.init.gradle verifyIdeSources
-// This task checks recorded source artifacts; it never generates or bypasses checksums.
+// Discover JVM classpath sources as well as checking recorded IDE/build-tool sources.
+// This task never generates or bypasses checksums.
 gradle.projectsEvaluated {
     def root = gradle.rootProject
     root.tasks.register('verifyIdeSources') {
         group = 'verification'
-        description = 'Resolve every recorded IDE source JAR with dependency verification.'
+        description = 'Discover JVM classpath sources and verify all recorded IDE source JARs.'
         notCompatibleWithConfigurationCache('Explicit maintenance task resolves detached configurations.')
         doLast {
+            def ids = new LinkedHashSet()
+            root.allprojects.each { project ->
+                ['compileClasspath', 'runtimeClasspath', 'testCompileClasspath', 'testRuntimeClasspath'].each { name ->
+                    def configuration = project.configurations.findByName(name)
+                    if (configuration != null && configuration.canBeResolved) {
+                        configuration.incoming.resolutionResult.allComponents.each { component ->
+                            if (component.id instanceof org.gradle.api.artifacts.component.ModuleComponentIdentifier) ids.add(component.id)
+                        }
+                    }
+                }
+            }
+            def sources = root.dependencies.createArtifactResolutionQuery().forComponents(ids)
+                .withArtifacts(org.gradle.jvm.JvmLibrary, org.gradle.language.base.artifact.SourcesArtifact).execute()
+            sources.components.each { component ->
+                if (component instanceof org.gradle.api.artifacts.result.UnresolvedComponentResult) throw component.failure
+                component.getArtifacts(org.gradle.language.base.artifact.SourcesArtifact).each { artifact ->
+                    if (artifact instanceof org.gradle.api.artifacts.result.UnresolvedArtifactResult) throw artifact.failure
+                }
+            }
+            logger.lifecycle("Discovered and verified sources for ${ids.size()} JVM classpath components.")
             def factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
             factory.setFeature('http://apache.org/xml/features/disallow-doctype-decl', true)
             def document = factory.newDocumentBuilder().parse(root.file('gradle/verification-metadata.xml'))

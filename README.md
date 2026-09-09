@@ -29,7 +29,7 @@ For a working local exchange, install a **debug** build and choose **Settings â†
 
 ## Build and test
 
-Open Android/ in Android Studio. The wrapper pins Gradle 9.6.0 and its distribution checksum; the existing toolchain selects JDK 25 and targets Java 21 for libsignal. Install SDK platform 37 and configure Android/local.properties with sdk.dir. That file is excluded from Git. Initial resolution requires Google Maven, Maven Central and Signal artifact access; no GitHub credentials belong in Gradle configuration.
+Open Android/ in Android Studio. The wrapper pins Gradle 9.7.1 and its distribution checksum; the existing toolchain selects JDK 25 and targets Java 21 for libsignal. Install SDK platform 37 and configure Android/local.properties with sdk.dir. That file is excluded from Git. Initial resolution requires Google Maven, Maven Central and Signal artifact access; no GitHub credentials belong in Gradle configuration.
 
 From PowerShell, with a dedicated test emulator running:
 
@@ -45,13 +45,13 @@ Reports are under Android/test-support/build/reports/tests/test/ and each Androi
 
 Checksums for newly resolved UI/test artifacts extend the existing verification metadata. Crypto versions remain pinned. Do not regenerate checksums blindly to bypass a mismatch; independently attest baseline provenance before release. Espresso was updated only to fix its removed InputManager API use in API-37 UI tests.
 
-Android Studio also downloads source attachments during Gradle sync. The verification metadata includes 133 source JARs, checked against fresh downloads from Google Maven, Maven Central, the Gradle Plugin Portal and Signal's repository. These include Kotlin Gradle-plugin variant sources. The check also discovers sources from settings-plugin and project build-plugin classpaths, plus each JVM module's compile, runtime and test dependency graphs, so it can detect missing entries rather than only recheck known ones. To run it without opening the IDE, use Android/:
+Android Studio also downloads source attachments during Gradle sync. The verification metadata includes 133 source JARs, checked against fresh downloads from Google Maven, Maven Central, the Gradle Plugin Portal and Signal's repository. These include Kotlin Gradle-plugin variant sources. The Gradle 9.7.1 source ZIP requested by the IDE is also pinned against Gradle's published SHA-256. The check also discovers sources from settings-plugin and project build-plugin classpaths, plus each JVM module's compile, runtime and test dependency graphs, so it can detect missing entries rather than only recheck known ones. To run it without opening the IDE, use Android/:
 
 ```powershell
 .\gradlew.bat -I gradle/verify-ide-sources.init.gradle verifyIdeSources --dependency-verification strict --no-configuration-cache
 ```
 
-This discovers plugin and JVM classpath sources and checks recorded IDE/build-tool source artifacts in their original repository scopes; it never adds hashes or disables verification. New dependency versions or additional IDE classifiers still require reviewed metadata additions. It does not execute Android Studio's full proprietary sync model. After updating, use Android Studio's Sync Project with Gradle Files.
+This resolves the running Gradle version's source ZIP, discovers plugin and JVM classpath sources and checks recorded IDE/build-tool source artifacts in their original repository scopes; it never adds hashes or disables verification. New dependency versions or additional IDE classifiers still require reviewed metadata additions. It does not execute Android Studio's full proprietary sync model. After updating, use Android Studio's Sync Project with Gradle Files.
 
 ## Security boundaries and limits
 

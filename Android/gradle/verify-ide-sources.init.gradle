@@ -3,7 +3,21 @@
 // Discover settings/build-plugin and JVM sources, then check recorded source classifiers.
 // This task never generates or bypasses checksums.
 def settingsBuildscript
-gradle.settingsEvaluated { settings -> settingsBuildscript = settings.buildscript }
+gradle.settingsEvaluated { settings ->
+    settingsBuildscript = settings.buildscript
+    // Android Studio requests this ZIP separately from Maven source attachments.
+    settings.dependencyResolutionManagement.repositories.exclusiveContent {
+        forRepository {
+            settings.dependencyResolutionManagement.repositories.ivy {
+                name = 'Gradle distributions'
+                url = 'https://services.gradle.org/distributions'
+                patternLayout { artifact('[artifact]-[revision]-[classifier].[ext]') }
+                metadataSources { artifact() }
+            }
+        }
+        filter { includeModule('gradle', 'gradle') }
+    }
+}
 gradle.projectsEvaluated {
     def root = gradle.rootProject
     root.tasks.register('verifyIdeSources') {
@@ -11,6 +25,11 @@ gradle.projectsEvaluated {
         description = 'Discover plugin/JVM sources and verify all recorded IDE source JARs.'
         notCompatibleWithConfigurationCache('Explicit maintenance task resolves detached configurations.')
         doLast {
+            def distribution = root.configurations.detachedConfiguration(
+                root.dependencies.create("gradle:gradle:${gradle.gradleVersion}:src@zip"))
+            distribution.transitive = false
+            distribution.resolve()
+            logger.lifecycle("Verified Gradle ${gradle.gradleVersion} source ZIP.")
             def verifySources = { handler, componentIds, label ->
                 def result = handler.createArtifactResolutionQuery().forComponents(componentIds)
                     .withArtifacts(org.gradle.jvm.JvmLibrary, org.gradle.language.base.artifact.SourcesArtifact).execute()

@@ -45,6 +45,14 @@ Reports are under Android/test-support/build/reports/tests/test/ and each Androi
 
 Checksums for newly resolved UI/test artifacts extend the existing verification metadata. Crypto versions remain pinned. Do not regenerate checksums blindly to bypass a mismatch; independently attest baseline provenance before release. Espresso was updated only to fix its removed InputManager API use in API-37 UI tests.
 
+Android Studio also downloads source attachments during Gradle sync. The verification metadata includes the 116 source JARs identified in the IDE sync report, checked against fresh downloads from Google Maven, Maven Central and Signal's repository. These include Kotlin Gradle-plugin variant sources. To check those attachments without opening the IDE, run from Android/:
+
+```powershell
+.\gradlew.bat -I gradle/verify-ide-sources.init.gradle verifyIdeSources --dependency-verification strict --no-configuration-cache
+```
+
+This checks recorded source artifacts only; it never adds hashes or disables verification. New dependency versions or additional IDE classifiers still require reviewed metadata additions. After updating, use Android Studio's Sync Project with Gradle Files.
+
 ## Security boundaries and limits
 
 Sending always passes through SecureSessionEngine before ciphertext transport. Local history is plaintext only inside the encrypted endpoint database and endpoint/UI memory. No plaintext preferences, cache, index, logs or notifications are created. SQLCipher does not protect an unlocked/compromised process. Blocking is local; deleting a message does not delete the peer copy or guarantee physical erasure.

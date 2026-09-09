@@ -38,6 +38,12 @@ The dependency source JAR was inspected alongside the versioned sources. [PreKey
 
 [NumericFingerprintGenerator](https://github.com/signalapp/libsignal/blob/v0.102.1/java/shared/java/org/signal/libsignal/protocol/fingerprint/NumericFingerprintGenerator.java) binds both identity keys and stable identifiers. Matching display values, identity replacement and restart are tested; see TRUST_MODEL.md. [FilterExceptions](https://github.com/signalapp/libsignal/blob/v0.102.1/java/shared/java/org/signal/libsignal/internal/FilterExceptions.java) wraps unexpected checked callback exceptions in AssertionError but preserves runtime exceptions. Local storage failures therefore use a dedicated runtime type and are classified at the application boundary; unrelated programmer failures are not relabeled as authentication failures.
 
+## Android Studio source attachments
+
+IDE source-attachment follow-up (2026-09-09): command-line builds did not resolve all artifacts requested by Android Studio's source dependency model. The sync failure report identified 116 distinct source JARs with missing hashes. Each belongs to an already-pinned component and its cached SHA-256 was compared with a separate HTTPS download from the reported publisher repository (Google Maven, Maven Central or Signal Maven). Their exact source filenames and hashes are now recorded, including variant-specific Kotlin plugin source classifiers. No compiled-artifact hashes, dependency versions or verification policy were changed. This comparison is not an independent publisher-signature audit.
+
+The opt-in `gradle/verify-ide-sources.init.gradle` maintenance task resolves every recorded source JAR using its exact classifier. `verifyIdeSources` and `:app:assembleDebug` passed with strict dependency verification. Additional IDE artifact types remain fail-closed until reviewed; no trusted-artifact wildcard or source exclusion is used.
+
 ## Release blocker: owner/legal review
 
 Ghost Cloak must review libsignal's AGPL-3.0 obligations before distributing the application. This requires owner/legal review and is a release blocker. Keeping the repository private must not be assumed to avoid obligations. This document supplies no legal conclusion and makes no change to the project's licensing strategy.

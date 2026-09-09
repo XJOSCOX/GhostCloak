@@ -1,0 +1,40 @@
+// Android Studio resolves source attachments that assemble/test tasks do not request.
+// Run from Android/: ./gradlew -I gradle/verify-ide-sources.init.gradle verifyIdeSources
+// This task checks recorded source artifacts; it never generates or bypasses checksums.
+gradle.projectsEvaluated {
+    def root = gradle.rootProject
+    root.tasks.register('verifyIdeSources') {
+        group = 'verification'
+        description = 'Resolve every recorded IDE source JAR with dependency verification.'
+        notCompatibleWithConfigurationCache('Explicit maintenance task resolves detached configurations.')
+        doLast {
+            def factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+            factory.setFeature('http://apache.org/xml/features/disallow-doctype-decl', true)
+            def document = factory.newDocumentBuilder().parse(root.file('gradle/verification-metadata.xml'))
+            def components = document.getElementsByTagName('component')
+            int count = 0
+            for (int i = 0; i < components.length; i++) {
+                def component = components.item(i)
+                def artifacts = component.getElementsByTagName('artifact')
+                for (int j = 0; j < artifacts.length; j++) {
+                    def artifact = artifacts.item(j)
+                    if (!artifact.getAttribute('name').endsWith('-sources.jar')) continue
+                    def name = component.getAttribute('name')
+                    def version = component.getAttribute('version')
+                    def fileName = artifact.getAttribute('name')
+                    def prefix = "${name}-${version}-"
+                    if (!fileName.startsWith(prefix)) throw new GradleException("Unexpected source artifact name: ${fileName}")
+                    // Kotlin Gradle plugins publish variant classifiers such as gradle813-sources.
+                    def classifier = fileName.substring(prefix.length(), fileName.length() - 4)
+                    def coordinate = "${component.getAttribute('group')}:${name}:${version}:${classifier}@jar"
+                    def configuration = root.configurations.detachedConfiguration(root.dependencies.create(coordinate))
+                    configuration.transitive = false
+                    configuration.resolve()
+                    count++
+                }
+            }
+            if (count == 0) throw new GradleException('No IDE source artifacts recorded.')
+            logger.lifecycle("Verified ${count} IDE source artifacts.")
+        }
+    }
+}

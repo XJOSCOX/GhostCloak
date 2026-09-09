@@ -1,2 +1,49 @@
-# GhostCloak
-A secure messenger
+# Ghost Cloak
+
+**Ghost Cloak is experimental and has NOT undergone an independent security audit. It must not yet be relied upon for high-risk communications.**
+
+Phase 0 security architecture and Phase 1A local identity/cryptographic foundation. No chat UI, production backend, account signup, networking or Ghost Mode is implemented. The repository preserves the existing `Android/` directory capitalization.
+
+## Modules
+
+| Module | Responsibility |
+|---|---|
+| Android/app | Compose foundation status; application service initializes a persistent local identity off-main |
+| Android/identity | Public identity types, random IDs, security events and fixed-code logging |
+| Android/crypto | SecureSessionEngine, SignalProtocolEngine, endpoint-record contract and vendor-specific store adapter |
+| Android/storage | Room/SQLCipher endpoint database; Keystore-wrapped random database secret |
+| Android/protocol | Bounded versioned CBOR envelopes and encrypted routing bindings |
+| Android/transport | Ciphertext-only interface and bounded local mock |
+| Android/test-support | JVM-only Alice/Bob/Charlie fixtures and attack tests; never shipped in app |
+| backend | Bounded opaque mailbox and future public-directory/auth boundaries; no crypto dependency |
+| protocol | Threat, privacy, protocol, lifecycle and dependency decisions |
+
+## Build and reproduce
+
+Open `Android/` in Android Studio. Install Android SDK platform 37 and an API 30+ emulator/device; the validated emulator is API 37. The supplied wrapper pins Gradle 9.6.0 with a distribution checksum. The existing daemon configuration selects JDK 25; modules target Java 21 to satisfy libsignal. Configure `Android/local.properties` with your local `sdk.dir` (excluded from Git). Initial builds require Google/Maven Central/Signal artifact access. No GitHub credentials belong in Gradle files.
+
+From PowerShell:
+
+```powershell
+cd Android
+.\gradlew.bat :test-support:test :app:assembleDebug :app:lintDebug
+.\gradlew.bat :storage:connectedDebugAndroidTest
+```
+
+On Linux/macOS use `bash ./gradlew` with the same tasks. JVM native artifacts support upstream's documented platforms; unsupported hosts must not substitute cryptography. Instrumentation tests require a running emulator or attached test device.
+
+To rerun the synthetic acceptance demo even when Gradle considers it current:
+
+```powershell
+.\gradlew.bat :test-support:test --tests "org.ghostcloak.testing.AcceptanceTest.aliceBobCharlieDemo" --rerun-tasks
+```
+
+Expected output includes Alice plaintext `hello bob`, `EncryptedEnvelope(payload=<opaque ciphertext>)`, ciphertext size, Bob plaintext `hello bob`, and a matching 60-digit security number. Ciphertext and numbers change every run. Only fixed synthetic test plaintext is printed, never application messages. The mock transport and backend receive encoded ciphertext only. The backend module has no crypto/storage dependency or decryption API.
+
+Test reports: `Android/test-support/build/reports/tests/test/index.html` and `Android/storage/build/reports/androidTests/connected/debug/index.html`. Debug APK: `Android/app/build/outputs/apk/debug/app-debug.apk`. Read `SECURITY_REVIEW_PHASE_1A.md` for verification results and limitations.
+
+## Decisions and limits
+
+Use maintained libsignal 0.102.1 behind a vendor-independent interface, not homemade messaging cryptography. SQLCipher 4.19.0 uses Room 2.8.4. Review AGPL obligations, unsupported external libsignal use, API instability, native binaries and dependency provenance before distribution. See [dependency review](protocol/CRYPTO_DEPENDENCIES.md).
+
+First contact is TOFU until independently verified. Endpoint compromise, database rollback, traffic analysis and perfect memory/flash erasure are not solved. Prekey publication is a bounded prototype, not a rotation service. A destroyed session cannot be re-enabled through the current API. No Phase 1B work is authorized by this implementation.

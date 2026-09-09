@@ -1,0 +1,15 @@
+package org.ghostcloak.crypto
+
+/** Operational storage failure, distinct from authentication or transport rejection. */
+class EndpointStorageFailure : Exception("Endpoint storage unavailable")
+
+/** Endpoint-only secret store. Calls occur off-main, within a serialized atomic transaction.
+ * Returned arrays belong to the caller. Implementations must copy writes and roll back on failure.
+ * No implementation may persist these values in plaintext. */
+interface EndpointRecords {
+    fun <T> transaction(block: () -> T): T
+    fun read(key: String): ByteArray?
+    fun write(key: String, value: ByteArray)
+    fun remove(key: String)
+    fun keys(prefix: String): List<String>
+}

@@ -52,6 +52,10 @@ Javadoc and Android-classpath follow-up: the reported 11 Javadocs exposed two ga
 
 AndroidX samples follow-up: classifier-based source queries missed extra files declared in source variants. The check now uses a strict source artifact view with variant reselection for AndroidX components on every compile/runtime/test classpath. It reproduced the 21 reported sample failures and discovered four additional runtime samples (core, window, window-core and material). Each of the 25 cached samples matched a fresh Google Maven download, using the published URL filename rather than assuming it matches the artifact display name. Only the 25 exact sample checksums were added. The check passes for 427 attachment JARs plus the Gradle source ZIP. Removing one sample checksum correctly reproduced a strict-verification failure; restoring it passed again. Debug APK, Android test APK and unit-test tasks passed using up-to-date outputs. Android Studio full sync and on-device tests were not executed for this metadata change.
 
+## Phase 1C.1 additions
+
+No third-party dependency or crypto version was added/changed. Device authentication uses platform JCA P-256/SHA256withECDSA. The local backend adapter uses JDK HttpServer and existing kotlinx.serialization CBOR. The source/Javadoc/AndroidX-sample/Gradle ZIP verification check remains a strict acceptance gate; all existing verification metadata is unchanged. See AUTHENTICATION.md and SECURITY_REVIEW_PHASE_1C1.md for assumptions and production limitations.
+
 ## Release blocker: owner/legal review
 
 Ghost Cloak must review libsignal's AGPL-3.0 obligations before distributing the application. This requires owner/legal review and is a release blocker. Keeping the repository private must not be assumed to avoid obligations. This document supplies no legal conclusion and makes no change to the project's licensing strategy.

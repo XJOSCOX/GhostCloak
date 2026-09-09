@@ -2,7 +2,13 @@
 
 **Experimental. Ghost Cloak has not undergone an independent security audit and must not be relied upon for high-risk communications.**
 
-Phase 1B adds an Android identity, contacts and encrypted text experience on top of the completed Phase 0/1A/1A.1 foundation. Messaging is local and simulated. There is no production networking, backend deployment, account signup, notification service or Ghost Mode. Phase 1C has not begun.
+Phase 1C.1 adds a local HTTP client/server contract on the completed Phase 0/1A/1A.1/1B foundation: separate device-key authentication, a public-prekey directory, opaque encrypted mailboxes and a durable client outbox. The JVM integration client demonstrates real HTTP delivery with libsignal encryption. The Android UI remains the local Phase 1B experience; no server onboarding UI or deployment is included. Phase 1C.2 has not begun.
+
+## Local network backend
+
+From `Android/`, run `.\gradlew.bat :backend:run --dependency-verification strict`. It binds only `127.0.0.1:8787`, with ephemeral repository state. Do not use real accounts or expose this listener. The end-to-end JVM fixture starts its own server: `.\gradlew.bat :test-support:test --tests org.ghostcloak.testing.NetworkTest --dependency-verification strict`.
+
+Read the [API contract](protocol/API_V1.md), [device authentication](protocol/AUTHENTICATION.md), [server metadata](protocol/SERVER_METADATA.md), [mailbox policy](protocol/MAILBOX.md), [outbox crash states](protocol/OUTBOX_STATE.md), and [Phase 1C.1 security review](SECURITY_REVIEW_PHASE_1C1.md). The backend cannot decrypt messages. It still sees routing, timing and source IPs at its transport. Outbox recovery deliberately fails ambiguous post-encryption states; backend restart durability and inbound history/receipt atomicity remain production blockers.
 
 ## Android experience
 
@@ -24,7 +30,7 @@ For a working local exchange, install a **debug** build and choose **Settings â†
 | Android/protocol | Bounded canonical envelopes and encrypted routing bindings |
 | Android/transport | Ciphertext-only API and bounded in-process router |
 | Android/test-support | JVM acceptance, hardening, application and architecture tests; not shipped |
-| backend | Existing opaque mock mailbox; no endpoint secrets or decryption API |
+| backend | Loopback HTTP adapter, challenge/auth sessions, public directory, transactional repository interfaces and opaque mailbox; no endpoint secrets or decryption API |
 | protocol | Security architecture, threat, trust, lifecycle, privacy and phase decisions |
 
 ## Build and test
@@ -39,7 +45,7 @@ $env:ANDROID_SERIAL = 'emulator-5554' # Use your test emulator's actual serial.
 .\gradlew.bat test :app:connectedDebugAndroidTest :storage:connectedDebugAndroidTest :app:assembleDebug :app:assembleRelease :app:lintDebug --dependency-verification strict
 ```
 
-On Linux/macOS use bash ./gradlew with the equivalent environment variable. Do not run destructive instrumentation fixtures on a personal device. The maintained test set covers 55 tests: 38 JVM test-support, 1 app unit, 7 app instrumentation and 9 storage instrumentation. All passed on the API 37 emulator; debug and unsigned release APKs assembled, and lint reported zero errors and 23 dependency-age/starter-resource warnings in the shared working tree. Real-hardware and other Android-version validation remain open.
+On Linux/macOS use bash ./gradlew with the equivalent environment variable. Do not run destructive instrumentation fixtures on a personal device. The maintained test set covers 65 tests: 47 JVM test-support, 1 app unit, 8 app instrumentation and 9 storage instrumentation. The JVM tests and API 37 emulator instrumentation passed; debug and unsigned release APKs assembled, and lint reported zero errors in the shared working tree. Real-hardware and other Android-version validation remain open.
 
 Reports are under Android/test-support/build/reports/tests/test/ and each Android module's build/reports/androidTests/connected/debug/. APKs are Android/app/build/outputs/apk/debug/app-debug.apk and Android/app/build/outputs/apk/release/app-release-unsigned.apk. These builds are prototypes, not distribution approval.
 

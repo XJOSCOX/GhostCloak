@@ -1,0 +1,2 @@
+# GhostCloak
+A secure messenger

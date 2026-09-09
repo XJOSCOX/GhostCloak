@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.ghostcloak.crypto.SignalProtocolEngine
 import org.ghostcloak.crypto.EndpointStorageFailure
+import org.ghostcloak.crypto.CryptoFailure
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.ghostcloak.storage.EncryptedEndpointStore
@@ -20,6 +21,7 @@ class FoundationService(private val context: Context) {
                     "Local device: ${identity.deviceId}\nKeystore protection: ${records.protection}"
                 }
             } catch (e: EndpointStorageFailure) { "Local identity storage is unavailable. No identity was reset." }
+            catch (e: CryptoFailure) { "Local identity initialization failed: ${e.error}. No identity was reset." }
         }
     }
 }

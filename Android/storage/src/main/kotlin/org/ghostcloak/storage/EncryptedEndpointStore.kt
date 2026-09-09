@@ -104,16 +104,19 @@ class EncryptedEndpointStore private constructor(private val db: EndpointDatabas
             } else {
                 if (databaseFile.exists()) throw EndpointStorageFailure()
                 ByteArray(32).also { bytes ->
-                    SecureRandom().nextBytes(bytes)
+                    var saved = false
                     try {
+                        SecureRandom().nextBytes(bytes)
                         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
                         cipher.init(Cipher.ENCRYPT_MODE, key)
                         cipher.updateAAD(aad)
                         val wrapped = byteArrayOf(1) + cipher.iv + cipher.doFinal(bytes)
                         val output = atomic.startWrite()
-                        try { output.write(wrapped); atomic.finishWrite(output) }
-                        catch (e: Exception) { atomic.failWrite(output); throw e }
-                    } catch (e: Exception) { bytes.fill(0); throw e }
+                        var finished = false
+                        try { output.write(wrapped); atomic.finishWrite(output); finished = true }
+                        finally { if (!finished) atomic.failWrite(output) }
+                        saved = true
+                    } finally { if (!saved) bytes.fill(0) }
                 }
             }
             var opened = false
@@ -123,8 +126,8 @@ class EncryptedEndpointStore private constructor(private val db: EndpointDatabas
                 val factory = SupportOpenHelperFactory(secret)
                 val db = Room.databaseBuilder(context.applicationContext, EndpointDatabase::class.java, databaseFile.absolutePath)
                     .openHelperFactory(factory).build()
-                try { db.openHelper.writableDatabase } catch (e: Exception) { db.close(); throw e }
-                opened = true
+                try { db.openHelper.writableDatabase; opened = true }
+                finally { if (!opened) db.close() }
                 return EncryptedEndpointStore(db, if (hardware) KeyProtection.HARDWARE else KeyProtection.SOFTWARE, secret)
             } finally { if (!opened) secret.fill(0) }
         }

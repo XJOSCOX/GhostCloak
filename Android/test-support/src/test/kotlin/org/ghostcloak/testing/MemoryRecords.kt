@@ -6,11 +6,16 @@ import org.ghostcloak.crypto.EndpointRecords
 class MemoryRecords : EndpointRecords {
     private var data = mutableMapOf<String, ByteArray>()
     var failCommit = false
+    var storageFailureAtCommit = false
+    var inspectCommitBuffer = false
+    var commitBuffer: ByteArray? = null
     @Synchronized override fun <T> transaction(block: () -> T): T {
         val previous = data
         data = previous.mapValues { it.value.copyOf() }.toMutableMap()
         try {
             val result = block()
+            if (inspectCommitBuffer && result is ByteArray) commitBuffer = result
+            if (storageFailureAtCommit) throw org.ghostcloak.crypto.EndpointStorageFailure()
             if (failCommit) error("Injected commit failure")
             previous.values.forEach { it.fill(0) }
             return result

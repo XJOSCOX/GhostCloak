@@ -1,51 +1,61 @@
-# Phase 1A security self-review
+# Phase 1A.1 security self-review
 
-This is a developer self-review, not an independent security audit. Test results are evidence of specific behavior, not a proof of security.
+This is a developer self-review, not an independent audit. Tests establish specific behavior, not proof of security. Phase 1B has not begun.
 
-## Completed protections
+## Completed protections (implemented)
 
-Independent randomly identified endpoints; library-generated identity keys; signed prekey establishment; evolving Signal message and asymmetric ratchets; ciphertext-only mock and backend boundaries. Persistent TOFU pins reject replacement. Signal fingerprints are symmetric across the relationship. CBOR version/size/framing checks and encrypted routing bindings reject altered routing data. Signal counters reject duplicate messages and support bounded out-of-order delivery. Failed authentication or transaction commit does not return accepted plaintext. Session destruction removes session records and blocks resurrection.
+The existing Kotlin/libsignal/SQLCipher/Keystore architecture remains intact. Persistent identity trust is now explicitly UNVERIFIED, VERIFIED or CHANGED. Only an explicit expected-fingerprint approval can replace a pin; approval does not inherit VERIFIED status. A previously verified replacement raises a high-priority event. The persisted status survives loss of a live event and database reopen. Username changes do not change identity keys or safety numbers. See [trust model](protocol/TRUST_MODEL.md).
 
-Room stores all records inside SQLCipher under a randomly generated database secret wrapped by Android Keystore. Backups are disabled and endpoint files use noBackupFilesDir. Missing wrapping keys and modified wrapping ciphertext fail closed. No plaintext message table, analytics SDK, crash SDK, phone identity or hardware identifier collection exists. Application logging accepts fixed enum codes only; SQLCipher Java logging is disabled and libsignal logging is not initialized.
+Session destruction persists a lifecycle state. Old packets cannot automatically clear it. Explicit fingerprint-validated reconnection uses new local prekey admission and libsignal authentication; both peers destroying their sessions is covered. A persistent accepted-envelope ledger complements libsignal replay counters across session replacement. Routing bindings remain encrypted and are checked before acceptance. Failed authentication, state writes or transaction commits do not return plaintext.
 
-## Known limitations
+PreKeyManager owns local creation, replenishment, retirement and inventory. New EC/signed/Kyber IDs use separate allocations; existing IDs migrate without renumbering. Retention is an explicit maintenance policy, not a background service. Storage/programmer failures are distinguished from malformed input and protocol authentication errors. Best-effort buffer cleanup includes plaintext held across commit failure. No broad Exception catch hides unrelated failures.
 
-TOFU cannot authenticate the first person behind a key. Device routing IDs are prototype contact identities; a future username/contact mapping must prevent silent rebinding to a new device ID. Per-endpoint serialization assumes a single engine; no multiprocess use. Persistent storage has no rollback-resistant monotonic counter. Native/JVM memory wiping and flash erasure are not guaranteed. No delivery outbox or exactly-once application delivery exists: a crash after commit but before the caller receives the result can lose a message result. Synthetic demo data must never be replaced with real private conversation data in test output.
+The random 32-byte SQLCipher secret, AES-GCM Keystore wrapping, noBackupFilesDir, backup exclusion and disabled SQLCipher Java logging are preserved. Missing or corrupt storage fails closed without silently replacing identity. Source tests enforce the libsignal domain boundary and reject direct production logging sinks. [Logging and memory audit](protocol/LOGGING_AUDIT.md) records the limits. Gradle SHA-256 dependency verification is committed; crypto versions are unchanged.
 
-CBOR framing is pinned to one encoder profile, without cross-language conformance vectors or coverage-guided fuzzing. Identity event streams are bounded; callers must handle the IdentityChanged failure even if the live event was not collected. SQLCipher native diagnostics and upstream binary internals require independent logging review. Prekey pool is capped at 32 issued bundles, with no automatic retirement or last-resort Kyber handling. Exhaustion stops rather than replacing the protocol.
+## Verification (tested)
 
-## Cryptographic assumptions
+On 2026-09-09, all 40 available tests passed: 29 JVM test-support tests (11 existing, 16 new hardening, 2 new architecture), 1 app unit test, 9 storage instrumentation tests (5 existing extended/preserved, 4 new), and 1 app instrumentation test. Android tests ran on the API 37 emulator, explicitly selected using ANDROID_SERIAL=emulator-5554.
 
-Trust Signal's implementation of signed authenticated session establishment, message authentication and ratchet evolution, platform entropy, Android Keystore, SQLCipher and dependency delivery. The progression test inspects public message counters and public ratchet keys only; it does not prove forward secrecy, post-compromise security or destruction of old secret bytes. Identity keys never directly encrypt application bodies.
+New coverage includes verified/unverified replacement and explicit approval; persisted verification and CHANGED state; safety-number symmetry, replacement and restart; username independence; legacy trust/lifecycle migration; destroyed-session rejection and authenticated reconnection; normal/prekey replay and delayed delivery; real database reopen; every outer-envelope binding and payload truncation/extension/bit flip; prekey namespaces, delayed delivery, retention and quota behavior; classified storage faults versus programmer errors; failed-commit plaintext wiping; and missing/corrupt/truncated wrapping data. Existing wrong-tag, missing-Keystore-key, database-loss and transaction rollback checks remain.
+
+Debug and unsigned release builds passed. Lint reported zero errors and 22 dependency-age/starter-resource warnings, including three associated with concurrent launcher-resource changes outside this hardening commit. A normal strict-verification build/test run passed after bootstrapping checksums. A deliberately incorrect libsignal JAR checksum was rejected in a separate negative test; correct metadata was restored. Tests ran in the shared working tree, including the user's uncommitted launcher assets. The prior Phase 1A APK inspection excluded desktop and testing JNI resources; packaging rules are unchanged. These results do not validate other Android versions, real hardware, release signing or native binary provenance.
+
+## Known limitations (not implemented)
+
+TOFU does not authenticate a first contact. Candidate identity observations can cause denial of service; user verification must be independent of the untrusted directory. Routing-device identity is not a production username/contact-binding scheme. Event delivery is bounded; callers must read persisted status and handle IdentityChanged failures. If persisting a change itself fails, StorageFailure blocks the operation and no durable alert is claimed.
+
+Operations assume one serialized engine per endpoint, without multiprocess coordination. The accepted-envelope ledger has a 10,000-record limit and stops accepting new messages at quota; it has no pruning policy. Issued prekey IDs are also bounded. The 30-day retention policy runs only on explicit maintenance, permits clock manipulation and can reject overdue first messages. No last-resort Kyber handling, publisher, scheduler or delivery outbox exists. A crash after commit but before result delivery can lose the application result. No exactly-once delivery guarantee is claimed.
+
+CBOR uses one pinned encoder profile without cross-language conformance vectors or coverage-guided fuzzing. Source logging guards are not native-code audits. JVM/JNI/Room/SQLCipher copies and flash storage prevent deterministic erasure claims. Dependency checksums trust the bootstrapped baseline until independently attested.
+
+## Cryptographic assumptions (assumed)
+
+Trust libsignal's authenticated establishment, ratchets and message authentication; platform entropy; Android Keystore; SQLCipher; and the dependency supply chain. Public ratchet/counter progression tests do not prove forward secrecy or post-compromise security. Private identity keys authenticate establishment rather than directly encrypting application bodies. No custom cryptographic primitive or replacement handshake was added.
 
 ## Metadata currently visible
 
-The local mock/backend sees random sender/recipient routing IDs, envelope IDs, protocol version, message type, packet length and public directory material when supplied. Future network operators would see IPs, timing and traffic sizes. No metadata anonymity or traffic padding is provided.
+Mock/backend boundaries see ciphertext plus random sender/recipient IDs, envelope IDs, version, message type and packet length; public directory material is public when supplied. Local replay records retain accepted envelope identifiers. Future operators could observe network addresses, timing and sizes. Traffic padding and metadata anonymity are absent.
 
-## Endpoint risks
+## Endpoint and storage risks
 
-Unlocked endpoint compromise can recover plaintext and use database keys. Keystore keys are not user-authentication gated. Hardware backing is reported only when KeyInfo says it exists. Emulator testing is not hardware-backed-device validation. Clipboard, screenshots, accessibility services and screen sharing can disclose future displayed plaintext. JVM copies, JNI/native handles and live database connections retain sensitive material.
+Unlocked endpoint/process compromise can recover plaintext and use database keys. Keystore keys are not user-authentication gated; software-backed protection is permitted and reported. Emulator checks are not hardware-backed validation. A database connection retains necessary password material until close. Native diagnostics, WAL/key lifetime, invalidation, backup behavior on real devices, screen capture and accessibility exposure need review.
+
+## Rollback limitations
+
+Restoring database N after N+50 can restore old ratchet, trust, lifecycle and replay state. SQLCipher authentication and Keystore wrapping do not detect an authentic old snapshot. The persistent replay ledger protects ordinary reopen, not adversarial rollback. No speculative anti-rollback mechanism was implemented. [Rollback review](protocol/ROLLBACK_RISK.md) distinguishes hardware key-deletion resistance from arbitrary database freshness and evaluates future counters, server anchors and append-only records.
 
 ## Server compromise consequences
 
-The backend has no endpoint private keys, session keys or decryption interface. Server-side material alone cannot decrypt captured E2EE payloads under the protocol assumptions. Compromise can deny service, collect metadata, replay packets, steal future auth credentials or substitute initial directory keys. It can attempt identity changes, which already pinned clients reject. No administrator/recovery decryption path exists.
-
-## Unimplemented protections
-
-Production networking/TLS configuration, account authentication, directory key transparency, verification UX/QR codes, rate limiting, prekey rotation/replenishment, rollback resistance, deletion assurance, recovery, backup and independent audit. Ghost Mode, groups, media, calls, multi-device and all unrelated features remain absent.
+The backend has no endpoint secrets or decryption API. Under the cryptographic assumptions, server material alone cannot decrypt captured messages. A compromised future server could deny service, replay, collect metadata, steal authentication credentials or substitute initial keys. Pinned replacement is rejected; first-contact substitution remains a risk. No recovery/admin decryption path exists.
 
 ## Dependencies requiring review
 
-libsignal 0.102.1: unsupported third-party use, unstable API, AGPL-3.0 obligations, JNI binaries and Java 21/desugaring requirements. sqlcipher-android 4.19.0: BSD-style and bundled licenses, native logging, ABI/page-size support. Room 2.8.4, CBOR serialization 1.9.0, coroutines 1.10.2 and build tooling also need supply-chain review. Direct versions are pinned; artifact provenance and a release SBOM/signature policy remain open. Do not automatically upgrade crypto to silence dependency-age warnings.
+libsignal 0.102.1 remains unsupported for external use with unstable APIs and native/JNI dependencies. Its AGPL-3.0 obligations require owner/legal review before distribution; this is a release blocker, not a legal conclusion. SQLCipher 4.19.0 native provenance, logging, ABIs and notices need review. Room, serialization, coroutines and tooling also need supply-chain assessment. Exact coordinates, origins, source references, native artifacts and checksum procedures are in [dependency review](protocol/CRYPTO_DEPENDENCIES.md). No automatic upgrades or licensing-strategy change were made.
 
 ## Items requiring independent security audit
 
-Identity binding, contact rebinding, library store callback semantics, failure atomicity and crash boundaries, replay across restoration, canonical parsing/fuzzing, malicious signed bundle handling, native packaging/logging, Keystore fallback/invalidation, SQLCipher/WAL key lifetime and platform backup exclusion. Test additional supported Android versions and real hardware.
+Trust transitions and contact binding; store callback/rollback semantics; prekey admission and lifecycle transitions; malicious bundle handling; crash/commit/cancellation boundaries; parsing/fuzzing; native logging and packaging; Keystore fallback/invalidation; SQLCipher and backup behavior; rollback detection; and supported Android versions on real hardware.
 
-## Phase 1B blockers
+## Phase 1B blockers and future work
 
-Resolve licensing/distribution requirements and arrange independent review before security claims. Design authenticated username-to-device binding, key verification/change acceptance, prekey replenishment and retirement, authenticated directory allocation, storage rollback policy, transport authentication/TLS, metadata retention and crash-safe delivery. No production deployment or next-phase feature implementation should begin automatically.
-
-## Verification
-
-JVM acceptance/attack suite: 11 tests passed. Android storage instrumentation: 5 tests passed on the API 37 emulator, including database reopen/replay, transaction rollback, missing Keystore key, modified wrapped secret and missing database. The existing app unit and instrumentation checks also passed (18 tests total). Debug and unsigned release APKs assembled. Android lint: zero errors and 19 dependency-age/starter-resource warnings. APK inspection confirms desktop native binaries and libsignal's testing JNI library are excluded; normal Android libsignal and SQLCipher JNI libraries remain. Manual emulator smoke confirmed the Compose screen, persistent random local device ID and SOFTWARE Keystore reporting. The initial cold launch exceeded adb's wait timeout before the screen became available; startup performance is not characterized. These results do not validate real hardware or other Android versions.
+Owner/legal licensing review, independent security review, authenticated username/device binding and verification UX, production prekey allocation/publication/retirement contracts, rollback policy, transport authentication/TLS, metadata retention, quota policies and crash-safe delivery. Production networking/accounts/backend, Ghost Mode and all other later features remain unimplemented. Stop at Phase 1A.1.

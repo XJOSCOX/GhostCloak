@@ -8,11 +8,21 @@ data class DeviceIdentity(val userId: String, val username: String, val deviceId
 
 object RandomIdentifiers {
     fun create(): String = UUID.randomUUID().toString()
-    fun valid(value: String): Boolean = runCatching { UUID.fromString(value).toString() == value }.getOrDefault(false)
+    fun valid(value: String): Boolean = try { UUID.fromString(value).toString() == value }
+        catch (e: IllegalArgumentException) { false }
 }
 
+enum class IdentityTrustState { UNVERIFIED, VERIFIED, CHANGED }
+enum class SecurityPriority { NORMAL, HIGH }
+data class RemoteIdentityStatus(val trustState: IdentityTrustState, val previousTrustState: IdentityTrustState? = null)
+enum class SessionLifecycle { ACTIVE, DESTROYED, REQUIRES_REAUTHENTICATION }
+
 sealed interface SecurityEvent {
-    data class RemoteIdentityChanged(val contactId: String) : SecurityEvent
+    data class RemoteIdentityChanged(val contactId: String,
+        val previousTrustState: IdentityTrustState = IdentityTrustState.UNVERIFIED) : SecurityEvent {
+        val priority: SecurityPriority get() = if (previousTrustState == IdentityTrustState.VERIFIED) SecurityPriority.HIGH else SecurityPriority.NORMAL
+        override fun toString() = "RemoteIdentityChanged(priority=$priority)"
+    }
 }
 
 /** Fixed codes only: no dynamic text, throwables, payloads, tokens or secrets. */

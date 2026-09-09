@@ -7,6 +7,8 @@ import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.decodeFromByteArray
 import org.ghostcloak.identity.RandomIdentifiers
 
+class MalformedFrame : IllegalArgumentException("Malformed protocol frame")
+
 @Serializable
 class EncryptedEnvelope(val protocolVersion: Int, val envelopeId: String,
     val senderDeviceId: String, val recipientDeviceId: String,
@@ -23,23 +25,26 @@ object EnvelopeCodec {
     const val MAX_BODY = 16384
     private val format = Cbor { encodeDefaults = true; ignoreUnknownKeys = false }
     fun validate(e: EncryptedEnvelope) {
-        require(e.protocolVersion == 1 && e.messageType in listOf(2, 3))
-        require(listOf(e.envelopeId, e.senderDeviceId, e.recipientDeviceId).all(RandomIdentifiers::valid))
-        require(e.encryptedPayload.size in 1..MAX_PACKET)
+        if (e.protocolVersion != 1 || e.messageType !in listOf(2, 3) ||
+            !listOf(e.envelopeId, e.senderDeviceId, e.recipientDeviceId).all(RandomIdentifiers::valid) ||
+            e.encryptedPayload.size !in 1..MAX_PACKET) throw MalformedFrame()
     }
     fun encode(e: EncryptedEnvelope): ByteArray { validate(e); return format.encodeToByteArray(e).also { require(it.size <= MAX_PACKET) } }
     fun decode(bytes: ByteArray): EncryptedEnvelope {
-        require(bytes.size in 1..MAX_PACKET)
+        if (bytes.size !in 1..MAX_PACKET) throw MalformedFrame()
         val e = parse { format.decodeFromByteArray<EncryptedEnvelope>(bytes) }
         validate(e)
-        require(encode(e).contentEquals(bytes))
+        if (!encode(e).contentEquals(bytes)) throw MalformedFrame()
         return e
     }
     fun content(c: BoundContent): ByteArray = format.encodeToByteArray(c)
     fun content(bytes: ByteArray): BoundContent {
-        require(bytes.size <= MAX_PACKET)
-        return parse { format.decodeFromByteArray<BoundContent>(bytes) }.also { require(it.body.size <= MAX_BODY) }
+        if (bytes.size > MAX_PACKET) throw MalformedFrame()
+        val result = parse { format.decodeFromByteArray<BoundContent>(bytes) }
+        if (result.body.size > MAX_BODY) { result.body.fill(0); throw MalformedFrame() }
+        return result
     }
     private fun <T> parse(block: () -> T): T = try { block() }
-        catch (e: IllegalStateException) { throw IllegalArgumentException("Malformed protocol frame") }
+        catch (e: kotlinx.serialization.SerializationException) { throw MalformedFrame() }
+        catch (e: IllegalStateException) { throw MalformedFrame() }
 }

@@ -44,7 +44,14 @@ class LocalDemoTest {
         compose.onNodeWithText("Settings").performClick()
         compose.onNodeWithText("Open local demo").performScrollTo().performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText("Return to my identity").fetchSemanticsNodes().isNotEmpty() }
-        compose.onAllNodes(hasText("Chats") and hasClickAction()).onFirst().performClick()
+        compose.onNodeWithText("Contact").performClick()
+        compose.onNodeWithText("Contacts").assertIsDisplayed()
+        compose.onNodeWithText("Profiles").performClick()
+        compose.onNodeWithText("Your profile").assertIsDisplayed()
+        compose.onNodeWithText("Edit").performClick()
+        compose.onNodeWithText("Edit your name").assertIsDisplayed()
+        compose.onNodeWithText("Cancel").performClick()
+        compose.onAllNodes(hasText("Chat") and hasClickAction()).onFirst().performClick()
         compose.onNodeWithText("Bob").performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText("Write a message…").fetchSemanticsNodes().isNotEmpty() }
         compose.waitUntil(20000) { compose.onNodeWithText("Write a message…").isEnabled() }

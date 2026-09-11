@@ -15,7 +15,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
-enum class Glyph { CHAT, SEARCH, SETTINGS, BACK, SEND, PLUS, SHIELD, CLOSE, MORE, PERSON }
+enum class Glyph { CHAT, SEARCH, SETTINGS, BACK, SEND, PLUS, SHIELD, CLOSE, MORE, PERSON, CONTACTS }
 
 /** Small local vector set; no icon font, downloaded assets or additional dependencies. */
 @Composable fun AppIcon(glyph: Glyph, description: String? = null, modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) {
@@ -33,6 +33,11 @@ enum class Glyph { CHAT, SEARCH, SETTINGS, BACK, SEND, PLUS, SHIELD, CLOSE, MORE
                 Glyph.CHAT -> { drawPath(Path().apply { moveTo(5f,4f); lineTo(19f,4f); quadraticTo(21f,4f,21f,6f); lineTo(21f,16f); quadraticTo(21f,18f,19f,18f); lineTo(9f,18f); lineTo(4f,21f); lineTo(4f,18f); quadraticTo(3f,18f,3f,16f); lineTo(3f,6f); quadraticTo(3f,4f,5f,4f); close() },tint,style=stroke); line(7f,9f,17f,9f); line(7f,13f,14f,13f) }
                 Glyph.SHIELD -> { drawPath(Path().apply { moveTo(12f,3f); lineTo(20f,6f); lineTo(20f,12f); quadraticTo(20f,18f,12f,22f); quadraticTo(4f,18f,4f,12f); lineTo(4f,6f); close() },tint,style=stroke); line(8f,12f,11f,15f); line(11f,15f,16f,9f) }
                 Glyph.SETTINGS -> { drawCircle(tint,7f,Offset(12f,12f),style=stroke); drawCircle(tint,2.5f,Offset(12f,12f),style=stroke); for(i in 0..7) { val a=i*Math.PI/4; line((12+8*kotlin.math.cos(a)).toFloat(),(12+8*kotlin.math.sin(a)).toFloat(),(12+10*kotlin.math.cos(a)).toFloat(),(12+10*kotlin.math.sin(a)).toFloat()) } }
+                Glyph.CONTACTS -> {
+                    drawCircle(tint,3f,Offset(9f,7f),style=stroke)
+                    drawPath(Path().apply {moveTo(2f,21f); cubicTo(2f,12f,16f,12f,16f,21f)},tint,style=stroke)
+                    drawPath(Path().apply {moveTo(16f,4f); cubicTo(21f,4f,21f,10f,16f,10f); moveTo(18f,14f); quadraticTo(22f,15f,22f,21f)},tint,style=stroke)
+                }
                 Glyph.PERSON -> { drawCircle(tint,4f,Offset(12f,7f),style=stroke); drawPath(Path().apply {moveTo(4f,21f); cubicTo(4f,12f,20f,12f,20f,21f)},tint,style=stroke) }
             }
         }

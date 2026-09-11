@@ -15,7 +15,7 @@ For a clean test, use fresh test installations without identities you need to re
 1. Phone A: enter a unique username, for example `alice_e0_4821`, then tap **Create identity**.
 2. Phone B: enter a different unique username, for example `bob_e0_4821`, then tap **Create identity**.
 3. Wait for **Connected** on both. Use 3–24 letters, numbers or underscores, beginning with a letter or number. Names are normalized to lowercase; some names are reserved.
-4. If creation cannot reach staging, the local identity remains. Restore connectivity and tap **Connect to Ghost Cloak** or **Sync**. Do not reinstall. If the username is taken, choose another in Settings before reconnecting; keys stay unchanged. After successful registration, Settings changes only the local display name, not the server username.
+4. If creation cannot reach staging, the local identity remains. Restore connectivity and tap **Connect to Ghost Cloak** or **Sync**. Do not reinstall. If the username is taken, choose another in Settings before reconnecting; keys stay unchanged. After successful registration, Profiles changes only the local display name, not the server username.
 
 “Connected” reflects this app's last successful operation, never another person's presence. While the app is STARTED, automatic sync runs immediately on resume and then waits approximately one second after each completed cycle. Cycles do not overlap. It reuses authentication, renews on expiry, retries pending sends and fetches messages/receipts. **Sync** remains available for recovery. Backgrounding cancels polling completely; logout disables automatic reconnection until explicitly connected again.
 
@@ -25,7 +25,7 @@ Normal access-session expiry is renewed silently using the existing registered d
 
 1. Alice taps **+ (New chat)**, enters Bob's exact registered username and taps **Find and add contact**. **Bob does not add Alice.**
 2. Do not verify safety numbers yet. Alice opens Bob's conversation and sends `Synthetic one-way A1`.
-3. Alice sees **Queued on server** after upload. Keep Bob's app open; within roughly one second plus network time, Alice appears as a message request on Bob's phone. The **Requests** filter isolates pending requests.
+3. Alice sees **Queued on server** after upload. Keep Bob's app open; within roughly one second plus network time, Alice appears as a message request on Bob's phone. The request appears directly in the Chat list with its request label.
 4. Bob opens the request. The message is visible and the sender is **Unverified**. No manual Sync or mutual verification is needed. Reply stays disabled until **Accept**.
 5. After Bob's client decrypts, stores and ACKs the message, Alice's next foreground cycle shows **Delivered**. This can happen before Bob taps Accept: Delivered means saved on the receiving endpoint, not human acceptance or reading.
 6. Bob taps **Accept**; Alice becomes a normal contact but remains Unverified. Bob replies `Synthetic reply B1`. Alice receives automatically while foregrounded.

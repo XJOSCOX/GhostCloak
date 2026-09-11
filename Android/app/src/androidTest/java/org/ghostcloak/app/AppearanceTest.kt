@@ -25,7 +25,7 @@ class AppearanceTest {
         compose.setContent {
             val mode by store.mode.collectAsState()
             CompositionLocalProvider(LocalAppearance provides AppearanceControl(mode,store::select)) {
-                GhostCloakTheme(darkTheme=mode.isDark(false)) { Surface(color=MaterialTheme.colorScheme.background) {SettingsScreen(AppState(loading=false,identity=DeviceIdentity("synthetic", "alex_morgan", "synthetic-device",byteArrayOf()), networkConfigured=true,networkStatus=NetworkStatus.CONNECTED),{},false,{},{})} }
+                GhostCloakTheme(darkTheme=mode.isDark(false)) { Surface(color=MaterialTheme.colorScheme.background) {SettingsScreen(AppState(loading=false,identity=DeviceIdentity("synthetic", "alex_morgan", "synthetic-device",byteArrayOf()), networkConfigured=true,networkStatus=NetworkStatus.CONNECTED),false,{},{})} }
             }
         }
         for(mode in listOf(AppearanceMode.DARK,AppearanceMode.LIGHT,AppearanceMode.AUTOMATIC)) {

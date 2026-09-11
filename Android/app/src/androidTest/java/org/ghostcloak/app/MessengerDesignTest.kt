@@ -49,7 +49,7 @@ class MessengerDesignTest {
         compose.runOnIdle { dark.value=true }
         screenshot("organized-conversation-dark.png")
     }
-    @Test fun chatListSeparatesRequestsAndShowsLocalPreviews() {
+    @Test fun chatHeaderHasComposeActionAndRequestsStayReachableWithoutFilters() {
         val known = contact.copy(contact = contact.contact.copy(contactId = RandomIdentifiers.create(), remoteDeviceId = RandomIdentifiers.create(), displayName = "morgan", request = false))
         val last = message.copy(conversationId = known.contact.remoteDeviceId, direction = Direction.OUTGOING, body = "Sounds good. I'll bring coffee.")
         val extras = listOf("Hannah" to "Thanks for checking in!", "Jordan" to "Let's catch up this weekend.", "Alex" to "Made it. See you soon.", "Nina" to "That sounds like a plan.").map { (name, body) ->
@@ -60,18 +60,15 @@ class MessengerDesignTest {
         compose.setContent { GhostCloakTheme(darkTheme=dark.value) { Surface(color = androidx.compose.material3.MaterialTheme.colorScheme.background) { ContactsScreen(AppState(loading = false,
             identity = DeviceIdentity(RandomIdentifiers.create(), "bob", RandomIdentifiers.create(), byteArrayOf()),
             contacts = listOf(contact, known)+extras.map {it.first}, previews = mapOf(known.contact.remoteDeviceId to last)+extras.associate {it.first.contact.remoteDeviceId to it.second}), {}, {}) } } }
-        compose.onNodeWithText("Requests 1").assertIsDisplayed()
+        compose.onNodeWithText("Ghost Cloak").assertIsDisplayed()
+        compose.onNodeWithText("Chats").assertIsDisplayed()
+        compose.onNodeWithText("Search chats").assertDoesNotExist()
+        compose.onNodeWithText("All").assertDoesNotExist()
+        compose.onNodeWithText("Requests 1").assertDoesNotExist()
+        compose.onNodeWithContentDescription("New chat").assertHasClickAction()
         compose.onNodeWithText("You: Sounds good. I'll bring coffee.").assertIsDisplayed()
-        screenshot("organized-chats-light.png")
-        compose.onNodeWithText("alice").assertDoesNotExist()
-        compose.onNodeWithText("Requests 1").performClick()
-        compose.onNodeWithText("morgan").assertDoesNotExist()
         compose.onNodeWithText("alice").assertIsDisplayed()
-        compose.onNodeWithText("All").performClick()
-        compose.onNodeWithText("Search chats").performTextInput("morg")
-        compose.onNodeWithText("alice").assertDoesNotExist()
-        compose.onNodeWithText("morgan").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Clear search").performClick()
+        screenshot("organized-chats-light.png")
         compose.runOnIdle { dark.value = true }
         screenshot("organized-chats-dark.png")
     }

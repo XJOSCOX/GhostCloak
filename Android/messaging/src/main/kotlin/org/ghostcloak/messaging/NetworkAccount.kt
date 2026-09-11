@@ -20,6 +20,13 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
         requireApi(old == null || old.decodeToString() == entry.routingId, "routing_changed")
         records.write(prefix + "route/${entry.deviceId}", entry.routingId.toByteArray())
     }
+    fun remember(sender: SenderProfile) = records.transaction {
+        requireApi(listOf(sender.accountId, sender.deviceId, sender.routingId).all(RandomIdentifiers::valid))
+        requireApi(Usernames.normalize(sender.username) == sender.username)
+        val key = prefix + "route/${sender.deviceId}"
+        requireApi(records.read(key)?.decodeToString()?.let { it == sender.routingId } != false, "routing_changed")
+        records.write(key, sender.routingId.toByteArray())
+    }
     fun registration(username: String, bundles: List<PublicBundle>): Registration = records.transaction {
         requireApi(records.read("local/device") != null, "identity_required")
         if (credential != null) {

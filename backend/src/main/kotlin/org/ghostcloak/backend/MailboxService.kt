@@ -164,11 +164,37 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
             }
             is ApiRequest.Prekeys -> { requireApi(r.deviceId == device.id, "forbidden", 403); upload(device.id, r.bundles); ApiResponse() }
             is ApiRequest.Send -> send(device, r)
-            is ApiRequest.Fetch -> ApiResponse(deliveries = db.mailbox.all().filter { it.recipientRoutingId == device.routingId }.sortedBy { it.receivedAt }.take(NetworkLimits.BATCH).map { Delivery(it.id, it.encryptedEnvelope.copyOf(), it.receivedAt, it.expiresAt) })
+            is ApiRequest.Fetch -> {
+                requireApi(r.submissionIds.size <= NetworkLimits.BATCH && r.submissionIds.all(RandomIdentifiers::valid))
+                // Prefix lookup discloses only the caller's submissions; unknown/foreign IDs fail identically.
+                val statuses = r.submissionIds.map { id ->
+                    val row = db.submissions.get(device.id + "/" + id) ?: throw ApiFailure(404, "not_found")
+                    DeliveryStatus(id, row.acknowledged)
+                }
+                requireApi(r.skipMessageIds.size <= 128 && r.skipMessageIds.all(RandomIdentifiers::valid))
+                val owned = db.mailbox.all().filter { it.recipientRoutingId == device.routingId }
+                    .sortedWith(compareBy<MailboxRow> { it.receivedAt }.thenBy { it.id })
+                val deliveries = owned.filter { it.id !in r.skipMessageIds }.take(NetworkLimits.BATCH).map {
+                        val sender = if (r.includeSenders) {
+                            val source = db.devices.get(EnvelopeCodec.decode(it.encryptedEnvelope).senderDeviceId)!!
+                            SenderProfile(source.accountId, source.id, source.routingId, db.accounts.get(source.accountId)!!.username)
+                        } else null
+                        Delivery(it.id, it.encryptedEnvelope.copyOf(), it.receivedAt, it.expiresAt, sender)
+                    }
+                ApiResponse(deliveries = deliveries, statuses = statuses)
+            }
             is ApiRequest.Ack -> {
                 requireApi(r.serverMessageIds.size in 1..NetworkLimits.BATCH && r.serverMessageIds.all(RandomIdentifiers::valid))
                 requireApi(r.serverMessageIds.none { id -> db.mailbox.get(id)?.let { it.recipientRoutingId != device.routingId } == true }, "forbidden", 403)
-                r.serverMessageIds.forEach { db.mailbox.remove(it) }; ApiResponse()
+                r.serverMessageIds.forEach { id ->
+                    // Only a still-owned mailbox row can produce an ACK receipt. Expiry is not delivery.
+                    if (db.mailbox.get(id) != null) {
+                        db.submissions.all().filter { it.serverId == id }.forEach { row ->
+                            db.submissions.put(row.id, SubmissionRow(row.id, row.sender, row.digest, row.serverId, row.expiresAt, true))
+                        }
+                        db.mailbox.remove(id)
+                    }
+                }; ApiResponse()
             }
             else -> throw ApiFailure(400, "invalid_request")
         }

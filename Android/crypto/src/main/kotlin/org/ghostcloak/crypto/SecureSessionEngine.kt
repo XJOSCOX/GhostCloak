@@ -23,6 +23,9 @@ interface SecureSessionEngine {
     suspend fun establishSession(remote: RemoteKeyBundle)
     suspend fun encrypt(remoteDeviceId: String, plaintext: ByteArray): EncryptedEnvelope
     suspend fun decrypt(envelope: EncryptedEnvelope): ByteArray
+    /** Commit application acceptance using the same EndpointRecords transaction as the ratchet.
+     * The callback must use that same store, must not suspend or retain the supplied plaintext. */
+    suspend fun decryptAndCommit(envelope: EncryptedEnvelope, accept: (ByteArray) -> Unit)
     suspend fun getRemoteFingerprint(remoteDeviceId: String): String
     suspend fun destroySession(remoteDeviceId: String)
     suspend fun getRemoteIdentityStatus(remoteDeviceId: String): RemoteIdentityStatus?

@@ -12,43 +12,36 @@ import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 
 @Composable fun ContactsScreen(state: AppState, add: () -> Unit, open: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}) {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        item { Wordmark() }
+    val requests = state.contacts.filter { it.contact.request && !it.contact.blocked }
+    val chats = state.contacts.filter { !it.contact.request }.sortedByDescending { state.previews[it.contact.remoteDeviceId]?.timestamp ?: 0 }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SectionLabel(if (state.demo) "DEVELOPER SANDBOX" else "YOUR PRIVATE SPACE")
-                ScreenHeader("Contacts", "${state.identity?.username.orEmpty()} · ${state.contacts.size} contacts")
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Chats", style = MaterialTheme.typography.headlineLarge)
+                    Text("@${state.identity?.username.orEmpty()}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                FilledTonalButton(onClick = add, enabled = !state.loading) { Text("+ New chat") }
             }
         }
         item { NetworkActions(state, connect, sync) }
-        item { ErrorNotice(state.error) }
-        if (state.demo) item { InfoPanel("Local simulator", "Two separate encrypted endpoints on this device. Replies are simulated; no messages leave the app.") }
-        if (state.contacts.isEmpty()) item {
-            Surface(shape = MaterialTheme.shapes.large) {
-                Column(Modifier.fillMaxWidth().padding(28.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                    BrandMark(Modifier.size(60.dp))
-                    Text("Start with someone\nyou trust.", style = MaterialTheme.typography.headlineSmall)
-                    Text(if (state.networkConfigured && !state.demo) "Add someone by their Ghost Cloak username to start an encrypted conversation. Tap Sync to receive messages." else "Exchange a public contact card to create your first encrypted conversation.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    FullButton("+  Add a contact", !state.loading, add)
-                }
+        if (state.error != null) item { ErrorNotice(state.error) }
+        if (state.demo) item { InfoPanel("Local simulator", "Replies are simulated on this device.") }
+        if (requests.isNotEmpty()) {
+            item { SectionLabel("MESSAGE REQUESTS - ${requests.size}") }
+            items(requests, key = { it.contact.contactId }) { status -> ChatRow(status, state.previews[status.contact.remoteDeviceId], open) }
+            item { HorizontalDivider() }
+        }
+        if (chats.isEmpty() && requests.isEmpty()) item {
+            Column(Modifier.fillMaxWidth().padding(vertical = 48.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                BrandMark(Modifier.size(72.dp))
+                Text("Your conversations start here", style = MaterialTheme.typography.titleLarge)
+                Text(if (state.networkConfigured && !state.demo) "Find someone by username. Keep the conversation private."
+                    else "Exchange a public contact card to start chatting.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                FullButton("+  Add a contact", !state.loading, add)
             }
         }
-        items(state.contacts, key = { it.contact.contactId }) { status ->
-            Surface(onClick = { open(status.contact.remoteDeviceId) }, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Avatar(status.contact.displayName)
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        Text(status.contact.displayName, style = MaterialTheme.typography.titleMedium)
-                        if (state.contacts.count { it.contact.displayName == status.contact.displayName } > 1)
-                            Text("Compare safety numbers to distinguish contacts", style = MaterialTheme.typography.bodyMedium)
-                        if (status.contact.blocked) Text("Blocked on this device", color = MaterialTheme.colorScheme.error)
-                        else TrustBadge(status.identity?.trustState)
-                    }
-                    Text("›", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-        if (state.contacts.isNotEmpty()) item { FullButton("+  Add a contact", !state.loading, add) }
-        item { Text("Encryption protects messages. Verification helps you confirm who is on the other end.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        items(chats, key = { it.contact.contactId }) { status -> ChatRow(status, state.previews[status.contact.remoteDeviceId], open) }
     }
 }

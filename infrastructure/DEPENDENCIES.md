@@ -1,6 +1,6 @@
 # Production foundation dependencies
 
-Direct coordinates are pinned in backend/build.gradle.kts: `io.ktor:ktor-server-netty-jvm:3.5.2` (maintained Kotlin HTTP server, Apache-2.0), `org.postgresql:postgresql:42.7.11` (JDBC, BSD-2-Clause), and runtime `org.slf4j:slf4j-nop:2.0.18` (no request logging, MIT). No ORM or migration framework was added: the single immutable SQL migration is version/checksum validated transactionally.
+Direct coordinates are pinned in backend/build.gradle.kts: `io.ktor:ktor-server-netty-jvm:3.5.2` (maintained Kotlin HTTP server, Apache-2.0), `org.postgresql:postgresql:42.7.11` (JDBC, BSD-2-Clause), and runtime `org.slf4j:slf4j-nop:2.0.18` (no request logging, MIT). No ORM or migration framework was added: immutable numbered SQL migrations are version/checksum validated transactionally. Phase 1E.1 adds V002 for the ACK receipt flag without editing V001.
 
 New transitive families selected by these pinned modules:
 

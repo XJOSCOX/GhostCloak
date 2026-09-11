@@ -14,7 +14,7 @@ import org.ghostcloak.messaging.*
 import org.ghostcloak.transport.TransportFailure
 
 data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? = null,
-    val contacts: List<ContactStatus> = emptyList(), val messages: List<Message> = emptyList(),
+    val contacts: List<ContactStatus> = emptyList(), val previews: Map<String, Message> = emptyMap(), val messages: List<Message> = emptyList(),
     val error: String? = null, val card: String = "", val fingerprint: String = "",
     val demo: Boolean = false, val protection: String = "", val ready: Boolean = false,
     val networkConfigured:Boolean=false,val networkStatus:NetworkStatus=NetworkStatus.DISABLED) {
@@ -30,11 +30,11 @@ class GhostViewModel internal constructor(application: Application, private val 
     private var selected: String? = null
     private var workCount = 0
     init { refresh() }
-    private fun run(activity: NetworkStatus? = null, block: suspend (ConversationService) -> String? = { null }) {
-        workCount++
-        mutable.value = mutable.value.copy(loading = true, error = null,
+    private fun run(quiet: Boolean = false, activity: NetworkStatus? = null, block: suspend (ConversationService) -> String? = { null }): kotlinx.coroutines.Job {
+        if (!quiet) workCount++
+        if (!quiet) mutable.value = mutable.value.copy(loading = true, error = null,
             networkStatus = activity?.takeIf { runtime.networkConfigured && !runtime.inDemo } ?: mutable.value.networkStatus)
-        viewModelScope.launch {
+        return viewModelScope.launch {
             var failure: String? = null
             try {
                 runtime.use { service ->
@@ -48,24 +48,40 @@ class GhostViewModel internal constructor(application: Application, private val 
                     val identity = runtime.open(active)
                     val contacts = if (identity != null) active.contacts() else emptyList()
                     mutable.value = mutable.value.copy(identity = identity, contacts = contacts,
+                        previews = contacts.mapNotNull { c -> active.messages(c.contact.remoteDeviceId).lastOrNull()?.let { c.contact.remoteDeviceId to it } }.toMap(),
                         messages = selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.messages(it) } ?: emptyList(),
                         demo = runtime.inDemo, protection = runtime.protection, ready = true,
                         networkConfigured=runtime.networkConfigured,networkStatus=runtime.networkStatus)
                 }
             } catch (e: EndpointStorageFailure) { failure = "Encrypted storage is unavailable. Your identity was not reset. Close the app and investigate before continuing." }
             catch (e: CryptoFailure) { failure = cryptoError(e.error) }
-            finally { workCount--; mutable.value = mutable.value.copy(loading = workCount > 0, error = failure) }
+            finally { if (!quiet) workCount--; mutable.value = mutable.value.copy(loading = workCount > 0, error = if (quiet) mutable.value.error else failure) }
         }
     }
+    private val foregroundMutex = kotlinx.coroutines.sync.Mutex()
+    suspend fun foregroundSync() {
+        foregroundMutex.lock()
+        try {
+            while (true) {
+                if (runtime.networkConfigured && !runtime.inDemo) {
+                    val job = run(quiet = true) { if (runtime.canAutoSync) runtime.syncNetwork(it); null }
+                    try { job.join() } finally { job.cancel() }
+                }
+                kotlinx.coroutines.delay(4000)
+            }
+        } finally { foregroundMutex.unlock() }
+    }
+    fun acceptRequest(id: String) = run { it.acceptRequest(id); null }
+    fun deleteRequest(id: String) = run { it.deleteRequest(id); null }
     fun refresh() = run()
-    fun connectNetwork() = run(NetworkStatus.CONNECTING) { runtime.connectNetwork(it); null }
-    fun syncNetwork() = run(NetworkStatus.SYNCING) { runtime.syncNetwork(it); null }
+    fun connectNetwork() = run(activity = NetworkStatus.CONNECTING) { runtime.connectNetwork(it); null }
+    fun syncNetwork() = run(activity = NetworkStatus.SYNCING) { runtime.syncNetwork(it); null }
     fun publishNetwork() = run { runtime.publishNetwork(); null }
     fun logoutNetwork() = run { runtime.logoutNetwork(); null }
     fun addNetwork(username: String, success: () -> Unit) = run {
         runtime.addNetwork(username, it); withContext(Dispatchers.Main) { success() }; null
     }
-    fun create(username: String) = run(NetworkStatus.CONNECTING) { runtime.create(it, username); null }
+    fun create(username: String) = run(activity = NetworkStatus.CONNECTING) { runtime.create(it, username); null }
     fun rename(username: String) = run { it.rename(username); null }
     fun select(id: String) { selected = id; mutable.value = mutable.value.copy(messages = emptyList(), fingerprint = ""); refresh() }
     fun exportCard() = run { mutable.value = mutable.value.copy(card = it.exportCard(fresh = true)); null }
@@ -80,7 +96,7 @@ class GhostViewModel internal constructor(application: Application, private val 
         // A saved pending message owns its draft now; Sync retries it without creating a duplicate.
         withContext(Dispatchers.Main) { success() }
         when (message.state) {
-            MessageState.PENDING -> "Message saved as pending. Tap Sync to retry."
+            MessageState.PENDING -> "Message saved as pending. It will retry while the app is open."
             MessageState.FAILED -> "Message could not be sent. Review the conversation before trying again."
             else -> null
         }

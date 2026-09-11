@@ -7,11 +7,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.*
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import org.ghostcloak.app.application.GhostViewModel
 import org.ghostcloak.app.ui.screens.*
 
 @Composable fun GhostApp(model: GhostViewModel) {
     val state by model.state.collectAsState()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(model, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { model.foregroundSync() }
+    }
     val nav = rememberNavController()
     val entry by nav.currentBackStackEntryAsState()
     val route = entry?.destination?.route
@@ -19,7 +26,7 @@ import org.ghostcloak.app.ui.screens.*
         if (state.identity != null && route in listOf("contacts", "settings")) {
             Surface(color = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
                 Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    listOf("contacts" to "Contacts", "settings" to "Settings").forEach { (destination, label) ->
+                    listOf("contacts" to "Chats", "settings" to "Settings").forEach { (destination, label) ->
                         val click = { nav.navigate(destination) { popUpTo("contacts"); launchSingleTop = true } }
                         if (route == destination) FilledTonalButton(onClick = click, modifier = Modifier.weight(1f).heightIn(min = 52.dp)) { Text(label) }
                         else TextButton(onClick = click, modifier = Modifier.weight(1f).heightIn(min = 52.dp)) { Text(label) }
@@ -40,7 +47,8 @@ import org.ghostcloak.app.ui.screens.*
                         val contact = state.contacts.firstOrNull { it.contact.remoteDeviceId == id } ?: return@composable
                         LaunchedEffect(id) { model.select(id) }
                         ConversationScreen(state, contact, { nav.popBackStack() }, { nav.navigate("security/$id") },
-                            { text, success -> model.send(id, text, success) }, { model.delete(id, it) }, model::connectNetwork, model::syncNetwork)
+                            { text, success -> model.send(id, text, success) }, { model.delete(id, it) }, model::connectNetwork, model::syncNetwork,
+                            { model.acceptRequest(id) }, { model.deleteRequest(id); nav.popBackStack() })
                     }
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable

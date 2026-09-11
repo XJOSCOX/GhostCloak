@@ -10,6 +10,14 @@ import org.ghostcloak.app.application.NetworkStatus
 
 @Composable fun NetworkActions(state: AppState, connect: () -> Unit, sync: () -> Unit) {
     if (!state.networkConfigured || state.demo) return
+    if (state.networkConnected) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text("Connected", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextButton(onClick = sync, enabled = !state.loading) { Text("Sync") }
+        }
+        return
+    }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(when (state.networkStatus) {
             NetworkStatus.CONNECTED -> "Connected"

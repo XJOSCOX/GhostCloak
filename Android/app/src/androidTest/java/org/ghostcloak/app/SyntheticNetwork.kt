@@ -20,8 +20,10 @@ internal class SyntheticNetwork : GhostCloakTransport {
     private val challenges = mutableMapOf<String, Challenge>()
     private val prekeys = mutableMapOf<String, MutableList<PublicBundle>>()
     private val submissions = mutableMapOf<String, String>()
+    private val acknowledged = mutableSetOf<String>()
     private val random = SecureRandom()
-    override suspend fun execute(request: TransportRequest): TransportResponse {
+    override suspend fun execute(request: TransportRequest): TransportResponse = respond(request)
+    @Synchronized private fun respond(request: TransportRequest): TransportResponse {
         check(request.endpoint.host == "fixture.invalid")
         requests++
         if (offline) throw java.io.IOException("synthetic offline")
@@ -77,10 +79,18 @@ internal class SyntheticNetwork : GhostCloakTransport {
                         }
                         ApiResponse(serverMessageId = id)
                     }
-                    is ApiRequest.Fetch -> ApiResponse(deliveries = mailbox.values.filter { it.first == me.deviceId }.map { it.second })
+                    is ApiRequest.Fetch -> ApiResponse(deliveries = mailbox.values.filter { it.first == me.deviceId && it.second.serverMessageId !in r.skipMessageIds }.take(NetworkLimits.BATCH).map {
+                        val d = it.second
+                        val sender = accounts.values.single { a -> a.deviceId == EnvelopeCodec.decode(d.encryptedEnvelope).senderDeviceId }
+                        Delivery(d.serverMessageId, d.encryptedEnvelope, d.receivedAt, d.expiresAt,
+                            if (r.includeSenders) SenderProfile(sender.accountId, sender.deviceId, sender.routingId, sender.username) else null)
+                    }, statuses = r.submissionIds.map { id ->
+                        val serverId = submissions[me.deviceId + id] ?: throw ApiFailure(404, "not_found")
+                        DeliveryStatus(id, serverId in acknowledged)
+                    })
                     is ApiRequest.Ack -> {
                         requireApi(r.serverMessageIds.all { mailbox[it]?.first == me.deviceId }, "forbidden", 403)
-                        r.serverMessageIds.forEach { mailbox.remove(it) }; ApiResponse()
+                        r.serverMessageIds.forEach { acknowledged.add(it); mailbox.remove(it) }; ApiResponse()
                     }
                     is ApiRequest.Prekeys -> { prekeys[me.deviceId]!!.addAll(r.bundles); ApiResponse() }
                     is ApiRequest.Revoke -> { sessions.entries.removeAll { it.value.deviceId == me.deviceId }; ApiResponse() }

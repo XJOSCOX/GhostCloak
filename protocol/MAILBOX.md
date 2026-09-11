@@ -10,6 +10,8 @@ Pool capacity is 32, upload count 1–16. Device ownership, identity continuity,
 
 ## Delivery and retention
 
+Phase 1E.1 adds optional authenticated Fetch sender profiles and sender-scoped receipt queries. The successful recipient ACK atomically marks the existing submission row acknowledged before removing mailbox ciphertext. The boolean expires with that row; it adds no read state or delivery timestamp. Expiry or missing ciphertext never implies delivery. Optional bounded skip IDs allow later messages to be fetched without ACKing rejected/blocked envelopes. See [the Phase 1E.1 contract and rollout](../SECURITY_REVIEW_PHASE_1E1.md) for compatibility, V002 migration and request trust rules. The retention details below still apply; ACK now records this bounded boolean in addition to removing the queue entry.
+
 Routing ID is an independently random UUID, not username, hardware identity or a hash of a public key. It stays stable across username changes. It separates public discovery from delivery addressing but is not a secret or an anonymity measure. Server account records can link all these identifiers.
 
 Authenticated send verifies the outer sender equals session device and outer recipient equals the device registered at the destination routing ID. Maximum encoded envelope: 128 KiB. Destination quota: 128 records and 8 MiB; global mailbox quota: 2,048 records. No ciphertext body analysis, moderation/decryption or conversation reconstruction API exists. Server records: random server ID, recipient routing, opaque encoded envelope, receive time and expiry.

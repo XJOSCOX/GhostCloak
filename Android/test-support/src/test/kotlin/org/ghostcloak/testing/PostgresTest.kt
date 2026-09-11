@@ -16,6 +16,23 @@ import java.util.concurrent.Executors
 import java.time.*
 
 class PostgresTest {
+    @Test fun additiveReceiptMigrationPreservesExistingAccount() = runBlocking {
+        Fixture().use { f ->
+            val original = register(f.service(), "alice").registration
+            // Recreate the prior schema only inside this disposable test schema.
+            f.source.connection.use { connection -> connection.createStatement().use {
+                it.execute("ALTER TABLE message_deduplication DROP COLUMN acknowledged")
+                it.execute("DELETE FROM schema_history WHERE version=2")
+            } }
+            try { PostgresDatabase(f.source); fail("Missing migration accepted") } catch (_: IllegalStateException) { }
+            val upgraded = PostgresDatabase(f.source, migrate = true)
+            assertEquals(original.deviceId, upgraded.transaction { upgraded.accounts.get(original.accountId)!!.deviceId })
+            assertTrue(PostgresDatabase(f.source).healthy())
+        }
+    }
+    @Test fun oneWayMessagingAndPrivateReceiptsPersist() = runBlocking {
+        Fixture().use { OneWayProbe.exercise(it.db) }
+    }
     @Test fun visitorHeadersNeverReachPostgresRows()=runBlocking {
         Fixture().use {f->
             OriginPrivacyProbe.exercise(f.db)

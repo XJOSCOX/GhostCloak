@@ -177,7 +177,12 @@ class SignalProtocolEngine(private val records: EndpointRecords,
             EncryptedEnvelope(1, id, sender, remoteDeviceId, message.type, message.serialize())
         } finally { bound.fill(0) }
     }
-    override suspend fun decrypt(envelope: EncryptedEnvelope): ByteArray = operation {
+    override suspend fun decrypt(envelope: EncryptedEnvelope): ByteArray = operation { decryptContent(envelope) }
+    override suspend fun decryptAndCommit(envelope: EncryptedEnvelope, accept: (ByteArray) -> Unit) = operation {
+        val bytes = decryptContent(envelope)
+        try { accept(bytes) } finally { bytes.fill(0) }
+    }
+    private fun decryptContent(envelope: EncryptedEnvelope): ByteArray {
         EnvelopeCodec.validate(envelope)
         if (envelope.recipientDeviceId != local().name) throw CryptoFailure(CryptoError.WrongRecipient)
         val id = envelope.senderDeviceId
@@ -206,7 +211,7 @@ class SignalProtocolEngine(private val records: EndpointRecords,
             }
             else -> throw CryptoFailure(CryptoError.MalformedEnvelope)
         }
-        try {
+        return try {
             val bound = EnvelopeCodec.content(plain)
             try {
                 if (bound.version != envelope.protocolVersion || bound.id != envelope.envelopeId ||

@@ -1,5 +1,7 @@
 # Phase 1C.2 deployment package
 
+Phase 1E.1 upgrade: use the [current rollout review](../SECURITY_REVIEW_PHASE_1E1.md). The new migration command validates V001 and applies/checksums additive V002 for ACK receipts. Normal startup now requires both versions. Deploy the matching backend before updated Android clients; the older binary cannot run against schema version 2.
+
 Prepared for owner review only. Do not SSH, deploy, issue certificates or change DNS/firewalls as part of local validation. This phase does not implement Phase 1D or anonymity.
 
 ## Build and configuration

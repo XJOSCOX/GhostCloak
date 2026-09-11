@@ -21,7 +21,7 @@ interface BackendDatabase : AccountRepository, DeviceRepository, PreKeyRepositor
 @Serializable class ChallengeRow(val challenge: Challenge)
 @Serializable class SessionRow(val hash: String, val deviceId: String, val expiresAt: Long)
 @Serializable class MailboxRow(val id: String, val recipientRoutingId: String, val encryptedEnvelope: ByteArray, val receivedAt: Long, val expiresAt: Long)
-@Serializable class SubmissionRow(val id: String, val sender: String, val digest: ByteArray, val serverId: String, val expiresAt: Long)
+@Serializable class SubmissionRow(val id: String, val sender: String, val digest: ByteArray, val serverId: String, val expiresAt: Long, val acknowledged: Boolean = false)
 @Serializable private class DatabaseState(
     val accounts: MutableMap<String, AccountRow> = mutableMapOf(), val devices: MutableMap<String, DeviceRow> = mutableMapOf(),
     val prekeys: MutableMap<String, PrekeyRow> = mutableMapOf(), val challenges: MutableMap<String, ChallengeRow> = mutableMapOf(),

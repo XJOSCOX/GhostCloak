@@ -27,7 +27,7 @@ import java.time.format.DateTimeFormatter
         Text("${DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(message.timestamp))} · ${when (message.state) {
             MessageState.PENDING -> "Pending"; MessageState.ENCRYPTED -> "Encrypted"; MessageState.SENT_TO_TRANSPORT -> "Sent to local transport"
             MessageState.DELIVERED_LOCAL_SIMULATION -> if (outgoing) "Delivered locally" else "Received locally"; MessageState.FAILED -> "Not delivered"
-            MessageState.SERVER_ACCEPTED -> "Queued on server"; MessageState.RECEIVED -> "Received"
+            MessageState.DELIVERED -> "Delivered"; MessageState.SERVER_ACCEPTED -> "Queued on server"; MessageState.RECEIVED -> "Received"
         }}", Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium,
             color = if (message.state == MessageState.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
         Box {

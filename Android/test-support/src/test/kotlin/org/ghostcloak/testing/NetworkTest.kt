@@ -177,6 +177,9 @@ class NetworkTest {
             assertEquals(NetworkLimits.BATCH, NetworkMailboxTransport(f.client(b), b.state).fetch().size)
             f.time.time += 86400001; f.service.cleanup()
             assertEquals(0, f.database.transaction { f.database.mailbox.size() })
+            // Expired unacknowledged ciphertext cannot be inferred as delivered.
+            assertEquals(1, f.database.transaction { f.database.submissions.all().count { it.acknowledged } })
+            assertEquals(NetworkLimits.BATCH, f.database.transaction { f.database.submissions.all().count { !it.acknowledged } })
         }
     }
     @Test fun durableOutboxRecoversEveryCrashBoundaryWithoutReencrypting() = runBlocking {

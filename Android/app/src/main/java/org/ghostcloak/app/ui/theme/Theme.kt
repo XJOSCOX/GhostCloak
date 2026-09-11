@@ -9,9 +9,13 @@ import androidx.compose.ui.unit.dp
 
 private val GhostColors = darkColorScheme(
     primary = Mint, onPrimary = Ink, primaryContainer = PanelRaised, onPrimaryContainer = Mint,
-    secondary = Muted, background = Ink, surface = Panel, onSurface = SoftWhite,
+    secondary = Muted, onSecondary = Ink, secondaryContainer = PanelRaised, onSecondaryContainer = Mint,
+    background = Ink, surface = Panel, onSurface = SoftWhite,
     onBackground = SoftWhite, onSurfaceVariant = Muted, surfaceVariant = PanelRaised,
-    outline = Outline, error = Danger, errorContainer = androidx.compose.ui.graphics.Color(0xFF422624)
+    surfaceContainer = Panel, surfaceContainerLow = Ink, surfaceContainerHigh = PanelRaised,
+    surfaceContainerHighest = PanelRaised, outlineVariant = Outline,
+    outline = Outline, error = Danger, onError = Ink, onErrorContainer = Danger,
+    errorContainer = androidx.compose.ui.graphics.Color(0xFF422624)
 )
 
 @Composable

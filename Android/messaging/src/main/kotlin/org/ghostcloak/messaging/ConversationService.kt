@@ -6,7 +6,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.ghostcloak.crypto.*
 import org.ghostcloak.identity.*
-import org.ghostcloak.protocol.EncryptedEnvelope
+import org.ghostcloak.protocol.*
 import org.ghostcloak.transport.*
 
 /** Serialized application boundary. UI never receives the engine, records, or transport. */
@@ -81,13 +81,19 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         }
     }
     private suspend fun networkAllowed(id:String) {
-        if(repository.contact(id).blocked) throw AppFailure(AppError.BLOCKED)
+        if(repository.contact(id).blocked || repository.contact(id).request) throw AppFailure(AppError.BLOCKED)
         if(engine.getRemoteIdentityStatus(id)?.trustState==IdentityTrustState.CHANGED) throw CryptoFailure(CryptoError.IdentityChanged)
         if(engine.getSessionLifecycle(id)!=SessionLifecycle.ACTIVE) throw CryptoFailure(CryptoError.UnknownSession)
     }
     suspend fun retryNetwork(outbox:DurableOutbox)=action {
         for(id in outbox.pendingIds()) {
-            val entry=outbox.get(id); networkAllowed(entry.deviceId)
+            val entry=outbox.get(id)
+            try { networkAllowed(entry.deviceId) }
+            catch (e: AppFailure) { if (e.error == AppError.BLOCKED) continue else throw e }
+            catch (e: CryptoFailure) {
+                if (e.error in setOf(CryptoError.IdentityChanged, CryptoError.UnknownSession, CryptoError.ReauthenticationRequired)) continue
+                throw e
+            }
             val result=outbox.process(id)
             repository.messages(entry.deviceId).firstOrNull {it.localId==id}?.let { message ->
                 repository.save(message.copy(state=if(result.state==OutboxState.SERVER_ACCEPTED) MessageState.SERVER_ACCEPTED else MessageState.FAILED))
@@ -95,19 +101,51 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             if(result.state in setOf(OutboxState.SERVER_ACCEPTED,OutboxState.FAILED)) outbox.removeFinished(id)
         }
     }
-    suspend fun acceptNetwork(envelope:EncryptedEnvelope)=action {
+    suspend fun acceptNetwork(envelope:EncryptedEnvelope, sender:SenderProfile? = null)=action {
         val hash=org.ghostcloak.protocol.DeviceAuth.digest(org.ghostcloak.protocol.EnvelopeCodec.encode(envelope))
         if(repository.accepted(envelope.senderDeviceId,envelope.envelopeId,hash)) return@action
-        val contact=repository.contact(envelope.senderDeviceId)
+        val contacts = repository.contacts()
+        val contact = contacts.firstOrNull { it.remoteDeviceId == envelope.senderDeviceId } ?: run {
+            val profile = sender ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+            requireApi(profile.deviceId == envelope.senderDeviceId && profile.deviceId != identity?.deviceId)
+            requireApi(listOf(profile.accountId, profile.deviceId, profile.routingId).all(RandomIdentifiers::valid))
+            requireApi(Usernames.normalize(profile.username) == profile.username)
+            if (contacts.size >= 200) throw AppFailure(AppError.LOCAL_CAPACITY)
+            if (contacts.any { it.publicUserId == profile.accountId }) throw AppFailure(AppError.AMBIGUOUS_IDENTITY)
+            Contact(RandomIdentifiers.create(), profile.accountId, profile.username, profile.deviceId, request = true)
+        }
         if(contact.blocked) throw AppFailure(AppError.BLOCKED)
         repository.capacity()
-        val bytes=engine.decrypt(envelope)
-        try {
+        engine.decryptAndCommit(envelope) { bytes ->
             val body=bytes.decodeToString(throwOnInvalidSequence=true)
             TextRules.encode(body).fill(0)
+            repository.save(contact)
             repository.saveAccepted(Message(envelope.envelopeId,contact.remoteDeviceId,Direction.INCOMING,body,
                 System.currentTimeMillis(),MessageState.RECEIVED,envelope.envelopeId),hash)
-        } finally {bytes.fill(0)}
+        }
+    }
+    suspend fun acceptRequest(id: String) = action {
+        val contact = repository.contact(id)
+        if (contact.blocked) throw AppFailure(AppError.BLOCKED)
+        repository.save(contact.copy(request = false))
+    }
+    suspend fun deleteRequest(id: String) = action {
+        val contact = repository.contact(id)
+        require(contact.request)
+        // Retain a blocked identity tombstone so polling cannot recreate the request.
+        repository.save(contact.copy(blocked = true))
+        repository.messages(id).forEach { repository.delete(id, it.localId) }
+    }
+    suspend fun queuedSubmissions() = action {
+        repository.contacts().flatMap { repository.messages(it.remoteDeviceId) }
+            .filter { it.state == MessageState.SERVER_ACCEPTED && System.currentTimeMillis() - it.timestamp < 604800000 }
+            .map { it.localId }
+    }
+    suspend fun deliveryStatuses(statuses: List<DeliveryStatus>) = action {
+        val delivered = statuses.filter { it.acknowledged }.map { it.submissionId }.toSet()
+        repository.contacts().forEach { contact -> repository.messages(contact.remoteDeviceId)
+            .filter { it.direction == Direction.OUTGOING && it.state == MessageState.SERVER_ACCEPTED && it.localId in delivered }
+            .forEach { repository.save(it.copy(state = MessageState.DELIVERED)) } }
     }
     suspend fun fingerprint(id: String, pending: Boolean = false) = action {
         repository.contact(id)

@@ -8,7 +8,7 @@ Phase 1C.2 provides a Ktor/PostgreSQL foundation and Android HTTPS controls with
 
 **Phase 1D.3 prepares a future privacy relay:** Android still uses direct HTTPS, with a replaceable transport boundary and a closed relay feature gate. The owner reports Phase 1D.1/1D.2 deployed and validated on staging; this phase makes no infrastructure changes. See the [relay architecture](protocol/RELAY_ARCHITECTURE.md), [Android transport contract](Android/TRANSPORT_PRIVACY.md), [sealed-sender direction](protocol/SEALED_SENDER_DIRECTION.md) and [Phase 1D.3 review](SECURITY_REVIEW_PHASE_1D3.md). No relay or Ghost Mode is implemented.
 
-**Phase 1E.0 wires the Android UI to the existing network stack:** a configured build creates local keys and registers/connects on first launch, offers username contacts and foreground Sync, and preserves identity/pending messages on connection failure. Existing local identities can connect without replacement. See the [two-phone staging test](Android/TWO_PHONE_STAGING_TEST.md) and [Phase 1E.0 review](SECURITY_REVIEW_PHASE_1E0.md). No backend, infrastructure, cryptography, relay or push changes.
+**Phase 1E.1 adds one-way unverified message requests, ACK-based Delivered status, automatic foreground sync and a refreshed chat UI.** See the [two-phone staging test](Android/TWO_PHONE_STAGING_TEST.md) and [security/rollout review](SECURITY_REVIEW_PHASE_1E1.md). Deploy the matching backend and additive V002 migration before updating staging clients. No push, relay or Ghost Mode is added. The earlier [Phase 1E.0 review](SECURITY_REVIEW_PHASE_1E0.md) documents the original Android network integration.
 
 ## Local network backend
 

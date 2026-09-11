@@ -45,6 +45,6 @@ import org.ghostcloak.app.ui.components.*
                 Text(if (state.demo) "Return to my identity" else "Open local demo")
             }
         }
-        Text("Ghost Cloak · Phase 1E.0\nNot independently audited. Not anonymous.\nNo notifications or Ghost Mode.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Ghost Cloak · Phase 1E.1\nNot independently audited. Not anonymous.\nNo notifications or Ghost Mode.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

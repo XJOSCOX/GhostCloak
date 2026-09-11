@@ -55,7 +55,11 @@ class SessionGrant(val token: String, val expiresAt: Long) { override fun toStri
 @Serializable
 class DirectoryEntry(val accountId: String, val deviceId: String, val routingId: String, val username: String, val bundle: PublicBundle)
 @Serializable
-class Delivery(val serverMessageId: String, val encryptedEnvelope: ByteArray, val receivedAt: Long, val expiresAt: Long) {
+class SenderProfile(val accountId: String, val deviceId: String, val routingId: String, val username: String)
+@Serializable
+class DeliveryStatus(val submissionId: String, val acknowledged: Boolean)
+@Serializable
+class Delivery(val serverMessageId: String, val encryptedEnvelope: ByteArray, val receivedAt: Long, val expiresAt: Long, @EncodeDefault(EncodeDefault.Mode.NEVER) val sender: SenderProfile? = null) {
     override fun toString() = "Delivery(<opaque>)"
 }
 @Serializable
@@ -70,13 +74,15 @@ sealed class ApiRequest {
     @Serializable @SerialName("lookup") class Lookup(val username: String, override val version: Int = 1) : ApiRequest()
     @Serializable @SerialName("prekeys") class Prekeys(val deviceId: String, val bundles: List<PublicBundle>, override val version: Int = 1) : ApiRequest()
     @Serializable @SerialName("send") class Send(val submissionId: String, val recipientRoutingId: String, val encryptedEnvelope: ByteArray, override val version: Int = 1) : ApiRequest()
-    @Serializable @SerialName("fetch") class Fetch(override val version: Int = 1) : ApiRequest()
+    @Serializable @SerialName("fetch") class Fetch(override val version: Int = 1, @EncodeDefault(EncodeDefault.Mode.NEVER) val includeSenders: Boolean = false,
+        @EncodeDefault(EncodeDefault.Mode.NEVER) val submissionIds: List<String> = emptyList(),
+        @EncodeDefault(EncodeDefault.Mode.NEVER) val skipMessageIds: List<String> = emptyList()) : ApiRequest()
     @Serializable @SerialName("ack") class Ack(val serverMessageIds: List<String>, override val version: Int = 1) : ApiRequest()
 }
 @Serializable
 class ApiResponse(val version: Int = 1, val challenge: Challenge? = null, val session: SessionGrant? = null,
     val directory: DirectoryEntry? = null, val deliveries: List<Delivery> = emptyList(), val serverMessageId: String? = null,
-    val error: String? = null) { override fun toString() = "ApiResponse(<redacted>)" }
+    val error: String? = null, @EncodeDefault(EncodeDefault.Mode.NEVER) val statuses: List<DeliveryStatus> = emptyList()) { override fun toString() = "ApiResponse(<redacted>)" }
 
 object NetworkCodec {
     @PublishedApi internal val format = Cbor {

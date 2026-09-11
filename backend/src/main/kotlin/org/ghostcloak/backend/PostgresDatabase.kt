@@ -25,7 +25,14 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
                 }
             }
             check(query("SELECT checksum FROM schema_history WHERE version=1") { it.getString(1) }.singleOrNull() == checksum) { "Migration validation failed" }
-            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 1) { "Unknown schema version" }
+            val receiptMigration = javaClass.getResourceAsStream("/db/V002__delivery_receipts.sql")!!.use { it.readBytes() }
+            val receiptChecksum = DeviceAuth.digest(receiptMigration).joinToString("") { "%02x".format(it) }
+            if (migrate && query("SELECT version FROM schema_history WHERE version=2") { it.getInt(1) }.isEmpty()) {
+                receiptMigration.toString(Charsets.UTF_8).split(';').filter { it.isNotBlank() }.forEach { execute(it) }
+                execute("INSERT INTO schema_history VALUES (2,?)", receiptChecksum)
+            }
+            check(query("SELECT checksum FROM schema_history WHERE version=2") { it.getString(1) }.singleOrNull() == receiptChecksum) { "Migration validation failed" }
+            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 2) { "Unknown schema version" }
         }
     }
     override fun <T> transaction(block: () -> T): T {
@@ -68,7 +75,7 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
     }
     override val sessions=rows("access_sessions","token_hash",read={SessionRow(it.getString("token_hash"),it.getString("device_id"),it.getLong("expires_at"))}) { _,r -> execute("INSERT INTO access_sessions VALUES (?,?,?)",r.hash,r.deviceId,r.expiresAt) }
     override val mailbox=rows("mailbox_messages",read={MailboxRow(it.getString("id"),it.getString("recipient_routing_id"),it.getBytes("encrypted_envelope"),it.getLong("received_at"),it.getLong("expires_at"))}) { _,r -> execute("INSERT INTO mailbox_messages VALUES (?,?,?,?,?)",r.id,r.recipientRoutingId,r.encryptedEnvelope,r.receivedAt,r.expiresAt) }
-    override val submissions=rows("message_deduplication",read={SubmissionRow(it.getString("id"),it.getString("sender_device_id"),it.getBytes("payload_hash"),it.getString("server_message_id"),it.getLong("expires_at"))}) { _,r -> execute("INSERT INTO message_deduplication VALUES (?,?,?,?,?)",r.id,r.sender,r.digest,r.serverId,r.expiresAt) }
+    override val submissions=rows("message_deduplication",read={SubmissionRow(it.getString("id"),it.getString("sender_device_id"),it.getBytes("payload_hash"),it.getString("server_message_id"),it.getLong("expires_at"),it.getBoolean("acknowledged"))}) { _,r -> execute("INSERT INTO message_deduplication VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET acknowledged=excluded.acknowledged",r.id,r.sender,r.digest,r.serverId,r.expiresAt,r.acknowledged) }
     override val prekeys=object:Rows<PrekeyRow> {
         override fun get(id:String):PrekeyRow? {
             val device=devices.get(id) ?: return null

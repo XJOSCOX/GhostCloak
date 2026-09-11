@@ -28,7 +28,7 @@ import org.ghostcloak.app.application.NetworkStatus
             else -> "Connect to start messaging"
         }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!state.networkConnected) TextButton(onClick = connect, enabled = !state.loading, modifier = Modifier.weight(1f, fill = false)) { Text("Connect to Ghost Cloak") }
+            if (state.networkRequiresConnect) TextButton(onClick = connect, enabled = !state.loading, modifier = Modifier.weight(1f, fill = false)) { Text("Connect to Ghost Cloak") }
             OutlinedButton(onClick = sync, enabled = !state.loading) { Text("Sync") }
         }
     }

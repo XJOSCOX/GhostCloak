@@ -20,17 +20,32 @@ class HttpGhostClient(
     private val transport: GhostCloakTransport = DirectHttpsTransport(allowLoopbackForTests),
     private val renewSession: (suspend (String) -> Unit)? = null,
     private val authenticatedFailure: (ApiFailure) -> Unit = {},
+    private val diagnostics: ((NetworkDiagnostic) -> Unit)? = null,
 ) : GhostAuthClient, GhostDirectoryClient {
     private val base = URI(baseUrl)
     init { validateApiOrigin(base, allowLoopbackForTests) }
     override suspend fun unauthenticated(request: ApiRequest) = call(request, false)
     suspend fun call(request: ApiRequest, authenticated: Boolean = true): ApiResponse = withContext(Dispatchers.IO) {
+        val category = networkOperation(request)
+        val started = System.nanoTime()
+        fun diagnostic(event: NetworkEvent, http: Int? = null, failure: ApiFailure? = null, exception: Exception? = null, since: Long = started) {
+            if (diagnostics != null) emitNetworkDiagnostic(diagnostics, NetworkDiagnostic(category, event,
+                (System.nanoTime() - since) / 1_000_000, http, failure?.status, failure?.code, exception?.javaClass))
+        }
         val bytes = NetworkCodec.encode(request)
         requireApi(bytes.size <= NetworkLimits.BODY, "body_size", 413)
         suspend fun attempt(token: String?): ApiResponse {
+            val attemptStarted = System.nanoTime()
+            var httpStatus: Int? = null
+            diagnostic(NetworkEvent.START, since = attemptStarted)
             val authorization = token?.let { "Bearer $it" }
             try {
-                val result = transport.execute(TransportRequest(base.resolve(ApiRoutes.path(request)), bytes, authorization))
+                val reportStatus: ((Int) -> Unit)? = if (diagnostics == null) null else { value ->
+                    httpStatus = value
+                    diagnostic(NetworkEvent.HTTP, http = value, since = attemptStarted)
+                }
+                val result = transport.execute(TransportRequest(base.resolve(ApiRoutes.path(request)), bytes, authorization, reportStatus))
+                httpStatus = result.status
                 requireApi(result.contentType == NetworkLimits.CONTENT_TYPE, "invalid_response", 502)
                 requireApi(result.body.size <= NetworkLimits.RESPONSE, "response_size", 502)
                 val response = NetworkCodec.decode<ApiResponse>(result.body, NetworkLimits.RESPONSE)
@@ -38,18 +53,38 @@ class HttpGhostClient(
                 if (result.status !in 200..299) throw ApiFailure(result.status, "server_rejected")
                 requireApi(response.error == null, "invalid_response", 502)
                 return response
-            } catch (e: java.io.IOException) { throw ApiFailure(503, "network_unavailable") }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                diagnostic(NetworkEvent.CANCELLED, httpStatus, since = attemptStarted); throw e
+            } catch (e: ApiFailure) {
+                diagnostic(NetworkEvent.API_FAILURE, httpStatus, failure = e, since = attemptStarted); throw e
+            } catch (e: Exception) {
+                diagnostic(NetworkEvent.TRANSPORT_FAILURE, httpStatus, exception = e, since = attemptStarted)
+                if (e is java.io.IOException) throw ApiFailure(503, "network_unavailable")
+                throw e
+            } finally { diagnostic(NetworkEvent.END, httpStatus, since = attemptStarted) }
         }
         if (!authenticated) return@withContext attempt(null)
         try {
             val token = tokens.read() ?: throw ApiFailure(401, "unauthorized")
             try { attempt(token) } catch (e: ApiFailure) {
                 if (e.status != 401 || renewSession == null) throw e
-                renewSession.invoke(token)
+                diagnostic(NetworkEvent.RENEWAL_ATTEMPT)
+                try {
+                    renewSession.invoke(token)
+                    diagnostic(NetworkEvent.RENEWAL_SUCCEEDED)
+                } catch (failure: kotlinx.coroutines.CancellationException) {
+                    diagnostic(NetworkEvent.CANCELLED); throw failure
+                } catch (failure: Exception) {
+                    diagnostic(NetworkEvent.RENEWAL_FAILED, failure = failure as? ApiFailure); throw failure
+                }
+                diagnostic(NetworkEvent.RETRY)
                 // Retry these exact bytes once, including the original submission ID.
                 attempt(tokens.read() ?: throw ApiFailure(401, "unauthorized"))
             }
-        } catch (e: ApiFailure) { authenticatedFailure(e); throw e }
+        } catch (e: ApiFailure) {
+            diagnostic(NetworkEvent.API_FAILURE, failure = e)
+            authenticatedFailure(e); throw e
+        }
     }
     override suspend fun lookup(username: String) = call(ApiRequest.Lookup(Usernames.normalize(username))).directory ?: throw ApiFailure(502, "invalid_response")
     override suspend fun publish(deviceId: String, bundles: List<PublicBundle>) { call(ApiRequest.Prekeys(deviceId, bundles)) }

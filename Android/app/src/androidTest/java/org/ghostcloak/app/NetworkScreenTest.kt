@@ -84,8 +84,12 @@ class NetworkScreenTest {
             compose.onNodeWithText(text).assertIsDisplayed()
             compose.onNodeWithText("Sync").assertIsNotEnabled()
         }
-        compose.runOnIdle { state.value = state.value.copy(loading = false, networkStatus = NetworkStatus.ERROR) }
+        compose.runOnIdle { state.value = state.value.copy(loading = false, networkStatus = NetworkStatus.ERROR, networkRequiresConnect = false) }
         compose.onNodeWithText("Needs attention · Try Sync").assertIsDisplayed()
+        compose.onNodeWithText("Connect to Ghost Cloak").assertDoesNotExist()
+        compose.runOnIdle { state.value = state.value.copy(networkStatus = NetworkStatus.OFFLINE) }
+        compose.onNodeWithText("Offline · Try Sync").assertIsDisplayed()
+        compose.onNodeWithText("Connect to Ghost Cloak").assertDoesNotExist()
         compose.onNodeWithText("Sync").assertIsEnabled()
         compose.runOnIdle { state.value = state.value.copy(networkStatus = NetworkStatus.CONNECTED) }
         compose.onNodeWithText("Connected").assertIsDisplayed()

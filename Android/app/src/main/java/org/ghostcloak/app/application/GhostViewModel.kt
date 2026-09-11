@@ -17,7 +17,7 @@ data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? =
     val contacts: List<ContactStatus> = emptyList(), val previews: Map<String, Message> = emptyMap(), val messages: List<Message> = emptyList(),
     val error: String? = null, val card: String = "", val fingerprint: String = "",
     val demo: Boolean = false, val protection: String = "", val ready: Boolean = false,
-    val networkConfigured:Boolean=false,val networkStatus:NetworkStatus=NetworkStatus.DISABLED) {
+    val networkRequiresConnect:Boolean=true, val networkConfigured:Boolean=false,val networkStatus:NetworkStatus=NetworkStatus.DISABLED) {
     val networkConnected get() = networkStatus == NetworkStatus.CONNECTED
     override fun toString() = "AppState(redacted)"
 }
@@ -51,21 +51,28 @@ class GhostViewModel internal constructor(application: Application, private val 
                         previews = contacts.mapNotNull { c -> active.messages(c.contact.remoteDeviceId).lastOrNull()?.let { c.contact.remoteDeviceId to it } }.toMap(),
                         messages = selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.messages(it) } ?: emptyList(),
                         demo = runtime.inDemo, protection = runtime.protection, ready = true,
-                        networkConfigured=runtime.networkConfigured,networkStatus=runtime.networkStatus)
+                        networkRequiresConnect=runtime.networkRequiresConnect,networkConfigured=runtime.networkConfigured,networkStatus=runtime.networkStatus)
                 }
             } catch (e: EndpointStorageFailure) { failure = "Encrypted storage is unavailable. Your identity was not reset. Close the app and investigate before continuing." }
             catch (e: CryptoFailure) { failure = cryptoError(e.error) }
             finally { if (!quiet) workCount--; mutable.value = mutable.value.copy(loading = workCount > 0, error = if (quiet) mutable.value.error else failure) }
         }
     }
+    private var foregroundCycle = 0L
     private val foregroundMutex = kotlinx.coroutines.sync.Mutex()
     suspend fun foregroundSync() {
         foregroundMutex.lock()
         try {
             while (true) {
                 if (runtime.networkConfigured && !runtime.inDemo) {
+                    val cycle = ++foregroundCycle
+                    val started = System.nanoTime()
+                    NetworkDiagnostics.cycle(cycle, true)
                     val job = run(quiet = true) { if (runtime.canAutoSync) runtime.syncNetwork(it); null }
-                    try { job.join() } finally { job.cancel() }
+                    try { job.join() } finally {
+                        job.cancel()
+                        NetworkDiagnostics.cycle(cycle, false, (System.nanoTime() - started) / 1_000_000)
+                    }
                 }
                 // Wait after completion; lifecycle restart begins with an immediate cycle.
                 kotlinx.coroutines.delay(1000)

@@ -19,7 +19,7 @@ class NetworkController(
 ) {
     val configured get() = origin.isNotEmpty()
     private val state by lazy { EndpointNetworkState(records, URI(origin).host, KeystoreDeviceAuth()) }
-    private val client: HttpGhostClient by lazy { HttpGhostClient(origin, state, transport = connection, renewSession = ::renewSession, authenticatedFailure = ::networkFailure) }
+    private val client: HttpGhostClient by lazy { HttpGhostClient(origin, state, transport = connection, renewSession = ::renewSession, authenticatedFailure = ::networkFailure, diagnostics = NetworkDiagnostics.observer) }
     private val account: NetworkAccount by lazy { NetworkAccount(client, state) }
     private val transport by lazy { NetworkMailboxTransport(client, state) }
     private val outbox by lazy { DurableOutbox(records, engine, transport) }
@@ -28,7 +28,8 @@ class NetworkController(
     private var loggingOut = false
     private var receiptOffset = 0
     val canAutoSync get() = configured && !renewalBlocked && !loggingOut && state.registered() && state.read() != null
-    var status = if (configured) NetworkStatus.NEEDS_CONNECT else NetworkStatus.DISABLED; private set
+    var status = if (configured) NetworkStatus.NEEDS_CONNECT else NetworkStatus.DISABLED
+        private set(value) { NetworkDiagnostics.status(field, value); field = value }
     private fun device() = records.transaction { records.read("local/device")?.decodeToString() ?: throw ApiFailure(401, "credential_missing") }
     private fun networkFailure(e: ApiFailure) {
         if (e.status == 401) renewalBlocked = true
@@ -46,13 +47,18 @@ class NetworkController(
         }
         catch (_: EndpointStorageFailure) { throw ApiFailure(401, "credential_unavailable") }
     }
-    private suspend fun <T> operation(block: suspend () -> T): T {
+    private suspend fun <T> operation(category: NetworkOperation, block: suspend () -> T): T {
+        val started = System.nanoTime()
         try { return block() }
         catch (e: kotlinx.coroutines.CancellationException) { throw e }
-        catch (e: ApiFailure) { networkFailure(e); throw e }
+        catch (e: ApiFailure) {
+            NetworkDiagnostics.observer?.let { emitNetworkDiagnostic(it, NetworkDiagnostic(category, NetworkEvent.API_FAILURE,
+                (System.nanoTime() - started) / 1_000_000, apiStatus = e.status, apiCode = e.code)) }
+            networkFailure(e); throw e
+        }
         catch (e: Exception) { status = NetworkStatus.ERROR; throw e }
     }
-    suspend fun connect(username: String) = operation {
+    suspend fun connect(username: String) = operation(NetworkOperation.AUTH) {
         requireApi(configured, "server_not_configured")
         status = NetworkStatus.CONNECTING
         if (!state.registered()) {
@@ -67,7 +73,7 @@ class NetworkController(
         } else { account.login(state.accountId(), device()) }
         renewalBlocked = false; status = NetworkStatus.CONNECTED
     }
-    suspend fun add(username: String, service: ConversationService) = operation {
+    suspend fun add(username: String, service: ConversationService) = operation(NetworkOperation.LOOKUP) {
         val normalized = Usernames.normalize(username)
         val e = client.lookup(normalized)
         val b = e.bundle
@@ -77,7 +83,7 @@ class NetworkController(
         service.importCard(ContactCardCodec.encode(card)); state.remember(e)
         status = NetworkStatus.CONNECTED
     }
-    suspend fun send(service: ConversationService, id: String, text: String): Message = operation {
+    suspend fun send(service: ConversationService, id: String, text: String): Message = operation(NetworkOperation.SEND) {
         requireApi(state.registered(), "connect_required", 401)
         // Preserve the existing durable outbox even when the stored session is expired/offline.
         status = NetworkStatus.SYNCING
@@ -88,7 +94,7 @@ class NetworkController(
             // Preserve request failure status when the outbox retains a pending message.
         }
     }
-    suspend fun sync(service: ConversationService) = operation {
+    suspend fun sync(service: ConversationService) = operation(NetworkOperation.FETCH) {
         requireApi(canAutoSync, "connect_required", 401)
         suspend fun exchange() {
             status = NetworkStatus.SYNCING
@@ -127,14 +133,14 @@ class NetworkController(
         exchange()
         status = NetworkStatus.CONNECTED
     }
-    suspend fun publish() = operation {
+    suspend fun publish() = operation(NetworkOperation.PUBLISH) {
         requireApi(canAutoSync, "connect_required", 401)
         client.publish(device(), listOf(engine.preKeys.createPublicationBundle().publicData()))
         status = NetworkStatus.CONNECTED
     }
     suspend fun logout() {
         loggingOut = true
-        try { operation { account.logout() } }
+        try { operation(NetworkOperation.AUTH) { account.logout() } }
         finally {
             state.save(null)
             renewalBlocked = true

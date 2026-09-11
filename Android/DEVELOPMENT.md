@@ -10,6 +10,29 @@
 
 Debug builds automatically set `BuildConfig.API_ORIGIN` to `https://api.ghostcloak.org`. No Gradle property, manual APK copy or manual installation is required. Use the [two-phone staging guide](TWO_PHONE_STAGING_TEST.md) for message requests, sends and automatic foreground sync. Run updates normally; do not uninstall or clear app data to reconnect, since that removes the local identity/history. The existing debug developer tools remain available.
 
+## Debug network Logcat
+
+Run the **debug** app on the physical phone from Android Studio. Open **View → Tool Windows → Logcat**, select that phone and the Ghost Cloak process, and filter with `tag:GhostCloakNet` (optionally `package:org.ghostcloak.app tag:GhostCloakNet`). Keep the app foregrounded and capture roughly 30 seconds before the warning through automatic recovery; do not press Sync during the observation. Repeat independently on the other phone. Filtered entries contain sanitized operation/timing/status metadata only; release does not emit them. See [network diagnostic findings](NETWORK_DIAGNOSTICS.md) for timeout, status and polling-load analysis.
+
+Example shape (illustrative timing, not a captured failure):
+
+```text
+SYNC START cycle=42 elapsed=0ms
+FETCH START elapsed=0ms
+FETCH TRANSPORT_FAILURE elapsed=15007ms exception=java.net.SocketTimeoutException
+FETCH END elapsed=15007ms
+FETCH API_FAILURE elapsed=15007ms apiStatus=503 apiCode=network_unavailable
+status SYNCING -> OFFLINE
+SYNC END cycle=42 elapsed=15010ms
+SYNC START cycle=43 elapsed=0ms
+status OFFLINE -> SYNCING
+FETCH START elapsed=0ms
+FETCH HTTP elapsed=214ms http=200
+FETCH END elapsed=215ms http=200
+status SYNCING -> CONNECTED
+SYNC END cycle=43 elapsed=220ms
+```
+
 ## Appearance
 
 Open **Settings → Appearance** and choose **Light**, **Dark**, or **Automatic**. The choice applies immediately and persists across app restarts. Automatic follows the phone's theme and is the default. Theme colors, preference handling and screen components remain in separate files; see [design notes](DESIGN.md).

@@ -21,6 +21,9 @@ class SessionRenewalTest {
     @Test fun expiredSendAndConcurrentSyncRenewOnceWithoutDisconnectOrIdentityChanges() = runBlocking {
         val api = SyntheticNetwork()
         lateinit var a: AppRuntime
+        val previousSink = NetworkDiagnostics.sink
+        val diagnostics = mutableListOf<String>()
+        NetworkDiagnostics.sink = { diagnostics.add(it); Unit }
         val observed = mutableListOf<NetworkStatus>()
         val sends = mutableListOf<ByteArray>()
         val connection = object : GhostCloakTransport {
@@ -56,7 +59,9 @@ class SessionRenewalTest {
             assertEquals(2, api.registrations)
             assertEquals(1, a.use { it.contacts().size })
             assertEquals(1, a.use { it.messages(bid).size })
-        } finally { a.close(); b.close() }
+            assertTrue(diagnostics.any { "RENEWAL_SUCCEEDED" in it })
+            assertTrue(diagnostics.none { identity.deviceId in it || "Expiry send" in it || "alice" in it || "bob" in it })
+        } finally { NetworkDiagnostics.sink = previousSink; a.close(); b.close() }
     }
 
     @Test fun repeatedUnauthorizedStopsAfterOneRenewalAndLogoutPersistsAcrossReopen() = runBlocking {
@@ -70,6 +75,7 @@ class SessionRenewalTest {
             unauthorized { a.use { a.syncNetwork(it) } }
             assertEquals(logins + 1, api.logins)
             assertEquals(NetworkStatus.NEEDS_CONNECT, a.networkStatus)
+            assertTrue(a.networkRequiresConnect)
             assertFalse(a.canAutoSync)
             unauthorized { a.use { a.syncNetwork(it) } }
             assertEquals(logins + 1, api.logins)
@@ -99,6 +105,7 @@ class SessionRenewalTest {
             api.offline = true
             assertEquals(MessageState.PENDING, a.use { a.send(it, bid, "Offline send") }.state)
             assertEquals(NetworkStatus.OFFLINE, a.networkStatus)
+            assertFalse(a.networkRequiresConnect)
             assertTrue(a.canAutoSync)
             api.offline = false
             a.use { a.syncNetwork(it) }
@@ -128,12 +135,14 @@ class SessionRenewalTest {
             try { a.use { a.syncNetwork(it) }; fail("Expected outage") }
             catch (e: ApiFailure) { assertEquals(503, e.status) }
             assertEquals(NetworkStatus.OFFLINE, a.networkStatus)
+            assertFalse(a.networkRequiresConnect)
             assertTrue(a.canAutoSync)
             a.use { a.syncNetwork(it) }
             assertEquals(NetworkStatus.CONNECTED, a.networkStatus)
             api.expireSessions(); api.accounts.clear()
             unauthorized { a.use { a.syncNetwork(it) } }
             assertEquals(NetworkStatus.NEEDS_CONNECT, a.networkStatus)
+            assertTrue(a.networkRequiresConnect)
             assertFalse(a.canAutoSync)
             assertEquals(1, api.registrations)
             assertEquals(identity.deviceId, a.use { it.open()!!.deviceId })

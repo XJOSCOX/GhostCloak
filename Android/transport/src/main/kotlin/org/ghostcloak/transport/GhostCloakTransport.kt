@@ -13,7 +13,8 @@ fun interface GhostCloakTransport {
 }
 
 /** Always POST with the v1 content type. Authorization is application-scoped, not relay auth. */
-class TransportRequest(val endpoint: URI, val body: ByteArray, val applicationAuthorization: String?) {
+class TransportRequest(val endpoint: URI, val body: ByteArray, val applicationAuthorization: String?,
+    val diagnosticHttpStatus: ((Int) -> Unit)? = null) {
     override fun toString() = "TransportRequest(<redacted>)"
 }
 
@@ -65,6 +66,7 @@ class DirectHttpsTransport(private val allowLoopbackForTests: Boolean = false) :
             connection.setFixedLengthStreamingMode(request.body.size)
             connection.outputStream.use { it.write(request.body) }
             val status = connection.responseCode
+            try { request.diagnosticHttpStatus?.invoke(status) } catch (_: Exception) { }
             val contentType = connection.getHeaderField("Content-Type")
             requireApi(contentType == NetworkLimits.CONTENT_TYPE, "invalid_response", 502)
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream

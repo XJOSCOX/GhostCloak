@@ -67,7 +67,8 @@ class GhostViewModel internal constructor(application: Application, private val 
                     val job = run(quiet = true) { if (runtime.canAutoSync) runtime.syncNetwork(it); null }
                     try { job.join() } finally { job.cancel() }
                 }
-                kotlinx.coroutines.delay(4000)
+                // Wait after completion; lifecycle restart begins with an immediate cycle.
+                kotlinx.coroutines.delay(1000)
             }
         } finally { foregroundMutex.unlock() }
     }

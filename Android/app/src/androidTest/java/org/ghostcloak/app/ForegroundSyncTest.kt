@@ -41,6 +41,9 @@ class ForegroundSyncTest {
             withContext(Dispatchers.Main) { owners[0].registry.currentState = Lifecycle.State.STARTED }
             delay(500)
             assertEquals(MessageState.SERVER_ACCEPTED, a.use { it.messages(bid).single().state })
+            val firstCycle = api.requests
+            // Only Alice is STARTED. A subsequent poll must occur at the new cadence.
+            withTimeout(2000) { while (api.requests == firstCycle) delay(25) }
             withContext(Dispatchers.Main) { owners[1].registry.currentState = Lifecycle.State.STARTED }
             withTimeout(15000) {
                 while (models[1].state.value.contacts.isEmpty() || a.use { it.messages(bid).single().state } != MessageState.DELIVERED) delay(100)
@@ -53,7 +56,7 @@ class ForegroundSyncTest {
             withContext(Dispatchers.Main) { owners.forEach { it.registry.currentState = Lifecycle.State.CREATED } }
             delay(300) // Allow cancellation to release the serialized runtime operation.
             val stopped = api.requests
-            delay(4500)
+            delay(2500) // More than two polling intervals: STOPPED must make no requests.
             assertEquals(stopped, api.requests)
             a.use { a.send(it, bid, "After resume") }
             withContext(Dispatchers.Main) {

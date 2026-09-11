@@ -1,0 +1,21 @@
+[Unit]
+Description=Restrict Ghost Cloak backend to private ingress UID
+Before=ghostcloak.service ghostcloak-origin.service
+After=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /etc/ghostcloak-origin/origin-guard.nft
+RemainAfterExit=yes
+# Deliberately no ExecStop flush: a stopped unit must not open a bypass.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+CapabilityBoundingSet=CAP_NET_ADMIN
+RestrictAddressFamilies=AF_NETLINK AF_INET
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

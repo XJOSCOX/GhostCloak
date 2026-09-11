@@ -17,3 +17,18 @@
 *.sqlite
 *.sqlite3
 .DS_Store
+# Local operator secrets and deployment bundles are never source artifacts.
+KeysSSH/
+ghostcloak-backend-*.zip
+**/.cloudflared/
+**/cloudflared/*.json
+**/tunnel-credentials*.json
+**/tunnel-token*
+**/cloudflare-api-token*
+**/certbot-credentials*
+**/secrets/
+**/.secrets/
+**/cloudflare.ini
+????????-????-????-????-????????????.json
+id_rsa*
+id_ed25519*

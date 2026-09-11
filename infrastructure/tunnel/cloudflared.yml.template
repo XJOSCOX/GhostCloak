@@ -1,0 +1,22 @@
+# Locally managed named tunnel. Fill UUID only after owner approval, outside Git.
+# No account-wide cert.pem, API token, or live tunnel credentials in this package.
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: /etc/cloudflared/tunnel-credentials.json
+no-autoupdate: true
+protocol: http2
+metrics: 127.0.0.1:20241
+loglevel: error
+management-diagnostics: false
+ingress:
+  - hostname: api.ghostcloak.org
+    service: unix+tls:/run/ghostcloak-tunnel/origin.sock
+    originRequest:
+      originServerName: api.ghostcloak.org
+      httpHostHeader: api.ghostcloak.org
+      noTLSVerify: false
+      connectTimeout: 3s
+      tlsTimeout: 5s
+      http2Origin: false
+      keepAliveConnections: 32
+      keepAliveTimeout: 30s
+  - service: http_status:404

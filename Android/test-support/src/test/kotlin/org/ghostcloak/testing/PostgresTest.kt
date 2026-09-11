@@ -16,6 +16,18 @@ import java.util.concurrent.Executors
 import java.time.*
 
 class PostgresTest {
+    @Test fun visitorHeadersNeverReachPostgresRows()=runBlocking {
+        Fixture().use {f->
+            OriginPrivacyProbe.exercise(f.db)
+            f.source.connection.use {connection->
+                val tables=connection.createStatement().use {s->s.executeQuery("SELECT tablename FROM pg_tables WHERE schemaname='${f.schema}'").use {r->buildList {while(r.next())add(r.getString(1))}}}
+                val dump=tables.joinToString("\n") {t->connection.createStatement().use {s->s.executeQuery("SELECT row_to_json(t)::text FROM $t t").use {r->buildList {while(r.next())add(r.getString(1))}.joinToString("\n")}}}
+                for(ip in OriginPrivacyProbe.addresses) {
+                    assertFalse(dump.contains(ip));assertFalse(dump.contains(ip.toByteArray().joinToString("") {"%02x".format(it)}))
+                }
+            }
+        }
+    }
     @Test fun persistentLimitsAndScheduledCleanupSurviveServiceReplacement()=runBlocking {
         Fixture().use {f->
             val now=System.currentTimeMillis()

@@ -1,0 +1,43 @@
+[Unit]
+Description=Ghost Cloak private Unix TLS ingress
+After=ghostcloak.service ghostcloak-origin-guard.service systemd-tmpfiles-setup.service
+Requires=ghostcloak.service ghostcloak-origin-guard.service
+
+[Service]
+Type=simple
+Group=ghostcloak-origin
+# nginx master reads root-only TLS keys and drops workers to ghostcloak-origin.
+ExecStartPre=/usr/sbin/nginx -t -c /etc/ghostcloak-origin/nginx.conf
+ExecStart=/usr/sbin/nginx -c /etc/ghostcloak-origin/nginx.conf -g "daemon off;"
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGQUIT
+TimeoutStopSec=20
+RuntimeDirectory=ghostcloak-origin
+RuntimeDirectoryMode=0750
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+ReadWritePaths=/run/ghostcloak-origin /run/ghostcloak-tunnel
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_DAC_OVERRIDE
+RestrictAddressFamilies=AF_UNIX AF_INET
+LimitCORE=0
+LimitNOFILE=2048
+MemoryMax=256M
+TasksMax=32
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

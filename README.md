@@ -2,7 +2,9 @@
 
 **Experimental. Ghost Cloak has not undergone an independent security audit and must not be relied upon for high-risk communications.**
 
-Phase 1C.2 adds a Ktor/PostgreSQL production foundation and Android HTTPS controls with Keystore-backed device authentication. Messages still use the existing libsignal and durable-outbox boundaries. The deployment package is prepared for owner review; no VPS or public service was deployed. Ghost Cloak is not anonymous yet. See [deployment](infrastructure/DEPLOYMENT.md), [validation](infrastructure/VALIDATION.md) and [security review](SECURITY_REVIEW_PHASE_1C2.md).
+Phase 1C.2 provides a Ktor/PostgreSQL foundation and Android HTTPS controls with Keystore-backed device authentication. Messages use the existing libsignal and durable-outbox boundaries. The owner reports successful staging deployment at api.ghostcloak.org. Ghost Cloak is not anonymous yet. See [deployment](infrastructure/DEPLOYMENT.md), [validation](infrastructure/VALIDATION.md) and [security review](SECURITY_REVIEW_PHASE_1C2.md).
+
+**Phase 1D.1 prepares origin hiding only:** a private TLS Unix-socket ingress, outbound Cloudflare Tunnel configuration, service isolation, visitor-header filtering and an origin-rotation plan. No live configuration changed in this phase. See the [Tunnel plan](infrastructure/CLOUDFLARE_TUNNEL.md), [metadata visibility](protocol/METADATA_PRIVACY.md), [local tests](infrastructure/tunnel/tests/README.md) and [Phase 1D.1 security review](SECURITY_REVIEW_PHASE_1D1.md). Cloudflare can still observe client IP and HTTP metadata; Ghost Mode is not implemented.
 
 ## Local network backend
 

@@ -1,2 +1,4 @@
 # Migration checksums must be identical in Windows-built and Linux-built distributions.
 backend/src/main/resources/db/*.sql text eol=lf
+# Linux service/configuration payloads and the offline validator travel byte-for-byte.
+infrastructure/tunnel/** text eol=lf

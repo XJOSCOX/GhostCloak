@@ -1,0 +1,10 @@
+# Install only after operator review. This table does not alter INPUT or SSH rules.
+# Require the dedicated nginx worker UID for connections to the backend.
+# Resolve the local user when loading; do not reuse a shared www-data UID.
+destroy table inet ghostcloak_origin_guard
+table inet ghostcloak_origin_guard {
+    chain output {
+        type filter hook output priority 0; policy accept;
+        ip daddr 127.0.0.1 tcp dport 8787 meta skuid != "ghostcloak-origin" reject
+    }
+}

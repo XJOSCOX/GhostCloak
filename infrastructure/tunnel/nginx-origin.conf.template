@@ -1,0 +1,77 @@
+# Complete replacement for the public nginx config, NOT an additional vhost.
+# Owner must confirm existing certificate paths. No certificate is issued here.
+user ghostcloak-origin;
+worker_processes 2;
+pid /run/ghostcloak-origin/nginx.pid;
+error_log /dev/null;
+events { worker_connections 256; }
+http {
+    server_tokens off;
+    access_log off;
+    error_log /dev/null;
+    autoindex off;
+    client_max_body_size 196608;
+    client_body_buffer_size 192k;
+    client_body_temp_path /run/ghostcloak-origin/body;
+    proxy_temp_path /run/ghostcloak-origin/proxy;
+    client_header_buffer_size 1k;
+    large_client_header_buffers 2 4k;
+    client_header_timeout 10s;
+    client_body_timeout 10s;
+    send_timeout 15s;
+    keepalive_timeout 10s;
+    keepalive_requests 100;
+    reset_timedout_connection on;
+    # Aggregate overload controls, NEVER a per-visitor/socket-address bucket.
+    limit_req_zone $server_name zone=origin_budget:1m rate=30r/s;
+    limit_conn_zone $server_name zone=origin_connections:1m;
+    server {
+        # Filesystem-local only: even loopback TCP is not exposed by this nginx.
+        listen unix:/run/ghostcloak-tunnel/origin.sock ssl;
+        server_name api.ghostcloak.org;
+        ssl_certificate /etc/letsencrypt/live/api.ghostcloak.org/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/api.ghostcloak.org/privkey.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+        ssl_session_tickets off;
+        ssl_session_cache shared:OriginTLS:1m;
+        ssl_session_timeout 10m;
+        if ($host != api.ghostcloak.org) { return 421; }
+        if ($args != "") { return 400; }
+        limit_req zone=origin_budget burst=32 nodelay;
+        limit_req_status 429;
+        limit_conn origin_connections 64;
+        limit_conn_status 429;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Cache-Control no-store always;
+        # Allowlist prevents new/alternate visitor headers reaching the backend.
+        proxy_pass_request_headers off;
+        proxy_set_header Host api.ghostcloak.org;
+        proxy_set_header Content-Type $http_content_type;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_set_header CF-Connecting-IP "";
+        proxy_set_header CF-Connecting-IPv6 "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header True-Client-IP "";
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Real-IP "";
+        proxy_http_version 1.1;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 15s;
+        proxy_send_timeout 10s;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_next_upstream off;
+        location = /health {
+            if ($request_method != GET) { return 405; }
+            proxy_pass http://127.0.0.1:8787;
+        }
+        location ~ ^/v1/(auth/(challenge|verify|revoke)|accounts(/username)?|directory/lookup|devices/prekeys|messages(/(fetch|ack))?)$ {
+            if ($request_method != POST) { return 405; }
+            proxy_pass http://127.0.0.1:8787;
+        }
+        location / { return 404; }
+    }
+}

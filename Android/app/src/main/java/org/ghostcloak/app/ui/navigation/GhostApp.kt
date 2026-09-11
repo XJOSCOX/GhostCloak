@@ -32,7 +32,7 @@ import org.ghostcloak.app.ui.screens.*
             Box(Modifier.widthIn(max = 680.dp).fillMaxSize()) {
                 if (state.identity == null) FirstLaunchScreen(state, model::create)
                 else NavHost(nav, startDestination = "contacts") {
-                    composable("contacts") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }) }
+                    composable("contacts") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork) }
                     composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard, {name->model.addNetwork(name) {nav.popBackStack()}}) { text -> model.importCard(text) { nav.popBackStack() } } }
                     composable("settings") { SettingsScreen(state, model::rename, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork) }
                     composable("conversation/{id}") { backStack ->
@@ -40,7 +40,7 @@ import org.ghostcloak.app.ui.screens.*
                         val contact = state.contacts.firstOrNull { it.contact.remoteDeviceId == id } ?: return@composable
                         LaunchedEffect(id) { model.select(id) }
                         ConversationScreen(state, contact, { nav.popBackStack() }, { nav.navigate("security/$id") },
-                            { text, success -> model.send(id, text, success) }, { model.delete(id, it) })
+                            { text, success -> model.send(id, text, success) }, { model.delete(id, it) }, model::connectNetwork, model::syncNetwork)
                     }
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable

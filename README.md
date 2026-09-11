@@ -8,6 +8,8 @@ Phase 1C.2 provides a Ktor/PostgreSQL foundation and Android HTTPS controls with
 
 **Phase 1D.3 prepares a future privacy relay:** Android still uses direct HTTPS, with a replaceable transport boundary and a closed relay feature gate. The owner reports Phase 1D.1/1D.2 deployed and validated on staging; this phase makes no infrastructure changes. See the [relay architecture](protocol/RELAY_ARCHITECTURE.md), [Android transport contract](Android/TRANSPORT_PRIVACY.md), [sealed-sender direction](protocol/SEALED_SENDER_DIRECTION.md) and [Phase 1D.3 review](SECURITY_REVIEW_PHASE_1D3.md). No relay or Ghost Mode is implemented.
 
+**Phase 1E.0 wires the Android UI to the existing network stack:** a configured build creates local keys and registers/connects on first launch, offers username contacts and foreground Sync, and preserves identity/pending messages on connection failure. Existing local identities can connect without replacement. See the [two-phone staging test](Android/TWO_PHONE_STAGING_TEST.md) and [Phase 1E.0 review](SECURITY_REVIEW_PHASE_1E0.md). No backend, infrastructure, cryptography, relay or push changes.
+
 ## Local network backend
 
 From `Android/`, run `.\gradlew.bat :backend:runLocal --dependency-verification strict`. It binds only `127.0.0.1:8787`, with ephemeral repository state. Do not use real accounts or expose this listener. The end-to-end JVM fixture starts its own server: `.\gradlew.bat :test-support:test --tests org.ghostcloak.testing.NetworkTest --dependency-verification strict`.
@@ -16,11 +18,11 @@ Read the [API contract](protocol/API_V1.md), [device authentication](protocol/AU
 
 ## Android experience
 
-Choose a local username, exchange a public contact card, open a text conversation and compare safety numbers through Contact Security. Verification requires explicit confirmation. Identity changes block sending until explicitly reviewed. Contacts, trust and history survive reopening through SQLCipher and the existing Keystore wrapping. Settings can rename the username without changing keys or identifiers.
+In a network-configured build, create a username identity, add a contact by registered username, and use Sync to receive messages. Local builds retain public contact cards and the isolated debug demo. Open a conversation and compare safety numbers through Contact Security. Verification requires explicit confirmation. Identity changes block sending until explicitly reviewed. Contacts, trust and history survive reopening through SQLCipher and the existing Keystore wrapping. Settings can rename the username without changing keys or identifiers.
 
 The dark charcoal/mint interface separates theme colors and typography, reusable components, navigation and individual screens. MainActivity contains only activity setup. Application orchestration lives in app/application, while domain validation and encrypted persistence live in the new messaging module. User launcher assets are preserved separately.
 
-For a working local exchange, install a **debug** build and choose **Settings → Open local demo**. This opens isolated Alice/Bob encrypted endpoints, demonstrates ciphertext transport and shows Bob's simulated reply. Return through Settings → Return to my identity. Release builds contain no synthetic endpoint implementation. For network messaging, build with the reviewed HTTPS origin, connect in Settings and add each other by exact server username. Sync fetches messages and retries queued sends. Network controls are disabled until a server origin is compiled into the build.
+For a working local exchange, install a **debug** build and choose **Settings → Open local demo**. This opens isolated Alice/Bob encrypted endpoints, demonstrates ciphertext transport and shows Bob's simulated reply. Return through Settings → Return to my identity. Release builds contain no synthetic endpoint implementation. For network messaging, build with the reviewed HTTPS origin. New identities register/connect during creation; existing identities can use Connect to Ghost Cloak from contacts or Settings. Add each other by exact server username. Sync renews authentication, fetches messages and retries queued sends. Network controls are unavailable until a server origin is compiled into the build.
 
 ## Modules
 

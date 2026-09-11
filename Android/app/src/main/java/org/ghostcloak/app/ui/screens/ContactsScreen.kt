@@ -11,15 +11,16 @@ import androidx.compose.ui.unit.dp
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 
-@Composable fun ContactsScreen(state: AppState, add: () -> Unit, open: (String) -> Unit) {
+@Composable fun ContactsScreen(state: AppState, add: () -> Unit, open: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         item { Wordmark() }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionLabel(if (state.demo) "DEVELOPER SANDBOX" else "YOUR PRIVATE SPACE")
-                ScreenHeader("Contacts", "${state.identity?.username.orEmpty()} · ${state.contacts.size} local contacts")
+                ScreenHeader("Contacts", "${state.identity?.username.orEmpty()} · ${state.contacts.size} contacts")
             }
         }
+        item { NetworkActions(state, connect, sync) }
         item { ErrorNotice(state.error) }
         if (state.demo) item { InfoPanel("Local simulator", "Two separate encrypted endpoints on this device. Replies are simulated; no messages leave the app.") }
         if (state.contacts.isEmpty()) item {
@@ -27,7 +28,7 @@ import org.ghostcloak.app.ui.components.*
                 Column(Modifier.fillMaxWidth().padding(28.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     BrandMark(Modifier.size(60.dp))
                     Text("Start with someone\nyou trust.", style = MaterialTheme.typography.headlineSmall)
-                    Text("Exchange a public contact card to create your first encrypted conversation.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (state.networkConfigured && !state.demo) "Add someone by their Ghost Cloak username to start an encrypted conversation. Tap Sync to receive messages." else "Exchange a public contact card to create your first encrypted conversation.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     FullButton("+  Add a contact", !state.loading, add)
                 }
             }
@@ -39,7 +40,7 @@ import org.ghostcloak.app.ui.components.*
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                         Text(status.contact.displayName, style = MaterialTheme.typography.titleMedium)
                         if (state.contacts.count { it.contact.displayName == status.contact.displayName } > 1)
-                            Text("Device · ${status.contact.remoteDeviceId.takeLast(8)}", style = MaterialTheme.typography.bodyMedium)
+                            Text("Compare safety numbers to distinguish contacts", style = MaterialTheme.typography.bodyMedium)
                         if (status.contact.blocked) Text("Blocked on this device", color = MaterialTheme.colorScheme.error)
                         else TrustBadge(status.identity?.trustState)
                     }

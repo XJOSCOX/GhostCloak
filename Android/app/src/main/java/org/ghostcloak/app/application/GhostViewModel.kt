@@ -17,30 +17,32 @@ data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? =
     val contacts: List<ContactStatus> = emptyList(), val messages: List<Message> = emptyList(),
     val error: String? = null, val card: String = "", val fingerprint: String = "",
     val demo: Boolean = false, val protection: String = "", val ready: Boolean = false,
-    val networkConfigured:Boolean=false,val networkConnected:Boolean=false) {
+    val networkConfigured:Boolean=false,val networkStatus:NetworkStatus=NetworkStatus.DISABLED) {
+    val networkConnected get() = networkStatus == NetworkStatus.CONNECTED
     override fun toString() = "AppState(redacted)"
 }
 
-class GhostViewModel(application: Application) : AndroidViewModel(application) {
-    private val runtime = (application as GhostApplication).runtime
-    private val mutable = MutableStateFlow(AppState())
+class GhostViewModel internal constructor(application: Application, private val runtime: AppRuntime) : AndroidViewModel(application) {
+    constructor(application: Application) : this(application, (application as GhostApplication).runtime)
+    private val mutable = MutableStateFlow(AppState(networkConfigured = runtime.networkConfigured, networkStatus = runtime.networkStatus))
     val state = mutable.asStateFlow()
     val developerAvailable get() = runtime.developerAvailable
     private var selected: String? = null
     private var workCount = 0
     init { refresh() }
-    private fun run(block: suspend (ConversationService) -> Unit = {}) {
+    private fun run(activity: NetworkStatus? = null, block: suspend (ConversationService) -> String? = { null }) {
         workCount++
-        mutable.value = mutable.value.copy(loading = true, error = null)
+        mutable.value = mutable.value.copy(loading = true, error = null,
+            networkStatus = activity?.takeIf { runtime.networkConfigured && !runtime.inDemo } ?: mutable.value.networkStatus)
         viewModelScope.launch {
             var failure: String? = null
             try {
                 runtime.use { service ->
-                    try { block(service) }
+                    try { failure = block(service) }
                     catch (e: AppFailure) { failure = appError(e.error) }
                     catch (e: CryptoFailure) { failure = cryptoError(e.error) }
-                    catch (e: TransportFailure) { failure = "Recipient is not connected to this local simulator. Nothing was delivered." }
-                    catch (e: org.ghostcloak.protocol.ApiFailure) { failure=if(e.code=="legacy_auth_requires_reset") "This prototype has an older exportable account credential. Follow the documented development migration; no key was replaced." else if(e.status==401) "Connect again to renew your session." else "The network operation could not complete. Pending messages can be retried with Sync." }
+                    catch (e: TransportFailure) { failure = if (runtime.networkConfigured && !runtime.inDemo) "Message could not be sent. Try Sync and retry." else "Recipient is not connected to this local simulator. Nothing was delivered." }
+                    catch (e: org.ghostcloak.protocol.ApiFailure) { failure = networkError(e) }
                     catch (e: IllegalArgumentException) {failure="The network response or account settings were rejected."}
                     val active = runtime.currentService()
                     val identity = runtime.open(active)
@@ -48,7 +50,7 @@ class GhostViewModel(application: Application) : AndroidViewModel(application) {
                     mutable.value = mutable.value.copy(identity = identity, contacts = contacts,
                         messages = selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.messages(it) } ?: emptyList(),
                         demo = runtime.inDemo, protection = runtime.protection, ready = true,
-                        networkConfigured=runtime.networkConfigured,networkConnected=runtime.networkConnected)
+                        networkConfigured=runtime.networkConfigured,networkStatus=runtime.networkStatus)
                 }
             } catch (e: EndpointStorageFailure) { failure = "Encrypted storage is unavailable. Your identity was not reset. Close the app and investigate before continuing." }
             catch (e: CryptoFailure) { failure = cryptoError(e.error) }
@@ -56,27 +58,48 @@ class GhostViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun refresh() = run()
-    fun connectNetwork()=run {runtime.connectNetwork(it)}
-    fun syncNetwork()=run {runtime.syncNetwork(it)}
-    fun publishNetwork()=run {runtime.publishNetwork()}
-    fun logoutNetwork()=run {runtime.logoutNetwork()}
-    fun addNetwork(username:String,success:()->Unit)=run {runtime.addNetwork(username,it);withContext(Dispatchers.Main) {success()}}
-    fun create(username: String) = run { it.create(username) }
-    fun rename(username: String) = run { it.rename(username) }
+    fun connectNetwork() = run(NetworkStatus.CONNECTING) { runtime.connectNetwork(it); null }
+    fun syncNetwork() = run(NetworkStatus.SYNCING) { runtime.syncNetwork(it); null }
+    fun publishNetwork() = run { runtime.publishNetwork(); null }
+    fun logoutNetwork() = run { runtime.logoutNetwork(); null }
+    fun addNetwork(username: String, success: () -> Unit) = run {
+        runtime.addNetwork(username, it); withContext(Dispatchers.Main) { success() }; null
+    }
+    fun create(username: String) = run(NetworkStatus.CONNECTING) { runtime.create(it, username); null }
+    fun rename(username: String) = run { it.rename(username); null }
     fun select(id: String) { selected = id; mutable.value = mutable.value.copy(messages = emptyList(), fingerprint = ""); refresh() }
-    fun exportCard() = run { mutable.value = mutable.value.copy(card = it.exportCard(fresh = true)) }
-    fun importCard(text: String, success: () -> Unit) = run { it.importCard(text); withContext(Dispatchers.Main) { success() } }
-    fun loadFingerprint(id: String, pending: Boolean) = run { mutable.value = mutable.value.copy(fingerprint = it.fingerprint(id, pending)) }
-    fun verify(id: String, expected: String) = run { it.verify(id, expected) }
-    fun trust(id: String, expected: String) = run { it.trustReplacement(id, expected) }
-    fun block(id: String, blocked: Boolean) = run { it.block(id, blocked) }
-    fun delete(id: String, localId: String) = run { it.delete(id, localId) }
-    fun send(id: String, text: String, success: () -> Unit) = run { runtime.send(it, id, text); withContext(Dispatchers.Main) { success() } }
-    fun startDemo() = run { runtime.startDemo(); selected = null; mutable.value = mutable.value.copy(card = "", fingerprint = "") }
-    fun leaveDemo() = run { runtime.leaveDemo(); selected = null; mutable.value = mutable.value.copy(card = "", fingerprint = "") }
+    fun exportCard() = run { mutable.value = mutable.value.copy(card = it.exportCard(fresh = true)); null }
+    fun importCard(text: String, success: () -> Unit) = run { it.importCard(text); withContext(Dispatchers.Main) { success() }; null }
+    fun loadFingerprint(id: String, pending: Boolean) = run { mutable.value = mutable.value.copy(fingerprint = it.fingerprint(id, pending)); null }
+    fun verify(id: String, expected: String) = run { it.verify(id, expected); null }
+    fun trust(id: String, expected: String) = run { it.trustReplacement(id, expected); null }
+    fun block(id: String, blocked: Boolean) = run { it.block(id, blocked); null }
+    fun delete(id: String, localId: String) = run { it.delete(id, localId); null }
+    fun send(id: String, text: String, success: () -> Unit) = run {
+        val message = runtime.send(it, id, text)
+        // A saved pending message owns its draft now; Sync retries it without creating a duplicate.
+        withContext(Dispatchers.Main) { success() }
+        when (message.state) {
+            MessageState.PENDING -> "Message saved as pending. Tap Sync to retry."
+            MessageState.FAILED -> "Message could not be sent. Review the conversation before trying again."
+            else -> null
+        }
+    }
+    fun startDemo() = run { runtime.startDemo(); selected = null; mutable.value = mutable.value.copy(card = "", fingerprint = ""); null }
+    fun leaveDemo() = run { runtime.leaveDemo(); selected = null; mutable.value = mutable.value.copy(card = "", fingerprint = ""); null }
+    private fun networkError(error: org.ghostcloak.protocol.ApiFailure) = when {
+        error.code == "legacy_auth_requires_reset" -> "This identity uses an older account credential. Your keys were preserved; follow the documented development migration."
+        error.code == "invalid_network_username" -> "Choose a valid network username in Settings, then connect again. Your identity was preserved."
+        error.status == 401 -> "Connect again to renew your session. Your identity is preserved."
+        error.status == 409 -> "The request conflicted with existing account information. If creating an account, choose another username in Settings and reconnect. Your identity was preserved."
+        error.status == 404 -> "That username could not be found. Check the spelling and try again."
+        error.status == 429 -> "Please wait before trying again. Pending messages remain on this device."
+        error.status == 503 -> "Could not reach Ghost Cloak. Check your connection and try Sync. Your identity and pending messages are preserved."
+        else -> "The network operation could not complete. Pending messages can be retried with Sync."
+    }
     private fun appError(error: AppError) = when (error) {
         AppError.FRESH_CARD_REQUIRED -> "Import this person's updated contact card before approving the replacement identity."
-        AppError.INVALID_USERNAME -> "Use 1–32 letters, numbers or underscores."
+        AppError.INVALID_USERNAME -> if (runtime.networkConfigured && !runtime.inDemo) "Use 3–24 letters, numbers or underscores, starting with a letter or number. Some names are reserved." else "Use 1–32 letters, numbers or underscores."
         AppError.INVALID_CARD -> "This contact card is invalid or uses an unsupported version."
         AppError.DUPLICATE_CONTACT -> "This device is already in your contacts."
         AppError.AMBIGUOUS_IDENTITY -> "This card conflicts with an existing identity. It was not imported."

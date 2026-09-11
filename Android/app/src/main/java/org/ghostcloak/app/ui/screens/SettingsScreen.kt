@@ -19,14 +19,14 @@ import org.ghostcloak.app.ui.components.*
         SectionLabel("PROFILE")
         OutlinedTextField(username, onValueChange = { if (it.length <= 32) username = it }, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         FullButton("Save username", !state.loading && username != state.identity?.username) { rename(username) }
-        Text("This changes your display name only. Your device identity, keys and safety numbers stay the same.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(if (state.networkConfigured && !state.demo) "Before connecting, this name is used to register. After registration, this changes only your local display name. Your keys and safety numbers stay the same." else "This changes your display name only. Your device identity, keys and safety numbers stay the same.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         ErrorNotice(state.error)
         if(!state.demo) {
             SectionLabel("NETWORK")
             if(!state.networkConfigured) Text("A server is not configured in this build.")
             else {
-                InfoPanel("Encrypted network messaging", "Your messages are encrypted on your device. The service still sees connection IPs and routing metadata.")
-                FullButton(if(state.networkConnected) "Reconnect securely" else "Register or connect",!state.loading,connect)
+                InfoPanel("Encrypted network messaging", "Your messages are encrypted on your device. The service still sees routing metadata. Connected means your last authentication succeeded; tap Sync to check for new messages.")
+                NetworkActions(state, connect, sync)
                 if(state.networkConnected) {
                     FullButton("Sync messages and retry pending",!state.loading,sync)
                     OutlinedButton(onClick=publish,enabled=!state.loading) {Text("Publish another contact prekey")}
@@ -45,6 +45,6 @@ import org.ghostcloak.app.ui.components.*
                 Text(if (state.demo) "Return to my identity" else "Open local demo")
             }
         }
-        Text("Ghost Cloak · Phase 1C.2\nNot independently audited. Not anonymous.\nNo notifications or Ghost Mode.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Ghost Cloak · Phase 1E.0\nNot independently audited. Not anonymous.\nNo notifications or Ghost Mode.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

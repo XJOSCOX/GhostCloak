@@ -18,31 +18,34 @@ import org.ghostcloak.messaging.ContactCardCodec
     var copied by remember { mutableStateOf(false) }
     val context = LocalContext.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        ScreenHeader("Add a contact", "A public card. A direct connection.", back)
-        if(state.networkConnected && !state.demo && lookup!=null) {
+        ScreenHeader("Add a contact", if (state.networkConfigured && !state.demo) "Find someone on Ghost Cloak." else "Exchange a public contact card.", back)
+        if(state.networkConfigured && !state.demo && lookup!=null) {
             var username by remember {mutableStateOf("")}
             SectionLabel("FIND BY USERNAME")
             OutlinedTextField(username,{if(it.length<=24) username=it},label={Text("Exact username")},singleLine=true,modifier=Modifier.fillMaxWidth())
             FullButton("Find and add contact",!state.loading && username.isNotBlank()) {lookup(username)}
             Text("Compare safety numbers through a separate trusted channel before relying on this identity.",style=MaterialTheme.typography.bodyMedium)
         }
-        InfoPanel("Exchange public material", "Cards contain public identity and prekeys only. Share through a trusted channel, then compare your safety number.")
-        SectionLabel("IMPORT THEIR CARD")
-        OutlinedTextField(draft, onValueChange = { tooLarge = it.length > ContactCardCodec.MAX_TEXT; if (!tooLarge) draft = it },
-            label = { Text("Paste contact card") }, modifier = Modifier.fillMaxWidth(), minLines = 3, maxLines = 5,
-            isError = tooLarge, supportingText = { Text(if (tooLarge) "Card exceeds 8,192 characters. Nothing was imported." else "GHOSTCLOAK:1:…") })
-        FullButton("Import contact", !state.loading && draft.isNotBlank() && !tooLarge) { import(draft) }
         ErrorNotice(state.error)
-        HorizontalDivider()
-        SectionLabel("SHARE YOUR CARD")
-        Text("Your private keys never leave encrypted storage.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (state.card.isEmpty()) OutlinedButton(onClick = export, enabled = !state.loading, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Generate public contact card") }
-        else {
-            InfoPanel("Public contact card ready", "This card is for one contact exchange. It does not connect devices over a network.")
-            FullButton(if (copied) "Copy again" else "Copy public card") { copySensitive(context, state.card); copied = true }
-            if (copied) Text("Copied to clipboard", color = MaterialTheme.colorScheme.primary)
-            TextButton(onClick = { copied = false; export() }, enabled = !state.loading) { Text("Generate a fresh card for another contact") }
+        if (!state.networkConfigured || state.demo) {
+            InfoPanel("Exchange public material", "Cards contain public identity and prekeys only. Share through a trusted channel, then compare your safety number.")
+            SectionLabel("IMPORT THEIR CARD")
+            OutlinedTextField(draft, onValueChange = { tooLarge = it.length > ContactCardCodec.MAX_TEXT; if (!tooLarge) draft = it },
+                label = { Text("Paste contact card") }, modifier = Modifier.fillMaxWidth(), minLines = 3, maxLines = 5,
+                isError = tooLarge, supportingText = { Text(if (tooLarge) "Card exceeds 8,192 characters. Nothing was imported." else "GHOSTCLOAK:1:…") })
+            FullButton("Import contact", !state.loading && draft.isNotBlank() && !tooLarge) { import(draft) }
+
+            HorizontalDivider()
+            SectionLabel("SHARE YOUR CARD")
+            Text("Your private keys never leave encrypted storage.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (state.card.isEmpty()) OutlinedButton(onClick = export, enabled = !state.loading, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Generate public contact card") }
+            else {
+                InfoPanel("Public contact card ready", "This card is for one contact exchange. It does not connect devices over a network.")
+                FullButton(if (copied) "Copy again" else "Copy public card") { copySensitive(context, state.card); copied = true }
+                if (copied) Text("Copied to clipboard", color = MaterialTheme.colorScheme.primary)
+                TextButton(onClick = { copied = false; export() }, enabled = !state.loading) { Text("Generate a fresh card for another contact") }
+            }
+            Text("Copying is optional. Clipboard content may be accessible to your keyboard, other software or synced devices.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Text("Copying is optional. Clipboard content may be accessible to your keyboard, other software or synced devices.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

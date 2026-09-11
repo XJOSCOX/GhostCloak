@@ -12,7 +12,7 @@ import java.net.URI
 class NetworkController(private val records:EndpointRecords,private val engine:SecureSessionEngine) {
     val configured get()=BuildConfig.API_ORIGIN.isNotEmpty()
     private val state by lazy {EndpointNetworkState(records,URI(BuildConfig.API_ORIGIN).host,KeystoreDeviceAuth())}
-    private val client by lazy {HttpGhostClient(BuildConfig.API_ORIGIN,state)}
+    private val client by lazy {HttpGhostClient(BuildConfig.API_ORIGIN,state,transport=TransportPolicy.select())}
     private val account by lazy {NetworkAccount(client,state)}
     private val transport by lazy {NetworkMailboxTransport(client,state)}
     private val outbox by lazy {DurableOutbox(records,engine,transport)}

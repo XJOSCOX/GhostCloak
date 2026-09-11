@@ -6,11 +6,13 @@ Phase 1C.2 provides a Ktor/PostgreSQL foundation and Android HTTPS controls with
 
 **Phase 1D.1 prepares origin hiding only:** a private TLS Unix-socket ingress, outbound Cloudflare Tunnel configuration, service isolation, visitor-header filtering and an origin-rotation plan. No live configuration changed in this phase. See the [Tunnel plan](infrastructure/CLOUDFLARE_TUNNEL.md), [metadata visibility](protocol/METADATA_PRIVACY.md), [local tests](infrastructure/tunnel/tests/README.md) and [Phase 1D.1 security review](SECURITY_REVIEW_PHASE_1D1.md). Cloudflare can still observe client IP and HTTP metadata; Ghost Mode is not implemented.
 
+**Phase 1D.3 prepares a future privacy relay:** Android still uses direct HTTPS, with a replaceable transport boundary and a closed relay feature gate. The owner reports Phase 1D.1/1D.2 deployed and validated on staging; this phase makes no infrastructure changes. See the [relay architecture](protocol/RELAY_ARCHITECTURE.md), [Android transport contract](Android/TRANSPORT_PRIVACY.md), [sealed-sender direction](protocol/SEALED_SENDER_DIRECTION.md) and [Phase 1D.3 review](SECURITY_REVIEW_PHASE_1D3.md). No relay or Ghost Mode is implemented.
+
 ## Local network backend
 
 From `Android/`, run `.\gradlew.bat :backend:runLocal --dependency-verification strict`. It binds only `127.0.0.1:8787`, with ephemeral repository state. Do not use real accounts or expose this listener. The end-to-end JVM fixture starts its own server: `.\gradlew.bat :test-support:test --tests org.ghostcloak.testing.NetworkTest --dependency-verification strict`.
 
-Read the [API contract](protocol/API_V1.md), [device authentication](protocol/AUTHENTICATION.md), [server metadata](protocol/SERVER_METADATA.md), [mailbox policy](protocol/MAILBOX.md), [outbox crash states](protocol/OUTBOX_STATE.md), and [Phase 1C.1 security review](SECURITY_REVIEW_PHASE_1C1.md). The backend cannot decrypt messages. It still sees routing, timing and source IPs at its transport. Outbox recovery deliberately fails ambiguous post-encryption states; PostgreSQL provides backend restart durability; remaining endpoint crash gaps are documented in the Phase 1C.2 review.
+Read the [API contract](protocol/API_V1.md), [device authentication](protocol/AUTHENTICATION.md), [server metadata](protocol/SERVER_METADATA.md), [mailbox policy](protocol/MAILBOX.md), [outbox crash states](protocol/OUTBOX_STATE.md), and [Phase 1C.1 security review](SECURITY_REVIEW_PHASE_1C1.md). The backend cannot decrypt messages. It still sees routing and timing; the reported Tunnel/header-filtering deployment keeps visitor IP out of application business logic, while Cloudflare sees the client IP. Outbox recovery deliberately fails ambiguous post-encryption states; PostgreSQL provides backend restart durability; remaining endpoint crash gaps are documented in the Phase 1C.2 review.
 
 ## Android experience
 

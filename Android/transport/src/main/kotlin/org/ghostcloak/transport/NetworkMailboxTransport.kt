@@ -5,7 +5,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import org.ghostcloak.protocol.*
-import java.net.HttpURLConnection
 import java.net.URI
 
 interface AccessTokenStore { fun read(): String?; fun save(token: String?); }
@@ -13,43 +12,30 @@ interface RoutingDirectory { fun route(deviceId: String): String? }
 interface GhostAuthClient { suspend fun unauthenticated(request: ApiRequest): ApiResponse }
 interface GhostDirectoryClient { suspend fun lookup(username: String): DirectoryEntry; suspend fun publish(deviceId: String, bundles: List<PublicBundle>) }
 
-/** Blocking JDK/Android HTTPS implementation, dispatched off-main. No redirects or ambient auth. */
-class HttpGhostClient(baseUrl: String, private val tokens: AccessTokenStore, allowLoopbackForTests: Boolean = false) : GhostAuthClient, GhostDirectoryClient {
+/** Protocol/auth adapter. Connection policy belongs to GhostCloakTransport, never message logic. */
+class HttpGhostClient(
+    baseUrl: String,
+    private val tokens: AccessTokenStore,
+    allowLoopbackForTests: Boolean = false,
+    private val transport: GhostCloakTransport = DirectHttpsTransport(allowLoopbackForTests),
+) : GhostAuthClient, GhostDirectoryClient {
     private val base = URI(baseUrl)
-    init {
-        require(base.rawUserInfo == null && base.rawQuery == null && base.rawFragment == null && base.path in listOf("", "/"))
-        require(base.host != null && (base.scheme == "https" || (allowLoopbackForTests && base.scheme == "http" && base.host in setOf("127.0.0.1", "localhost", "[::1]"))))
-    }
+    init { validateApiOrigin(base, allowLoopbackForTests) }
     override suspend fun unauthenticated(request: ApiRequest) = call(request, false)
     suspend fun call(request: ApiRequest, authenticated: Boolean = true): ApiResponse = withContext(Dispatchers.IO) {
         val bytes = NetworkCodec.encode(request)
         requireApi(bytes.size <= NetworkLimits.BODY, "body_size", 413)
-        val connection = base.resolve(ApiRoutes.path(request)).toURL().openConnection() as HttpURLConnection
+        val authorization = if (authenticated) "Bearer ${tokens.read() ?: throw ApiFailure(401, "unauthorized")}" else null
         try {
-            connection.requestMethod = "POST"; connection.instanceFollowRedirects = false
-            connection.connectTimeout = 5000; connection.readTimeout = 5000
-            connection.useCaches = false; connection.doOutput = true
-            connection.setRequestProperty("Content-Type", NetworkLimits.CONTENT_TYPE)
-            connection.setRequestProperty("User-Agent", "GhostCloak/1")
-            if (authenticated) connection.setRequestProperty("Authorization", "Bearer ${tokens.read() ?: throw ApiFailure(401, "unauthorized")}")
-            connection.setFixedLengthStreamingMode(bytes.size)
-            connection.outputStream.use { it.write(bytes) }
-            val status = connection.responseCode
-            requireApi(connection.getHeaderField("Content-Type") == NetworkLimits.CONTENT_TYPE, "invalid_response", 502)
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            requireApi(stream != null, "invalid_response", 502)
-            val body = stream!!.use { input ->
-                val out = java.io.ByteArrayOutputStream(); val buffer = ByteArray(8192)
-                while (true) { val n = input.read(buffer); if (n < 0) break; requireApi(out.size() + n <= NetworkLimits.RESPONSE, "response_size", 502); out.write(buffer, 0, n) }
-                out.toByteArray()
-            }
-            val response = NetworkCodec.decode<ApiResponse>(body, NetworkLimits.RESPONSE)
+            val result = transport.execute(TransportRequest(base.resolve(ApiRoutes.path(request)), bytes, authorization))
+            requireApi(result.contentType == NetworkLimits.CONTENT_TYPE, "invalid_response", 502)
+            requireApi(result.body.size <= NetworkLimits.RESPONSE, "response_size", 502)
+            val response = NetworkCodec.decode<ApiResponse>(result.body, NetworkLimits.RESPONSE)
             requireApi(response.version == 1, "invalid_response", 502)
-            if (status !in 200..299) throw ApiFailure(status, "server_rejected")
+            if (result.status !in 200..299) throw ApiFailure(result.status, "server_rejected")
             requireApi(response.error == null, "invalid_response", 502)
             response
         } catch (e: java.io.IOException) { throw ApiFailure(503, "network_unavailable") }
-        finally { connection.disconnect() }
     }
     override suspend fun lookup(username: String) = call(ApiRequest.Lookup(Usernames.normalize(username))).directory ?: throw ApiFailure(502, "invalid_response")
     override suspend fun publish(deviceId: String, bundles: List<PublicBundle>) { call(ApiRequest.Prekeys(deviceId, bundles)) }

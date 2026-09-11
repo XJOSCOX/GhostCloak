@@ -9,6 +9,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.ghostcloak.identity.IdentityTrustState
+import org.ghostcloak.app.ui.theme.avatarColors
 
 @Composable fun Wordmark() {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -17,8 +18,9 @@ import org.ghostcloak.identity.IdentityTrustState
 }
 @Composable fun SectionLabel(text: String) { Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 @Composable fun Avatar(name: String, modifier: Modifier = Modifier) {
-    Surface(modifier.size(52.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
-        Box(contentAlignment = Alignment.Center) { Text(name.take(1).uppercase(), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge) }
+    val (background, foreground) = avatarColors(name)
+    Surface(modifier.size(52.dp), shape = CircleShape, color = background) {
+        Box(contentAlignment = Alignment.Center) { Text(name.take(1).uppercase(), color = foreground, style = MaterialTheme.typography.titleLarge) }
     }
 }
 @Composable fun TrustBadge(state: IdentityTrustState?) {

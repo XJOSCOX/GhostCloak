@@ -1,12 +1,37 @@
 package org.ghostcloak.app
 
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.lifecycle.ViewModelStore
+import org.ghostcloak.app.application.*
+import org.ghostcloak.app.ui.navigation.GhostApp
+import org.ghostcloak.app.ui.theme.GhostCloakTheme
+import org.ghostcloak.identity.RandomIdentifiers
+import org.junit.Before
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 
 class LocalDemoTest {
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val compose = createComposeRule()
+    private lateinit var runtime: AppRuntime
+    private val owner = ViewModelStore()
+    @Before fun isolatedLocalRuntime() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        runtime = AppRuntime(context, apiOrigin = "", endpointName = "ui-${RandomIdentifiers.create()}")
+        lateinit var model: GhostViewModel
+        instrumentation.runOnMainSync {
+            model = GhostViewModel(context.applicationContext as android.app.Application, runtime)
+            owner.put("local-demo", model)
+        }
+        compose.setContent { GhostCloakTheme { GhostApp(model) } }
+    }
+    @After fun closeRuntime() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { owner.clear() }
+        runtime.close()
+    }
     @Test fun appNavigationRunsIsolatedEncryptedDemo() {
         compose.waitUntil(20000) { compose.onAllNodesWithText("Settings").fetchSemanticsNodes().isNotEmpty() ||
             compose.onAllNodesWithText("Create local identity").fetchSemanticsNodes().isNotEmpty() }

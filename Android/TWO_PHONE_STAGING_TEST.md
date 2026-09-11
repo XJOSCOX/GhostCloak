@@ -2,15 +2,11 @@
 
 Use two test phones and synthetic messages only. Staging must already be deployed; this test does not change Cloudflare, the VPS, protocol or cryptography. No same-LAN requirement, background service or push setup is needed.
 
-## Build and install
+## Run from Android Studio
 
-From the repository root, build the network-configured APK:
+Pull the latest source, open **Android/** in Android Studio and let Gradle sync. Select the **app** run configuration and **debug** variant, connect/select Phone A and click **Run app**. Repeat with Phone B selected. Debug automatically uses `https://api.ghostcloak.org`; no property or manual APK installation is needed. See [Android development](DEVELOPMENT.md) for device setup, command-line alternatives and separate release configuration.
 
-```powershell
-.\Android\gradlew.bat -p Android :app:assembleDebug '-PghostcloakApiOrigin=https://api.ghostcloak.org' --dependency-verification strict
-```
-
-Install `Android/app/build/outputs/apk/debug/app-debug.apk` on both test phones. A debug APK includes the existing developer tools; keep both phones in their real identity, outside the local demo. A build with an empty origin is intentionally local-only. The network build's first launch must say **Encrypted messaging via Ghost Cloak staging** and **Create identity**.
+Keep both phones in their real identity, outside the local demo. First launch must say **Encrypted messaging via Ghost Cloak staging** and **Create identity**. An explicitly empty debug origin is local-only; release is network-disabled unless given its separate release origin.
 
 For a clean test, use fresh test installations without identities you need to retain. Uninstall/clear-data removes local identity and encrypted history; do not do this to repair a failed registration. Existing local identities can instead use **Connect to Ghost Cloak** without key replacement.
 

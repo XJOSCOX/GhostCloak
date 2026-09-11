@@ -40,12 +40,35 @@ android {
     }
 }
 
-val apiOrigin=providers.gradleProperty("ghostcloakApiOrigin").orElse("").get()
-if(apiOrigin.isNotEmpty()) {
-    val origin=URI(apiOrigin)
-    require(origin.scheme=="https" && origin.host!=null && origin.host.matches(Regex("[a-z0-9][a-z0-9.-]{0,99}")) && !origin.host.matches(Regex("[0-9.]+")) && origin.rawUserInfo==null && origin.rawQuery==null && origin.rawFragment==null && origin.path in setOf("","/"))
+// Android Studio's default debug variant is ready for physical-device staging.
+// The legacy override is intentionally DEBUG ONLY; release has a separate opt-in.
+val debugOriginOverride = providers.gradleProperty("ghostcloakApiOrigin").orNull
+val releaseOriginOverride = providers.gradleProperty("ghostcloakReleaseApiOrigin").orNull
+val debugApiOrigin = debugOriginOverride ?: "https://api.ghostcloak.org"
+val releaseApiOrigin = releaseOriginOverride ?: ""
+fun validateApiOrigin(value: String) {
+    if (value.isEmpty()) return
+    val origin = URI(value)
+    require(origin.scheme == "https" && origin.host != null && origin.host.matches(Regex("[a-z0-9][a-z0-9.-]{0,99}")) &&
+        !origin.host.matches(Regex("[0-9.]+")) && origin.rawUserInfo == null && origin.rawQuery == null &&
+        origin.rawFragment == null && origin.path in setOf("", "/")) { "API origin must be an HTTPS DNS origin without credentials, query or path" }
 }
-android.defaultConfig.buildConfigField("String","API_ORIGIN","\"$apiOrigin\"")
+validateApiOrigin(debugApiOrigin)
+validateApiOrigin(releaseApiOrigin)
+require(releaseApiOrigin.isEmpty() || URI(releaseApiOrigin).host.trimEnd('.') != "api.ghostcloak.org") {
+    "Release must not use the staging API. Set ghostcloakReleaseApiOrigin to a reviewed release origin, or leave it empty."
+}
+android.buildTypes.getByName("debug").buildConfigField("String", "API_ORIGIN", "\"$debugApiOrigin\"")
+android.buildTypes.getByName("release").buildConfigField("String", "API_ORIGIN", "\"$releaseApiOrigin\"")
+
+// Verify generated BuildConfig against inputs rather than trusting shared/defaultConfig fields.
+androidComponents.beforeVariants(androidComponents.selector().withBuildType("release")) {
+    it.hostTests.getValue(com.android.build.api.variant.HostTestBuilder.UNIT_TEST_TYPE).enable = true
+}
+tasks.withType<Test>().configureEach {
+    debugOriginOverride?.let { value -> systemProperty("ghostcloak.test.debugOverride", value) }
+    releaseOriginOverride?.let { value -> systemProperty("ghostcloak.test.releaseOverride", value) }
+}
 
 dependencies {
     implementation(project(":messaging"))

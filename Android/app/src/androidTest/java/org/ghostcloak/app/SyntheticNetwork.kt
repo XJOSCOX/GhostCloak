@@ -7,6 +7,9 @@ import java.security.SecureRandom
 
 /** Socket-free protocol fixture. Production backend behavior is tested separately by JVM/PG suites. */
 internal class SyntheticNetwork : GhostCloakTransport {
+    var rejectAuthenticated = false
+    var logins = 0
+    @Synchronized fun expireSessions() { sessions.clear() }
     var offline = false
     var loseRegistrationResponse = false
     var rejectSend = false
@@ -55,9 +58,11 @@ internal class SyntheticNetwork : GhostCloakTransport {
                 val token = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(random.generateSeed(32))
                 sessions.entries.removeAll { it.value.deviceId == registration.deviceId }
                 sessions[token] = registration
+                logins++
                 ApiResponse(session = SessionGrant(token, System.currentTimeMillis() + 300000))
             }
             else -> {
+                if (rejectAuthenticated) throw ApiFailure(401, "unauthorized")
                 val me = sessions[request.applicationAuthorization?.removePrefix("Bearer ")] ?: throw ApiFailure(401, "unauthorized")
                 when (r) {
                     is ApiRequest.Lookup -> {

@@ -38,6 +38,8 @@ class ForegroundSyncTest {
             } }
             a.use { a.send(it, bid, "Synthetic one-way A1") }
             assertTrue(b.use { it.contacts().isEmpty() })
+            val initialLogins = api.logins
+            api.expireSessions() // Foreground entry must silently renew both registered endpoints.
             withContext(Dispatchers.Main) { owners[0].registry.currentState = Lifecycle.State.STARTED }
             delay(500)
             assertEquals(MessageState.SERVER_ACCEPTED, a.use { it.messages(bid).single().state })
@@ -66,6 +68,7 @@ class ForegroundSyncTest {
             withTimeout(3000) { while (b.use { it.messages(aid).size } != 3) delay(50) }
             assertEquals(3, b.use { it.messages(aid).size })
             assertEquals(2, api.registrations)
+            assertEquals(initialLogins + 2, api.logins)
         } finally {
             loops.forEach { it.cancelAndJoin() }
             withContext(Dispatchers.Main) { stores.forEach { it.clear() } }

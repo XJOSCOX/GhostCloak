@@ -94,12 +94,12 @@ class NetworkOnboardingTest {
                 api.rejectSend = true
                 val pending = alice.use { alice.send(it, bobId, "synthetic hello bob") }
                 assertEquals(MessageState.PENDING, pending.state)
-                assertEquals(NetworkStatus.ERROR, alice.networkStatus)
+                assertEquals(NetworkStatus.OFFLINE, alice.networkStatus)
                 assertTrue(api.mailbox.isEmpty())
                 assertEquals(MessageState.PENDING, alice.use { it.messages(bobId).single().state })
                 val firstCiphertext = api.sent.single()
                 api.rejectSend = false
-                // Expired sessions are renewed by explicit Sync; ciphertext is not re-encrypted.
+                // Sync uses silent renewal; ciphertext is not re-encrypted.
                 api.sessions.clear()
                 alice.use { alice.syncNetwork(it) }
                 assertArrayEquals(firstCiphertext, api.sent.last())

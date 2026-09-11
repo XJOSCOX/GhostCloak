@@ -18,6 +18,8 @@ class HttpGhostClient(
     private val tokens: AccessTokenStore,
     allowLoopbackForTests: Boolean = false,
     private val transport: GhostCloakTransport = DirectHttpsTransport(allowLoopbackForTests),
+    private val renewSession: (suspend (String) -> Unit)? = null,
+    private val authenticatedFailure: (ApiFailure) -> Unit = {},
 ) : GhostAuthClient, GhostDirectoryClient {
     private val base = URI(baseUrl)
     init { validateApiOrigin(base, allowLoopbackForTests) }
@@ -25,17 +27,29 @@ class HttpGhostClient(
     suspend fun call(request: ApiRequest, authenticated: Boolean = true): ApiResponse = withContext(Dispatchers.IO) {
         val bytes = NetworkCodec.encode(request)
         requireApi(bytes.size <= NetworkLimits.BODY, "body_size", 413)
-        val authorization = if (authenticated) "Bearer ${tokens.read() ?: throw ApiFailure(401, "unauthorized")}" else null
+        suspend fun attempt(token: String?): ApiResponse {
+            val authorization = token?.let { "Bearer $it" }
+            try {
+                val result = transport.execute(TransportRequest(base.resolve(ApiRoutes.path(request)), bytes, authorization))
+                requireApi(result.contentType == NetworkLimits.CONTENT_TYPE, "invalid_response", 502)
+                requireApi(result.body.size <= NetworkLimits.RESPONSE, "response_size", 502)
+                val response = NetworkCodec.decode<ApiResponse>(result.body, NetworkLimits.RESPONSE)
+                requireApi(response.version == 1, "invalid_response", 502)
+                if (result.status !in 200..299) throw ApiFailure(result.status, "server_rejected")
+                requireApi(response.error == null, "invalid_response", 502)
+                return response
+            } catch (e: java.io.IOException) { throw ApiFailure(503, "network_unavailable") }
+        }
+        if (!authenticated) return@withContext attempt(null)
         try {
-            val result = transport.execute(TransportRequest(base.resolve(ApiRoutes.path(request)), bytes, authorization))
-            requireApi(result.contentType == NetworkLimits.CONTENT_TYPE, "invalid_response", 502)
-            requireApi(result.body.size <= NetworkLimits.RESPONSE, "response_size", 502)
-            val response = NetworkCodec.decode<ApiResponse>(result.body, NetworkLimits.RESPONSE)
-            requireApi(response.version == 1, "invalid_response", 502)
-            if (result.status !in 200..299) throw ApiFailure(result.status, "server_rejected")
-            requireApi(response.error == null, "invalid_response", 502)
-            response
-        } catch (e: java.io.IOException) { throw ApiFailure(503, "network_unavailable") }
+            val token = tokens.read() ?: throw ApiFailure(401, "unauthorized")
+            try { attempt(token) } catch (e: ApiFailure) {
+                if (e.status != 401 || renewSession == null) throw e
+                renewSession.invoke(token)
+                // Retry these exact bytes once, including the original submission ID.
+                attempt(tokens.read() ?: throw ApiFailure(401, "unauthorized"))
+            }
+        } catch (e: ApiFailure) { authenticatedFailure(e); throw e }
     }
     override suspend fun lookup(username: String) = call(ApiRequest.Lookup(Usernames.normalize(username))).directory ?: throw ApiFailure(502, "invalid_response")
     override suspend fun publish(deviceId: String, bundles: List<PublicBundle>) { call(ApiRequest.Prekeys(deviceId, bundles)) }

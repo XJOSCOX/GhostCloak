@@ -21,6 +21,8 @@ For a clean test, use fresh test installations without identities you need to re
 
 ## Exchange messages
 
+Normal access-session expiry is renewed silently using the existing registered device credential. Every authenticated request, including sends, gets at most one retry with the same request bytes after renewal. No account, device keys or history are recreated. Rejected or unavailable credentials, or a second 401 after renewal, require reconnecting; temporary network failures (including during login) remain eligible for later foreground sync. Explicit logout removes the saved access session and prevents automatic login until Connect is selected again.
+
 1. Alice taps **+ (New chat)**, enters Bob's exact registered username and taps **Find and add contact**. **Bob does not add Alice.**
 2. Do not verify safety numbers yet. Alice opens Bob's conversation and sends `Synthetic one-way A1`.
 3. Alice sees **Queued on server** after upload. Keep Bob's app open; within roughly one second plus network time, Alice appears as a message request on Bob's phone. The **Requests** filter isolates pending requests.

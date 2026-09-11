@@ -16,15 +16,15 @@ import java.time.format.DateTimeFormatter
     val contact = status.contact
     Surface(onClick = { open(contact.remoteDeviceId) }, shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(vertical = 12.dp, horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(Modifier.padding(vertical = 16.dp, horizontal = 0.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Avatar(contact.displayName)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(contact.displayName, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     last?.let {
-                        Text(DateTimeFormatter.ofPattern("MMM d").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(it.timestamp)),
+                        Text(DateTimeFormatter.ofPattern(if (Instant.ofEpochMilli(it.timestamp).atZone(ZoneId.systemDefault()).toLocalDate() == java.time.LocalDate.now()) "HH:mm" else "MMM d").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(it.timestamp)),
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }

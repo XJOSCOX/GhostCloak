@@ -50,15 +50,15 @@ class LocalDemoTest {
         compose.waitUntil(20000) { compose.onNodeWithText("Write a message…").isEnabled() }
         val message = "UI fixture ${System.nanoTime()}"
         compose.onNodeWithText("Write a message…").performTextInput(message)
-        compose.onNodeWithText("Send").performClick()
+        compose.onNodeWithContentDescription("Send").performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText(message).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("Security").performClick()
+        compose.onNodeWithContentDescription("Security").performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText("Mark verified").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Mark verified").performScrollTo().performClick()
         compose.onNodeWithText("I compared it · Verify").performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText("✓ Verified").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("‹  Back").performScrollTo().performClick()
-        compose.onNodeWithText("‹ Back").performClick()
+        compose.onNodeWithContentDescription("Back").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithText("Settings").performClick()
         compose.onNodeWithText("Return to my identity").performScrollTo().performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText("Open local demo").fetchSemanticsNodes().isNotEmpty() }

@@ -52,11 +52,12 @@ class NetworkScreenTest {
             assertEquals(1, api.registrations)
             assertArrayEquals(original.publicKey, model.state.value.identity!!.publicKey)
             assertEquals(original.deviceId, model.state.value.identity!!.deviceId)
-            compose.onNodeWithText("Connected").assertIsDisplayed()
+            compose.onAllNodesWithText("Chats").onFirst().assertIsDisplayed()
             compose.onRoot().captureToImage().asAndroidBitmap().let { bitmap ->
                 File(context.getExternalFilesDir(null), "e0-connected.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
             }
-            compose.onNodeWithText("Sync").performClick()
+            compose.onNodeWithText("Settings").performClick()
+            compose.onNodeWithText("Sync").performScrollTo().performClick()
             compose.waitUntil(20000) { !model.state.value.loading }
             assertNull(model.state.value.error)
         } finally { instrumentation.runOnMainSync { owner.clear() }; runtime.close() }

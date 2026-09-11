@@ -18,13 +18,15 @@ import org.ghostcloak.messaging.ContactCardCodec
     var copied by remember { mutableStateOf(false) }
     val context = LocalContext.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        ScreenHeader("Add a contact", if (state.networkConfigured && !state.demo) "Find someone on Ghost Cloak." else "Exchange a public contact card.", back)
+        ScreenHeader("New chat", if (state.networkConfigured && !state.demo) "Find someone on Ghost Cloak." else "Exchange a public contact card.", back)
         if(state.networkConfigured && !state.demo && lookup!=null) {
             var username by remember {mutableStateOf("")}
-            SectionLabel("FIND BY USERNAME")
+            Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer) {
+                Box(Modifier.fillMaxWidth().padding(32.dp),contentAlignment=androidx.compose.ui.Alignment.Center) { AppIcon(Glyph.PERSON,modifier=Modifier.size(48.dp),tint=MaterialTheme.colorScheme.primary) }
+            }
             OutlinedTextField(username,{if(it.length<=24) username=it},label={Text("Exact username")},singleLine=true,modifier=Modifier.fillMaxWidth())
             FullButton("Find and add contact",!state.loading && username.isNotBlank()) {lookup(username)}
-            Text("Compare safety numbers through a separate trusted channel before relying on this identity.",style=MaterialTheme.typography.bodyMedium)
+            Text("Your first message arrives as a request. Safety-number verification is optional; use it to confirm who you are talking to.",style=MaterialTheme.typography.bodyMedium)
         }
         ErrorNotice(state.error)
         if (!state.networkConfigured || state.demo) {

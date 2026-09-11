@@ -1,14 +1,14 @@
 package org.ghostcloak.app.ui.screens
 
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import org.ghostcloak.messaging.*
 import java.time.Instant
 import java.time.ZoneId
@@ -17,25 +17,29 @@ import java.time.format.DateTimeFormatter
 @Composable fun MessageBubble(message: Message, onDelete: () -> Unit) {
     val outgoing = message.direction == Direction.OUTGOING
     var menu by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth(), horizontalAlignment = if (outgoing) Alignment.End else Alignment.Start) {
-        Surface(shape = RoundedCornerShape(20.dp, 20.dp, if (outgoing) 6.dp else 20.dp, if (outgoing) 20.dp else 6.dp),
-            color = if (outgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-            modifier = Modifier.widthIn(max = 310.dp)) {
-            Text(message.body, Modifier.padding(horizontal = 18.dp, vertical = 14.dp), style = MaterialTheme.typography.bodyLarge)
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("${DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(message.timestamp))} · ${when (message.state) {
-            MessageState.PENDING -> "Pending"; MessageState.ENCRYPTED -> "Encrypted"; MessageState.SENT_TO_TRANSPORT -> "Sent to local transport"
-            MessageState.DELIVERED_LOCAL_SIMULATION -> if (outgoing) "Delivered locally" else "Received locally"; MessageState.FAILED -> "Not delivered"
-            MessageState.DELIVERED -> "Delivered"; MessageState.SERVER_ACCEPTED -> "Queued on server"; MessageState.RECEIVED -> "Received"
-        }}", Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium,
-            color = if (message.state == MessageState.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+    val time = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(message.timestamp))
+    Column(Modifier.fillMaxWidth(),horizontalAlignment=if(outgoing) Alignment.End else Alignment.Start) {
         Box {
-            IconButton(onClick = { menu = true }, modifier = Modifier.semantics { contentDescription = "Message actions" }) { Text("···") }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(text = { Text("Delete from this device") }, onClick = { menu = false; onDelete() })
+            Surface(shape=RoundedCornerShape(18.dp,18.dp,if(outgoing) 4.dp else 18.dp,if(outgoing) 18.dp else 4.dp),
+                color=if(outgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                contentColor=if(outgoing) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                modifier=Modifier.widthIn(max=300.dp).combinedClickable(onClick={menu=true},onLongClick={menu=true})
+                    .semantics { customActions=listOf(CustomAccessibilityAction("Delete from this device") { onDelete();true }) }) {
+                Column(Modifier.padding(horizontal=14.dp,vertical=10.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                    Text(message.body,style=MaterialTheme.typography.bodyLarge)
+                    Text(time,Modifier.align(Alignment.End),style=MaterialTheme.typography.labelSmall,color=LocalContentColor.current.copy(alpha=0.7f))
+                }
+            }
+            DropdownMenu(expanded=menu,onDismissRequest={menu=false}) {
+                DropdownMenuItem(text={Text("Delete from this device")},onClick={menu=false;onDelete()})
             }
         }
-        }
+        if(outgoing) Text(when(message.state) {
+            MessageState.PENDING -> "Pending"; MessageState.ENCRYPTED -> "Encrypted"
+            MessageState.SENT_TO_TRANSPORT -> "Sent locally"; MessageState.DELIVERED_LOCAL_SIMULATION -> "Delivered locally"
+            MessageState.FAILED -> "Not delivered"; MessageState.SERVER_ACCEPTED -> "Queued on server"
+            MessageState.DELIVERED -> "Delivered"; MessageState.RECEIVED -> "Received"
+        },Modifier.padding(top=4.dp,end=4.dp),style=MaterialTheme.typography.labelSmall,
+            color=if(message.state==MessageState.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

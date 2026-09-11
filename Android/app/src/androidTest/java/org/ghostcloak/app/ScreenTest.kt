@@ -50,7 +50,7 @@ class ScreenTest {
         compose.setContent { GhostCloakTheme { ConversationScreen(AppState(loading = false),
             ContactStatus(contact, RemoteIdentityStatus(IdentityTrustState.CHANGED, IdentityTrustState.VERIFIED), SessionLifecycle.REQUIRES_REAUTHENTICATION),
             {}, {}, { _, _ -> sent = true }, {}) } }
-        compose.onNodeWithText("Send").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
         compose.onNodeWithText("Write a message…").assertIsNotEnabled()
         compose.onNodeWithText("! Security identity changed").assertIsDisplayed()
         assertFalse(sent)

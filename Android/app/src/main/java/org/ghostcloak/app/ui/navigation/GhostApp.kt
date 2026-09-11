@@ -12,6 +12,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import org.ghostcloak.app.application.GhostViewModel
 import org.ghostcloak.app.ui.screens.*
+import org.ghostcloak.app.ui.components.*
 
 @Composable fun GhostApp(model: GhostViewModel) {
     val state by model.state.collectAsState()
@@ -24,13 +25,11 @@ import org.ghostcloak.app.ui.screens.*
     val route = entry?.destination?.route
     Scaffold(containerColor = MaterialTheme.colorScheme.background, bottomBar = {
         if (state.identity != null && route in listOf("contacts", "settings")) {
-            Surface(color = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
-                Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    listOf("contacts" to "Chats", "settings" to "Settings").forEach { (destination, label) ->
-                        val click = { nav.navigate(destination) { popUpTo("contacts"); launchSingleTop = true } }
-                        if (route == destination) FilledTonalButton(onClick = click, modifier = Modifier.weight(1f).heightIn(min = 52.dp)) { Text(label) }
-                        else TextButton(onClick = click, modifier = Modifier.weight(1f).heightIn(min = 52.dp)) { Text(label) }
-                    }
+            NavigationBar(containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
+                listOf(Triple("contacts", "Chats", Glyph.CHAT), Triple("settings", "Settings", Glyph.SETTINGS)).forEach { (destination, label, glyph) ->
+                    NavigationBarItem(selected = route == destination,
+                        onClick = { nav.navigate(destination) { popUpTo("contacts"); launchSingleTop = true } },
+                        icon = { AppIcon(glyph) }, label = { Text(label) })
                 }
             }
         }

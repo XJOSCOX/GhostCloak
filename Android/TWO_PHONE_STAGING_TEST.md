@@ -21,15 +21,15 @@ For a clean test, use fresh test installations without identities you need to re
 
 ## Exchange messages
 
-1. Alice taps **+ New chat**, enters Bob's exact registered username and taps **Find and add contact**. **Bob does not add Alice.**
+1. Alice taps **+ (New chat)**, enters Bob's exact registered username and taps **Find and add contact**. **Bob does not add Alice.**
 2. Do not verify safety numbers yet. Alice opens Bob's conversation and sends `Synthetic one-way A1`.
-3. Alice sees **Queued on server** after upload. Keep Bob's app open; within roughly four seconds plus network time, Alice appears under **MESSAGE REQUESTS** on Bob's phone.
+3. Alice sees **Queued on server** after upload. Keep Bob's app open; within roughly four seconds plus network time, Alice appears as a message request on Bob's phone. The **Requests** filter isolates pending requests.
 4. Bob opens the request. The message is visible and the sender is **Unverified**. No manual Sync or mutual verification is needed. Reply stays disabled until **Accept**.
 5. After Bob's client decrypts, stores and ACKs the message, Alice's next foreground cycle shows **Delivered**. This can happen before Bob taps Accept: Delivered means saved on the receiving endpoint, not human acceptance or reading.
 6. Bob taps **Accept**; Alice becomes a normal contact but remains Unverified. Bob replies `Synthetic reply B1`. Alice receives automatically while foregrounded.
 7. Optionally compare safety numbers through a separate trusted channel and explicitly verify. Confirm messaging worked before verification. Unexpected key changes must still require security review/re-approval.
 8. With another synthetic sender, exercise **Block & delete**. Request history disappears and a blocked identity tombstone prevents recreation. Later blocked messages are not decrypted/ACKed. Local deletion cannot undo a prior Delivered receipt.
-9. Pending messages retry automatically while foregrounded. The composer clears after local saving; do not retype the same message to retry. Manual Sync remains available. Rejection, expiry or missing receipts must never become Delivered.
+9. Pending messages retry automatically while foregrounded. The composer clears after local saving; do not retype the same message to retry. Manual Sync remains in Settings and the conversation options menu. Rejection, expiry or missing receipts must never become Delivered.
 
 ## Persistence and network changes
 

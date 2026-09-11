@@ -6,6 +6,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import org.ghostcloak.app.application.AppState
@@ -22,7 +23,7 @@ import org.ghostcloak.messaging.ContactStatus
     LaunchedEffect(contact.contact.remoteDeviceId, changed) { load(changed) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         ScreenHeader("Contact security", "Verify the person behind the name.", back)
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.spacedBy(16.dp),verticalAlignment=Alignment.CenterVertically) {
             Avatar(contact.contact.displayName)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(contact.contact.displayName, style = MaterialTheme.typography.titleLarge)
@@ -34,9 +35,9 @@ import org.ghostcloak.messaging.ContactStatus
         else InfoPanel(if (contact.session == SessionLifecycle.ACTIVE) "Encrypted session active" else "Session unavailable",
             "Unverified means you have not independently confirmed this identity. Successful encryption does not verify a person.")
         SectionLabel(if (changed) "NEW SAFETY NUMBER" else "SAFETY NUMBER")
-        Surface(shape = MaterialTheme.shapes.medium) {
+        Surface(shape = MaterialTheme.shapes.large, color=MaterialTheme.colorScheme.primaryContainer) {
             Text(if (state.fingerprint.isEmpty()) "Loading safety number…" else state.fingerprint.split(" ").chunked(3).joinToString("\n") { it.joinToString("  ") },
-                Modifier.fillMaxWidth().padding(24.dp), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.titleMedium)
+                Modifier.fillMaxWidth().padding(24.dp), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.titleMedium, color=MaterialTheme.colorScheme.onPrimaryContainer)
         }
         Text("Both people should see exactly the same number. Compare every group.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         FullButton(if (changed) "Review new identity" else "Mark verified", !state.loading && state.fingerprint.isNotEmpty()) { confirmation = state.fingerprint }

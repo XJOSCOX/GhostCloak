@@ -31,7 +31,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
     val list = rememberLazyListState()
     LaunchedEffect(state.messages.size) { if (state.messages.isNotEmpty()) list.animateScrollToItem(state.messages.lastIndex) }
     Column(Modifier.fillMaxSize().imePadding()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Surface(color=MaterialTheme.colorScheme.surface) { Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = back) { AppIcon(Glyph.BACK, "Back") }
             Avatar(status.contact.displayName, Modifier.size(40.dp))
             Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
@@ -47,6 +47,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
                     DropdownMenuItem(text={Text("Sync")},onClick={actions=false;sync()})
                 }
             }
+        }
         }
         if(!state.networkConnected) Box(Modifier.padding(horizontal = 16.dp)) { NetworkActions(state, connect, sync) }
         HorizontalDivider()
@@ -79,7 +80,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
                 }
             }
         }
-        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Surface(color=MaterialTheme.colorScheme.surface) { Column(Modifier.padding(horizontal = 16.dp, vertical=10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ErrorNotice(state.error)
             if (size > EnvelopeCodec.MAX_BODY || rejectedPaste) Text("Too large. Maximum 16,384 UTF-8 bytes; text was not sent.", color = MaterialTheme.colorScheme.error)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -92,6 +93,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
             }
             Text(if (size > 14000) "$size / 16,384 bytes" else "End-to-end encrypted", Modifier.padding(start = 10.dp, bottom = 12.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
     }
     deleting?.let { id -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text("Delete from this device?") },
         text = { Text("The other endpoint keeps its copy. Erasure from backups, memory or flash remnants is not guaranteed.") },

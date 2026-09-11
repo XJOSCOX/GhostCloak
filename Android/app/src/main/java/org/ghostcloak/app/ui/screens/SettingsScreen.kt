@@ -27,10 +27,9 @@ import org.ghostcloak.app.ui.components.*
             TextButton(onClick={editing=true}) {Text("Edit")}
         }
         ErrorNotice(state.error)
-        SettingsGroup("Privacy & appearance") {
+        SettingsGroup("Appearance") { AppearanceSelector() }
+        SettingsGroup("Privacy") {
             DetailRow(Glyph.SHIELD,"Encrypted on this device","Your conversations and keys are kept in encrypted local storage.")
-            HorizontalDivider(color=MaterialTheme.colorScheme.outlineVariant)
-            DetailRow(Glyph.SETTINGS,"Matches your phone","Light and dark appearance follow your Android system setting.")
             Text("App lock and screenshot protection are not enabled. An unlocked device can still expose messages.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if(!state.demo) SettingsGroup("Connection") {

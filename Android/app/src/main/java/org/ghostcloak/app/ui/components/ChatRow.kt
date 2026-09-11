@@ -15,11 +15,11 @@ import java.time.format.DateTimeFormatter
 @Composable fun ChatRow(status: ContactStatus, last: Message?, open: (String) -> Unit) {
     val contact = status.contact
     Surface(onClick = { open(contact.remoteDeviceId) }, shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(vertical = 16.dp, horizontal = 0.dp), verticalAlignment = Alignment.CenterVertically,
+        color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(vertical = 13.dp, horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Avatar(contact.displayName)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(contact.displayName, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)

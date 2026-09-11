@@ -21,8 +21,8 @@ import java.time.format.DateTimeFormatter
     Column(Modifier.fillMaxWidth(),horizontalAlignment=if(outgoing) Alignment.End else Alignment.Start) {
         Box {
             Surface(shape=RoundedCornerShape(18.dp,18.dp,if(outgoing) 4.dp else 18.dp,if(outgoing) 18.dp else 4.dp),
-                color=if(outgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                contentColor=if(outgoing) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                color=if(outgoing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                contentColor=if(outgoing) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                 modifier=Modifier.widthIn(max=300.dp).combinedClickable(onClick={menu=true},onLongClick={menu=true})
                     .semantics { customActions=listOf(CustomAccessibilityAction("Delete from this device") { onDelete();true }) }) {
                 Column(Modifier.padding(horizontal=14.dp,vertical=10.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {

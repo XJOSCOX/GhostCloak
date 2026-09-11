@@ -40,14 +40,14 @@ class MessengerDesignTest {
             accept = { accepted = true; status.value = contact.copy(contact = contact.contact.copy(request = false)) }) } } }
         compose.onNodeWithText("Write a message…").assertIsNotEnabled()
         compose.onNodeWithText("Accept").assertIsDisplayed()
-        screenshot("redesign-request-light.png")
+        screenshot("organized-request-light.png")
         compose.onNodeWithText("Accept").performClick()
         compose.onNodeWithText("Write a message…").assertIsEnabled()
         assertTrue(accepted)
         compose.onNodeWithText("Encrypted · Unverified").assertIsDisplayed()
-        screenshot("redesign-conversation-light.png")
+        screenshot("organized-conversation-light.png")
         compose.runOnIdle { dark.value=true }
-        screenshot("redesign-conversation-dark.png")
+        screenshot("organized-conversation-dark.png")
     }
     @Test fun chatListSeparatesRequestsAndShowsLocalPreviews() {
         val known = contact.copy(contact = contact.contact.copy(contactId = RandomIdentifiers.create(), remoteDeviceId = RandomIdentifiers.create(), displayName = "morgan", request = false))
@@ -62,7 +62,8 @@ class MessengerDesignTest {
             contacts = listOf(contact, known)+extras.map {it.first}, previews = mapOf(known.contact.remoteDeviceId to last)+extras.associate {it.first.contact.remoteDeviceId to it.second}), {}, {}) } } }
         compose.onNodeWithText("Requests 1").assertIsDisplayed()
         compose.onNodeWithText("You: Sounds good. I'll bring coffee.").assertIsDisplayed()
-        screenshot("redesign-chats-light.png")
+        screenshot("organized-chats-light.png")
+        compose.onNodeWithText("alice").assertDoesNotExist()
         compose.onNodeWithText("Requests 1").performClick()
         compose.onNodeWithText("morgan").assertDoesNotExist()
         compose.onNodeWithText("alice").assertIsDisplayed()
@@ -72,6 +73,6 @@ class MessengerDesignTest {
         compose.onNodeWithText("morgan").assertIsDisplayed()
         compose.onNodeWithContentDescription("Clear search").performClick()
         compose.runOnIdle { dark.value = true }
-        screenshot("redesign-chats-dark.png")
+        screenshot("organized-chats-dark.png")
     }
 }

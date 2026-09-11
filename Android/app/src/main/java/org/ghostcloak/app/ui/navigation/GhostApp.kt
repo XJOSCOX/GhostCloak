@@ -24,9 +24,9 @@ import org.ghostcloak.app.ui.components.*
     val entry by nav.currentBackStackEntryAsState()
     val route = entry?.destination?.route
     Scaffold(containerColor = MaterialTheme.colorScheme.background, bottomBar = {
-        if (state.identity != null && route in listOf("contacts", "settings")) {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
-                listOf(Triple("contacts", "Chats", Glyph.CHAT), Triple("settings", "Settings", Glyph.SETTINGS)).forEach { (destination, label, glyph) ->
+        if (state.identity != null && route in listOf("contacts", "people", "settings")) {
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+                listOf(Triple("contacts", "Chats", Glyph.CHAT), Triple("people", "Contacts", Glyph.PERSON), Triple("settings", "Settings", Glyph.SETTINGS)).forEach { (destination, label, glyph) ->
                     NavigationBarItem(selected = route == destination,
                         onClick = { nav.navigate(destination) { popUpTo("contacts"); launchSingleTop = true } },
                         icon = { AppIcon(glyph) }, label = { Text(label) })
@@ -39,6 +39,7 @@ import org.ghostcloak.app.ui.components.*
                 if (state.identity == null) FirstLaunchScreen(state, model::create)
                 else NavHost(nav, startDestination = "contacts") {
                     composable("contacts") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork) }
+                    composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
                     composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard, {name->model.addNetwork(name) {nav.popBackStack()}}) { text -> model.importCard(text) { nav.popBackStack() } } }
                     composable("settings") { SettingsScreen(state, model::rename, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork) }
                     composable("conversation/{id}") { backStack ->

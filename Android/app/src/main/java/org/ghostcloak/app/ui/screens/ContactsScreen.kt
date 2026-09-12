@@ -11,7 +11,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.unit.dp
 import org.ghostcloak.app.ui.theme.GhostEffects
 import org.ghostcloak.app.application.AppState
@@ -23,10 +22,7 @@ import org.ghostcloak.app.ui.components.*
         (!directory || !it.contact.request) && (!directory || it.contact.displayName.contains(query,ignoreCase=true)) }
     val chats = if(directory) matching.sortedBy {it.contact.displayName.lowercase()} else matching.sortedByDescending {state.previews[it.contact.remoteDeviceId]?.timestamp ?: 0}
     val accent = MaterialTheme.colorScheme.primary
-    Box(Modifier.fillMaxSize().drawWithCache {
-        val wash = Brush.verticalGradient(listOf(accent.copy(alpha=GhostEffects.HeaderWashAlpha), Color.Transparent),endY=GhostEffects.HeaderWashHeight.toPx())
-        onDrawBehind { if(!directory) drawRect(wash) }
-    }) {
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(Modifier.fillMaxSize().padding(horizontal=if(directory) 16.dp else 12.dp)) {
             Row(Modifier.fillMaxWidth().padding(horizontal=if(directory) 4.dp else 0.dp,vertical=if(directory) 20.dp else 6.dp),verticalAlignment=Alignment.CenterVertically) {
                 Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)) {

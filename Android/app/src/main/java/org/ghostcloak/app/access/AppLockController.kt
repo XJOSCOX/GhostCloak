@@ -16,6 +16,7 @@ data class LockViewState(
     val mode: LockMode = LockMode.OFF, val timing: LockTiming = LockTiming.IMMEDIATE,
     val busy: Boolean = false, val unavailable: Boolean = false, val message: String? = null,
     val manageGranted: Boolean = false, val biometricConfirmed: Boolean = false,
+    val visible: Boolean = false, val presentation: Long = 0,
 )
 
 /** Process-owned; UI/lifecycle calls run on Main. Slow KDF/records operations run off Main. */
@@ -34,15 +35,18 @@ class AppLockController internal constructor(
     private var sequence = 0L
     private var prompt: Triple<Long, Long, UnlockPurpose>? = null
     private var timer: Job? = null
+    private var automaticPromptConsumed = false
+    private var presentation = 0L
     private fun valid(grant: Pair<Long, Long>?) = grant != null && grant.first == session.generation &&
         now() < grant.second && session.canShow
     private fun update(message: String? = mutable.value.message) {
         mutable.value = mutable.value.copy(ready = initialized, canShowContent = initialized && !mutable.value.unavailable && session.canShow,
-            mode = config.mode, timing = config.timing, message = message,
+            mode = config.mode, timing = config.timing, message = message, visible = session.started, presentation = presentation,
             manageGranted = config.mode == LockMode.OFF || valid(management), biometricConfirmed = valid(enrollment))
     }
     fun start() { timer?.cancel(); session.start(); update(null) }
     fun stop(changingConfiguration: Boolean = false) {
+        if (session.started && !changingConfiguration) { automaticPromptConsumed = false; presentation++ }
         session.stop(changingConfiguration); prompt = null; management = null; enrollment = null
         update(null)
         timer?.cancel()
@@ -111,7 +115,16 @@ class AppLockController internal constructor(
         if (!initialized || mutable.value.unavailable || !session.started || mutable.value.busy) return null
         if (purpose != UnlockPurpose.ENROLL && !config.mode.biometric) return null
         if (purpose == UnlockPurpose.ENROLL && !session.canShow) return null
+        if (prompt != null) return null
+        if (purpose == UnlockPurpose.UNLOCK) automaticPromptConsumed = true
         val id = ++sequence; prompt = Triple(id, session.generation, purpose); update(null); return id
+    }
+    /** Called only by a ready, resumed UI host. Consumption survives rotation and recomposition. */
+    internal fun beginAutomaticBiometric(available: Boolean): Long? {
+        if (!initialized || mutable.value.unavailable || !session.started || !session.locked ||
+            !config.mode.biometric || mutable.value.busy || automaticPromptConsumed) return null
+        automaticPromptConsumed = true
+        return if (available) beginBiometric(UnlockPurpose.UNLOCK) else null
     }
     fun cancelBiometric(id: Long, error: Boolean = false) {
         if (prompt?.first == id) { prompt = null; update(if (error) "Biometric unavailable. Use your PIN if configured, or check Android security settings." else null) }

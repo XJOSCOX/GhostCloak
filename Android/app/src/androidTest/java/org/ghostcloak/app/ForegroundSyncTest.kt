@@ -43,9 +43,18 @@ class ForegroundSyncTest {
             withTimeout(1500) { while (fetches == stopped) delay(25) }
         } finally {
             loop?.cancelAndJoin()
-            withContext(Dispatchers.Main) { store.clear() }
+            clearAndJoin(listOf(store))
             runtime.close()
         }
+    }
+
+    private suspend fun clearAndJoin(stores: List<ViewModelStore>) {
+        // Await cancelled database work before closing the test runtimes.
+        val jobs = withContext(Dispatchers.Main) {
+            stores.mapNotNull { it.get("test")?.viewModelScope?.coroutineContext?.get(Job) }
+                .also { stores.forEach { it.clear() } }
+        }
+        jobs.forEach { it.join() }
     }
 
     private class Owner : LifecycleOwner {
@@ -108,7 +117,7 @@ class ForegroundSyncTest {
             assertEquals(initialLogins + 2, api.logins)
         } finally {
             loops.forEach { it.cancelAndJoin() }
-            withContext(Dispatchers.Main) { stores.forEach { it.clear() } }
+            clearAndJoin(stores)
             a.close(); b.close()
         }
     }

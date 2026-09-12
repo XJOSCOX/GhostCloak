@@ -5,6 +5,53 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AppLockTest {
+    @Test fun biometricColdStartAndProcessRecreationPromptOnceWithManualRetryAfterCancel() = runBlocking {
+        val memory = Memory()
+        Fixture(memory).use { f -> f.ready(); f.pin(LockMode.BIOMETRIC) }
+        repeat(2) { Fixture(memory).use { f ->
+            assertNull(f.lock.beginAutomaticBiometric(true))
+            f.ready()
+            val automatic = f.lock.beginAutomaticBiometric(true)!!
+            assertNull(f.lock.beginAutomaticBiometric(true))
+            f.lock.cancelBiometric(automatic)
+            assertFalse(f.lock.state.value.canShowContent)
+            assertNull(f.lock.beginAutomaticBiometric(true))
+            val manual = f.lock.beginBiometric(UnlockPurpose.UNLOCK)!!
+            assertTrue(f.lock.completeBiometric(manual)); assertTrue(f.lock.state.value.canShowContent)
+            assertNull(f.lock.beginAutomaticBiometric(true))
+        } }
+    }
+    @Test fun resumePromptsOnlyWhenLockedAndRotationDoesNotRearmCancelledPrompt() = runBlocking {
+        for (timing in LockTiming.entries) Fixture().use { f ->
+            f.ready(); f.pin(LockMode.COMBINED, timing)
+            if (timing.millis > 0) {
+                f.lock.stop(); f.now += timing.millis - 1; f.lock.start()
+                assertTrue(f.lock.state.value.canShowContent); assertNull(f.lock.beginAutomaticBiometric(true))
+            }
+            f.lock.stop(); f.now += timing.millis; f.lock.start()
+            val automatic = f.lock.beginAutomaticBiometric(true)!!
+            f.lock.cancelBiometric(automatic, true)
+            assertNull(f.lock.beginAutomaticBiometric(true))
+            f.lock.stop(changingConfiguration = true); f.lock.start()
+            assertNull(f.lock.beginAutomaticBiometric(true)); assertFalse(f.lock.state.value.canShowContent)
+            f.lock.stop(); f.lock.start() // A genuinely new foreground presentation, including notification launch.
+            assertNotNull(f.lock.beginAutomaticBiometric(true))
+        }
+    }
+    @Test fun unavailableDoesNotLoopAndPinOnlyNeverPrompts() = runBlocking {
+        Fixture().use { f ->
+            f.ready(); f.pin(LockMode.COMBINED); f.lock.stop(); f.lock.start()
+            assertNull(f.lock.beginAutomaticBiometric(false))
+            assertNull(f.lock.beginAutomaticBiometric(true))
+            assertTrue(f.lock.verifyPin("824619".toCharArray()))
+        }
+        Fixture().use { f ->
+            f.ready(); f.pin(); f.lock.stop(); f.lock.start()
+            assertNull(f.lock.beginAutomaticBiometric(true))
+            assertNull(f.lock.beginBiometric(UnlockPurpose.UNLOCK))
+            assertFalse(f.lock.state.value.canShowContent)
+        }
+    }
     private class Memory : LockPersistence {
         var bytes: ByteArray? = null
         var fail = false

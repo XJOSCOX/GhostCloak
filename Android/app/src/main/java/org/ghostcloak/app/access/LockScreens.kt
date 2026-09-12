@@ -17,6 +17,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.Lifecycle
@@ -60,9 +63,9 @@ val LocalAppLock = staticCompositionLocalOf<AppLockController?> { null }
     }
 }
 
-@Composable private fun PinInput(value: String, label: String, enabled: Boolean, changed: (String) -> Unit) {
+@Composable private fun PinInput(value: String, label: String, enabled: Boolean, modifier: Modifier = Modifier, changed: (String) -> Unit) {
     OutlinedTextField(value, onValueChange = { if (it.length <= 64 && it.all { c -> c in '0'..'9' }) changed(it) },
-        modifier = Modifier.fillMaxWidth(), label = { Text(label) }, enabled = enabled, singleLine = true,
+        modifier = modifier.fillMaxWidth(), label = { Text(label) }, enabled = enabled, singleLine = true,
         visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword))
 }
 
@@ -78,7 +81,14 @@ val LocalAppLock = staticCompositionLocalOf<AppLockController?> { null }
     }
     if (state.mode.biometric) BiometricButton(controller, purpose)
     if (state.mode.pin) {
-        PinInput(pin, "PIN", !state.busy) { pin = it }
+        val focus = remember { FocusRequester() }
+        val keyboard = LocalSoftwareKeyboardController.current
+        LaunchedEffect(state.visible, state.presentation, state.mode) {
+            if (state.visible && state.mode == LockMode.PIN && purpose == UnlockPurpose.UNLOCK) {
+                focus.requestFocus(); keyboard?.show()
+            }
+        }
+        PinInput(pin, "PIN", !state.busy, Modifier.focusRequester(focus)) { pin = it }
         Button(onClick = { val input = pin.toCharArray(); pin = ""; scope.launch { controller.verifyPin(input, purpose) } },
             enabled = !state.busy && pin.length >= 6) { Text(if (purpose == UnlockPurpose.MANAGE) "Confirm access" else "Unlock") }
     }
@@ -90,6 +100,15 @@ private fun Context.fragmentActivity(): FragmentActivity? {
     var current = this
     while (current is ContextWrapper) { if (current is FragmentActivity) return current; current = current.baseContext }
     return current as? FragmentActivity
+}
+
+@Composable internal fun AutomaticBiometricPrompt(controller: AppLockController, available: Boolean,
+    hostReady: Boolean, launch: (Long) -> Unit) {
+    val state by controller.state.collectAsState()
+    val currentLaunch by rememberUpdatedState(launch)
+    LaunchedEffect(state.ready, state.visible, state.presentation, state.busy, available, hostReady) {
+        if (hostReady) controller.beginAutomaticBiometric(available)?.let(currentLaunch)
+    }
 }
 
 @Composable private fun BiometricButton(controller: AppLockController, purpose: UnlockPurpose) {
@@ -110,9 +129,9 @@ private fun Context.fragmentActivity(): FragmentActivity? {
         onDispose { lifecycle.removeObserver(observer); ticket?.let { controller.cancelBiometric(it) }; prompt?.cancelAuthentication() }
     }
     val available = remember(revision) { BiometricManager.from(context).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS }
-    if (available && activity != null) {
-        OutlinedButton(enabled = !state.busy && ticket == null, onClick = {
-            val id = controller.beginBiometric(purpose) ?: return@OutlinedButton
+    val hostReady = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && activity != null && !activity.supportFragmentManager.isStateSaved
+    val launchPrompt: (Long) -> Unit = { id ->
+        if (activity != null) {
             ticket = id
             val next = BiometricPrompt(activity, ContextCompat.getMainExecutor(context), object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
@@ -123,12 +142,23 @@ private fun Context.fragmentActivity(): FragmentActivity? {
                     ticket = null
                     controller.cancelBiometric(id, errorCode !in setOf(BiometricPrompt.ERROR_CANCELED, BiometricPrompt.ERROR_USER_CANCELED, BiometricPrompt.ERROR_NEGATIVE_BUTTON))
                 }
-                // Non-matches stay in the system prompt. Never log callback details.
+                override fun onAuthenticationFailed() {
+                    ticket = null
+                    controller.cancelBiometric(id)
+                    prompt?.cancelAuthentication()
+                }
+                // No callback details are logged; another attempt requires an explicit retry.
             })
             prompt = next
             try { next.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Unlock Ghost Cloak")
                 .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG).setNegativeButtonText("Cancel").build()) }
             catch (_: Exception) { ticket = null; controller.cancelBiometric(id, true) }
+        }
+    }
+    if (purpose == UnlockPurpose.UNLOCK) AutomaticBiometricPrompt(controller, available, hostReady, launchPrompt)
+    if (available && activity != null) {
+        OutlinedButton(enabled = hostReady && !state.busy && ticket == null, onClick = {
+            controller.beginBiometric(purpose)?.let(launchPrompt)
         }) { Text(if (purpose == UnlockPurpose.ENROLL) "Confirm biometric" else "Use biometric") }
     } else {
         Text("Strong biometric unavailable. Use your PIN if configured, or check Android security settings.", style = MaterialTheme.typography.bodySmall)

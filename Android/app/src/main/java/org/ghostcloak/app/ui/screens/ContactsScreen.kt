@@ -1,6 +1,7 @@
 package org.ghostcloak.app.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,27 +27,35 @@ import org.ghostcloak.app.ui.components.*
         val wash = Brush.verticalGradient(listOf(accent.copy(alpha=0.06f), Color.Transparent),endY=220.dp.toPx())
         onDrawBehind { if(!directory) drawRect(wash) }
     }) {
-        Column(Modifier.fillMaxSize().padding(horizontal=16.dp)) {
-            Row(Modifier.fillMaxWidth().padding(horizontal=4.dp,vertical=20.dp),verticalAlignment=Alignment.CenterVertically) {
+        Column(Modifier.fillMaxSize().padding(horizontal=if(directory) 16.dp else 12.dp)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal=if(directory) 4.dp else 0.dp,vertical=if(directory) 20.dp else 6.dp),verticalAlignment=Alignment.CenterVertically) {
                 Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)) {
                     Text(if(directory) "Contacts" else "Ghost Cloak",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.SemiBold)
-                    Text(if(directory) "People you know" else "Chats",
+                    if(directory) Text("People you know",
                         style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.primary)
                 }
                 if(!directory) {
-                    FilledIconButton(onClick=add,modifier=Modifier.size(48.dp),shape=RoundedCornerShape(16.dp)) {
-                        AppIcon(Glyph.PLUS,"New chat")
+                    IconButton(onClick=add,modifier=Modifier.size(48.dp)) {
+                        Surface(Modifier.size(32.dp),shape=RoundedCornerShape(10.dp),color=MaterialTheme.colorScheme.primary,
+                            contentColor=MaterialTheme.colorScheme.onPrimary) {
+                            Box(contentAlignment=Alignment.Center) { AppIcon(Glyph.PLUS,"New chat",Modifier.size(18.dp)) }
+                        }
                     }
-                    Spacer(Modifier.width(12.dp))
-                    BrandMark(Modifier.size(30.dp))
+                    Spacer(Modifier.width(4.dp))
+                    BrandMark(Modifier.size(20.dp))
                 }
+            }
+            if(!directory) {
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Brush.horizontalGradient(
+                    listOf(accent.copy(alpha=0.22f),accent.copy(alpha=0.08f),Color.Transparent))))
+                Text("Chats",Modifier.padding(top=10.dp),style=MaterialTheme.typography.labelLarge,color=accent)
             }
             if(directory) OutlinedTextField(query,{if(it.length<=64) query=it},singleLine=true,placeholder={Text(if(directory) "Search contacts" else "Search chats")},
                 leadingIcon={AppIcon(Glyph.SEARCH)},trailingIcon=if(query.isEmpty()) null else {{IconButton(onClick={query=""}) {AppIcon(Glyph.CLOSE,"Clear search")}}},
                 shape=RoundedCornerShape(14.dp),modifier=Modifier.fillMaxWidth(),
                 colors=OutlinedTextFieldDefaults.colors(unfocusedBorderColor=Color.Transparent,focusedBorderColor=MaterialTheme.colorScheme.primary,
                     unfocusedContainerColor=MaterialTheme.colorScheme.surface,focusedContainerColor=MaterialTheme.colorScheme.surface))
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(if(directory) 16.dp else 12.dp))
             if(state.networkConfigured && !state.demo && !state.networkConnected) NetworkActions(state,connect,sync)
             if(state.error!=null) ErrorNotice(state.error)
             if(chats.isEmpty()) {

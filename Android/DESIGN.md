@@ -6,7 +6,7 @@ Layout references: [Inbox Chat App](https://dribbble.com/shots/24369393-Inbox-Ch
 
 ## Screens
 
-- Chats: Ghost Cloak header, small Chats label, and a top-right New chat button beside the brand icon. No search or filter controls. Conversation previews and incoming requests share the list; request labels and acceptance gating are preserved.
+- Chats: Compact Ghost Cloak header with reduced top/side padding and smaller top-right compose/brand icons. A fading divider separates the header from the small Chats label. The compose action keeps a 48 dp touch target around its 32 dp visible button. No search or filter controls. Conversation previews and incoming requests share the list; request labels and acceptance gating are preserved.
 - Contacts: an alphabetical list of existing contacts, local search and an Add contact action. Pending requests remain in Chats.
 - Conversation: compact avatar header, safety control, date separators, incoming/outgoing bubbles and an icon send button. Tap or long-press a bubble for local deletion. The options menu retains manual Sync. Request acceptance and changed-key gates still control the composer.
 - New chat: exact-username lookup, with contact-card tools retained in local/demo mode.

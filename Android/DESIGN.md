@@ -23,7 +23,7 @@ Unread counts come from encrypted local state. No presence, calls, attachments o
 - `Theme.kt`: semantic light/dark Material color roles and theme composition.
 - `Type.kt`: Space Grotesk for every Material typography role, with variable font weights 300–700. Safety numbers retain a centrally defined monospaced style for comparisons.
 - `Shapes.kt` and `Effects.kt`: shared corner shapes and decorative opacity values.
-- `Layout.kt`: common 16 dp page inset, 56 dp minimum header row, 20 dp header icons, 48 dp touch targets, 4 dp divider spacing and maximum page width.
+- `Layout.kt`: common 16 dp page inset, 56 dp minimum header row, 20 dp header icons, 48 dp touch targets with compensated outer insets so visible glyphs align with the 16 dp title/content edges, 4 dp divider spacing and maximum page width.
 - `Dimensions.kt`: reusable dimensions for controls and internal content. Screens/components contain no raw dp, font-size or color literals.
 - `components/PageHeader.kt`: shared title/back/actions/divider and scrollable PageContent used by onboarding, settings, profiles, new chat and security. Chats and conversation use the same header with lazy-list content; system insets remain owned by the root Scaffold.
 - `AvatarColors.kt`: semantic avatar color selection; `Appearance.kt`: persisted Light/Dark/Automatic preference.

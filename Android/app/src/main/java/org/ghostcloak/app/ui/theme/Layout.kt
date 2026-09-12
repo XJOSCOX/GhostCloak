@@ -9,6 +9,10 @@ object GhostLayout {
     val headerHeight = 56.dp
     val headerIcon = 20.dp
     val touchTarget = 48.dp
+    // IconButton centers a 20 dp glyph in a 48 dp target. Account for that
+    // internal space so glyphs and plain titles share the page's visible edge.
+    val headerTargetInset = (touchTarget - headerIcon) / 2
+    val headerOuterInset = pageInset - headerTargetInset
     val dividerGap = 4.dp
     val maxPageWidth = 680.dp
 }

@@ -21,11 +21,11 @@ import org.ghostcloak.app.ui.theme.GhostLayout
 @Composable fun PageHeader(title: String, subtitle: String? = null, back: (() -> Unit)? = null,
     center: String? = null, leading: (@Composable () -> Unit)? = null, actions: @Composable RowScope.() -> Unit = {}) {
     Column(Modifier.fillMaxWidth().testTag("page-header")) {
-        Row(Modifier.fillMaxWidth().heightIn(min = GhostLayout.headerHeight).padding(horizontal = GhostLayout.pageInset),
+        Row(Modifier.fillMaxWidth().heightIn(min = GhostLayout.headerHeight).padding(horizontal = GhostLayout.headerOuterInset),
             verticalAlignment = Alignment.CenterVertically) {
             if (back != null) HeaderAction(Glyph.BACK, "Back", back)
             if (leading != null) Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { leading() }
-            else Column(Modifier.weight(1f)) {
+            else Column(Modifier.weight(1f).padding(start = if (back == null) GhostLayout.headerTargetInset else org.ghostcloak.app.ui.theme.GhostDimensions.none)) {
                 Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (!subtitle.isNullOrEmpty()) Text(subtitle, style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)

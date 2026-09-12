@@ -35,6 +35,10 @@ class LocalRepository(private val records: EndpointRecords) {
         val seen = read<List<String>>("app/read/$id").orEmpty().toSet()
         messages(id).count { it.direction == Direction.INCOMING && it.localId !in seen }
     }
+    fun unreadMessageIds(id: String): Set<String> = records.transaction {
+        val seen = read<List<String>>("app/read/$id").orEmpty().toSet()
+        messages(id).filter { it.direction == Direction.INCOMING && it.localId !in seen }.map { it.localId }.toSet()
+    }
     fun markRead(id: String) = records.transaction {
         val seen = messages(id).filter { it.direction == Direction.INCOMING }.map { it.localId }
         if (read<List<String>>("app/read/$id") != seen) put("app/read/$id", seen)
@@ -54,5 +58,7 @@ class LocalRepository(private val records: EndpointRecords) {
     fun saveAccepted(message:Message,hash:ByteArray)=records.transaction {
         require(records.keys("app/accepted/").size<10000)
         save(message); records.write("app/accepted/${message.conversationId}/${message.envelopeId}",hash)
+        // Same transaction as authenticated content and deduplication; never enqueue on FETCH alone.
+        NotificationLedger.accepted(records, message)
     }
 }

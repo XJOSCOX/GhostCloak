@@ -21,10 +21,11 @@ import org.ghostcloak.app.ui.components.*
             DetailRow(Glyph.SHIELD,"Encrypted on this device","Your conversations and keys are kept in encrypted local storage.")
             Text("App lock and screenshot protection are not enabled. An unlocked device can still expose messages.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        if (!state.demo && state.networkConfigured) NotificationSettings()
         if(!state.demo) SettingsGroup("Connection") {
             if(state.networkConfigured) {
                 NetworkActions(state,connect,sync)
-                Text("Messages refresh while the app is open. No background notifications yet.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Background checks are best-effort and may be delayed by Android. Optional notifications never show sender names or message previews.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 if(state.networkConnected) TextButton(onClick=logout,enabled=!state.loading) {Text("Disconnect and revoke session")}
                 TextButton(onClick={advanced=!advanced}) {Text(if(advanced) "Hide connection details" else "Connection details")}
                 if(advanced) {

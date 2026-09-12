@@ -1,6 +1,6 @@
 # Phase 1F: private background delivery design
 
-Status: Phase 1F.1 implements the first background FETCH/STORE/ACK slice (2026-09-12). The original architecture audit was against `d939b6e`; app lock and notification design remain future work. Proposed options below are not delivery guarantees.
+Status: Phase 1F.1 implements the first background FETCH/STORE/ACK slice (2026-09-12). The original architecture audit was against `d939b6e`; Phase 1F.2 adds maximum-privacy local notifications. App lock remains future work. Proposed options below are not delivery guarantees.
 
 ### Implemented in Phase 1F.1
 
@@ -12,7 +12,17 @@ Status: Phase 1F.1 implements the first background FETCH/STORE/ACK slice (2026-0
 - Worker never publishes ordinary errors to the ViewModel. Transient failures produce scheduler retry; permanent/security failures skip without wiping local state. Debug `GhostCloakBg` emits only the five fixed WORK events; release is a no-op. Library logging is disabled.
 - Merged manifest adds ordinary WorkManager INTERNET-adjacent capabilities: ACCESS_NETWORK_STATE, WAKE_LOCK and RECEIVE_BOOT_COMPLETED (no runtime permission prompt). SystemJobService runs in the same process and is not Direct Boot aware. Alarm service/proxies, foreground service/permission and the library diagnostics receiver are removed. WorkManager's API-30+ scheduling uses JobScheduler; its internal pre-30 force-stop alarm fallback is outside this app's supported API range. Android stopped-state restrictions remain authoritative.
 
-**Still proposed:** randomized 20–40-minute eligibility, optional background enable/settings controls, local notification ledger/channels/permission, generic notifications, app lock, biometric/PIN unlock and maximum-security mode. No notification or app-lock behavior is implemented. Physical overnight/OEM latency measurements remain future validation.
+### Implemented in Phase 1F.2
+
+- Accepted incoming network messages acquire an encrypted `NotificationLedger` marker in the existing decrypt/commit transaction with content and the acceptance hash. Failed validation/decryption/storage and duplicates do not enqueue eligibility. Existing ACK and delivery semantics are unchanged.
+- The application-owned runtime reconciles eligibility after operations, including partially successful sync cycles, and on existing-runtime initialization. It prunes read/deleted/blocked entries under the same operation mutex. Nothing sensitive is placed in WorkManager or Android notification metadata.
+- One channel (`ghostcloak-messages`, user-visible **Ghost Cloak messages**) and one aggregate notification (local ID 1) show only **Ghost Cloak / New message**. DEFAULT importance, SECRET visibility, no public version, badges disabled, no count, sender, preview, Person, shortcut, reply action or contact group. OS/framework metadata and any silent-update group are generic. Android/OEM/user settings can override presentation; notification history/listeners may retain the generic alert and its timing.
+- Eligibility progresses PENDING → POSTING → ANNOUNCED. POSTING commits before OS publication. A crash after ACK leaves eligibility; a crash during publication recovers with a silent stable-ID update. Database and OS publication cannot be atomic: this deliberately favors a missed sound over a repeated sound. New arrivals quietly update an existing aggregate. ANNOUNCED entries never re-alert on duplicate delivery. Swipe dismissal removes published eligibility without changing read markers; unpublished arrivals remain eligible.
+- While any app screen is foregrounded, cancel the system aggregate and consume eligibility in favor of existing in-app unread indicators. Read state changes only through existing conversation behavior. A visibility check immediately before publication prevents posting behind a newly resumed screen. Logout suppresses eligibility and cancels the aggregate; it cannot reconnect.
+- Android 13+ permission is an optional, user-initiated **Settings → Notifications → Enable notifications** action. Only one request is offered; later changes open Android settings. Denial/channel disablement cannot block decrypt/store/ACK and pending eligibility remains until presentation or foreground suppression. No Worker requests permission.
+- Immutable app-local intents contain no extras or identifiers. Tap enters MainActivity through the normal root and selects Chats, including an existing task. Future app lock can intercept at that root; no app lock is implemented. No notification diagnostics or logging were added in debug or release.
+
+**Still proposed:** randomized 20–40-minute eligibility, optional background enable controls, richer notification levels, app lock, biometric/PIN unlock and maximum-security mode. Physical overnight/OEM latency measurements remain future validation.
 
 ## 1. Executive summary
 
@@ -69,7 +79,7 @@ See [alarm restrictions](https://developer.android.com/develop/background-work/s
 1. After explicit connection and background-sync enablement, reconcile one constant-name periodic request. No usernames, IDs, tokens or message data in work names, tags, input or output. WorkManager's database is not encrypted message storage.
 2. Require connectivity and unlocked credential storage. Worker obtains the process-owned runtime, never its own engine or registration path.
 3. Under a shared coordinator/runtime lock, recheck identity, logout eligibility, lifecycle generation, recent completion and global cooldown. Skip checks already covered by foreground sync; otherwise execute a bounded existing NetworkController sync.
-4. Existing acceptance commits decrypted content and deduplication state before ACK. Future local notification eligibility must be committed durably with acceptance without changing the wire protocol.
+4. Existing acceptance commits decrypted content and deduplication state before ACK. Phase 1F.2 commits local notification eligibility durably with acceptance without changing the wire protocol.
 5. Reconcile a generic notification from accepted, still-unread eligible messages, then finish. No notification on ciphertext arrival or failed decryption.
 
 Keep foreground immediate-on-resume and adaptive delays unchanged. Retain periodic registration while foregrounded, but skip execution through the coordinator: repeated cancel/re-enqueue can postpone periodic work indefinitely. Supersede stale one-time work if later introduced. On resume, join an in-flight worker result or wait for safe completion before the immediate attempt; never double-poll.
@@ -79,6 +89,8 @@ Proposed jitter: after background completion persist eligibility 20–40 minutes
 ## 6. Notification privacy model
 
 Default title: **Ghost Cloak**. Body: **New message**. One aggregate notification; no sender/avatar, conversation name, contact counts, preview, safety status or protocol metadata. Use an opaque local notification ID, generic channel name and immutable app-local PendingIntent opening Chats. No remote identifiers/content in extras, Persons, shortcuts, groups or actions. No inline reply initially.
+
+Only maximum privacy is implemented in Phase 1F.2. The richer levels below remain proposals, with no UI or payload support.
 
 | Optional level | Content | Disclosure |
 | --- | --- | --- |
@@ -123,7 +135,7 @@ Process death, normal relocking and normal in-place updates do not inherently re
 
 Future coordinator must coalesce as well as serialize: recheck completion generation after acquiring the lock to avoid redundant back-to-back FETCHes. Never close the runtime from a Worker or read Room on Main. Cancellation must not release ownership while blocking IO still operates. Current HttpURLConnection uses 5-second connect/read timeouts, not a total sync deadline; check execution budget between operations/pages.
 
-Add an encrypted pending-notification ledger in a future implementation. Commit eligibility with accepted message state and drain later even if a crash follows a successful ACK. Re-delivery must not create a duplicate message or alert. Use a stable aggregate notification ID and quiet updates: notification posting and database commit cannot be atomic, so exactly-once sound cannot be promised. Prefer missed repeat sound over duplicate alerts. Recheck read/deleted/blocked state and foreground visibility before publication. Dismissal suppresses re-alerts for the same messages without marking them read. Existing request/verification and changed-identity gates remain authoritative.
+Phase 1F.2 implements the encrypted pending-notification ledger described above. Commit eligibility with accepted message state and drain later even if a crash follows a successful ACK. Re-delivery must not create a duplicate message or alert. Use a stable aggregate notification ID and quiet updates: notification posting and database commit cannot be atomic, so exactly-once sound cannot be promised. Prefer missed repeat sound over duplicate alerts. Recheck read/deleted/blocked state and foreground visibility before publication. Dismissal suppresses re-alerts for the same messages without marking them read. Existing request/verification and changed-identity gates remain authoritative.
 
 ## 9. Rate-limit interaction
 
@@ -219,7 +231,7 @@ With the current monolithic encrypted records, network tokens, identity/ratchet 
 6. Separately implement optional A: root navigation/action gate, process-owned timing, BiometricPrompt, vetted local PIN verifier/throttling, generic locked notifications and snapshot protection. State clearly that background decryption continues. Review dependencies/permissions and run the lock matrix below before release.
 7. Treat B as a later maximum-security project: review supported auth-bound key policy, store/engine teardown, crash-safe migration, recovery limitations and background suspension before implementation. Do not enable it as a transparent upgrade to A.
 
-Phase 1F.1 implements the scheduling/coordinator/cooldown subset of steps 2–3. Notifications, notification eligibility ledger, settings controls, jitter and both app-lock modes remain unimplemented. See the implemented delta above.
+Phase 1F.1 implements the scheduling/coordinator/cooldown subset of steps 2–3. Phase 1F.2 implements the eligibility ledger and generic local notification/permission slice of step 4. Background settings controls, jitter, richer notifications and both app-lock modes remain unimplemented. See the implemented deltas above.
 
 ## 14. Physical-device test plan
 
@@ -249,4 +261,4 @@ Automated JVM/emulator coverage is part of Phase 1F.1; this document does not cl
 
 ## 15. Explicit non-goals
 
-Phase 1F.1 adds only the ordinary WorkManager scheduling dependency/components described above. Notifications/channels, notification permission and app lock remain non-goals for this slice. No FCM, Google push APIs, OneSignal, Pusher, AWS SNS, Apple/third-party relay or external push broker. No permanent socket, exact alarms, battery-exemption prompts, analytics, remote crash reporting or cover traffic. No backend, Cloudflare/VPS, protocol, crypto, identity, delivery/request semantics, polling cadence or rate-limit changes. No instant-delivery SLA, plaintext server/notification transport, content/token logging or weakened local protections.
+Phase 1F.1 adds only the ordinary WorkManager scheduling dependency/components described above. Phase 1F.2 adds the local channel, optional POST_NOTIFICATIONS permission and generic publication described above. App lock remains a non-goal. No FCM, Google push APIs, OneSignal, Pusher, AWS SNS, Apple/third-party relay or external push broker. No permanent socket, exact alarms, battery-exemption prompts, analytics, remote crash reporting or cover traffic. No backend, Cloudflare/VPS, protocol, crypto, identity, delivery/request semantics, polling cadence or rate-limit changes. No instant-delivery SLA, plaintext server/notification transport, content/token logging or weakened local protections.

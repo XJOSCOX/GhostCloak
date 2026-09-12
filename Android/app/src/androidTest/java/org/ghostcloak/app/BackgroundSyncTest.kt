@@ -232,11 +232,11 @@ class BackgroundSyncTest {
         } finally { a.close(); b.close() }
     }
 
-    @Test fun manifestHasNoNotificationForegroundServiceOrDirectBootWorker() {
+    @Test fun manifestHasOptionalNotificationsButNoForegroundServiceOrDirectBootWorker() {
         val info = context.packageManager.getPackageInfo(context.packageName,
             android.content.pm.PackageManager.GET_PERMISSIONS or android.content.pm.PackageManager.GET_SERVICES)
         val permissions = info.requestedPermissions.orEmpty().toSet()
-        assertFalse("android.permission.POST_NOTIFICATIONS" in permissions)
+        assertTrue("android.permission.POST_NOTIFICATIONS" in permissions)
         assertFalse(permissions.any { "FOREGROUND_SERVICE" in it || "EXACT_ALARM" in it })
         val services = info.services.orEmpty()
         assertTrue(services.any { it.name == "androidx.work.impl.background.systemjob.SystemJobService" && !it.directBootAware })

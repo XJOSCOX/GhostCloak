@@ -1,6 +1,6 @@
 # Android Studio development
 
-For the proposed background-delivery architecture, platform limitations and future physical-device test matrix, see [BACKGROUND_SYNC_DESIGN.md](BACKGROUND_SYNC_DESIGN.md). Phase 1F.1 implements background FETCH/STORE/ACK only; notifications and app lock remain proposed.
+For the proposed background-delivery architecture, platform limitations and future physical-device test matrix, see [BACKGROUND_SYNC_DESIGN.md](BACKGROUND_SYNC_DESIGN.md). Phase 1F.1 implements background FETCH/STORE/ACK; Phase 1F.2 adds optional generic local notifications. App lock remains proposed.
 
 ## Run staging on a phone
 
@@ -90,12 +90,36 @@ In Android Studio Logcat, select the debug app/device and filter `tag:GhostCloak
 
 ## Background synchronization (Phase 1F.1)
 
-After an existing account connects, Android schedules one ordinary periodic check: 30 minutes with 15 minutes of flex and a connected-network requirement. The first check is delayed 30 minutes. Pull, open Android/ and Run as usual; no separate service or manual APK install is needed. There is no notification or new runtime permission prompt in this slice. WorkManager brings ACCESS_NETWORK_STATE, WAKE_LOCK and RECEIVE_BOOT_COMPLETED for scheduling; no foreground service, exact alarm or push provider is used.
+After an existing account connects, Android schedules one ordinary periodic check: 30 minutes with 15 minutes of flex and a connected-network requirement. The first check is delayed 30 minutes. Pull, open Android/ and Run as usual; no separate service or manual APK install is needed. Phase 1F.2 adds an optional notification permission action in Settings; there is no automatic prompt. WorkManager brings ACCESS_NETWORK_STATE, WAKE_LOCK and RECEIVE_BOOT_COMPLETED for scheduling; no foreground service, exact alarm or push provider is used.
 
 Background checks reuse the application runtime, existing identity and encrypted mailbox acceptance/ACK path. They do not display action-error banners. Foreground polling still stops on backgrounding and retains its existing cadence on resume. Logout cancels scheduled work; reopening after logout never reconnects automatically. Before the first unlock after reboot, no encrypted state is accessed. Force-stop prevents work until Android permits execution following user interaction. Doze/OEM restrictions may delay checks for hours; no instant background-delivery promise is made.
 
 Debug Logcat filter: `tag:GhostCloakBg`. Events are only WORK_START, WORK_SKIP, WORK_SUCCESS, WORK_RETRY and WORK_STOP. They contain no reason strings, IDs, URLs, bodies or credentials. Release emits none. `GhostCloakNet` remains the existing sanitized debug network trace. Do not enable general WorkManager verbose logging.
 
-A worker uses a cooperative 30-second cycle budget and four FETCH-attempt budget. Retry starts at 15 minutes and respects the encrypted rate-limit checkpoint. Same-boot cooldowns use elapsed time; reboot conservatively restarts the last saved remaining duration. No wall-clock jump bypasses it. The proposed extra jitter, background settings controls, notifications and app lock are deferred.
+A worker uses a cooperative 30-second cycle budget and four FETCH-attempt budget. Retry starts at 15 minutes and respects the encrypted rate-limit checkpoint. Same-boot cooldowns use elapsed time; reboot conservatively restarts the last saved remaining duration. No wall-clock jump bypasses it. The proposed extra jitter, background enable controls and app lock are deferred.
 
-Tests: run JVM `test`, plus `:app:connectedDebugAndroidTest :storage:connectedDebugAndroidTest` on an explicitly selected test emulator, all with `--dependency-verification strict`. BackgroundSyncTest exercises real encrypted endpoints over an isolated synthetic transport, unique scheduling policy, foreground coalescing, logout/reopen, renewal, cooldown, ACK/deduplication, cancellation, budgets and absence of notifications. These deterministic tests do not establish OEM scheduling latency; see the physical test plan in BACKGROUND_SYNC_DESIGN.md.
+Tests: run JVM `test`, plus `:app:connectedDebugAndroidTest :storage:connectedDebugAndroidTest` on an explicitly selected test emulator, all with `--dependency-verification strict`. BackgroundSyncTest exercises real encrypted endpoints over an isolated synthetic transport, unique scheduling policy, foreground coalescing, logout/reopen, renewal, cooldown, ACK/deduplication, cancellation, budgets and operation with notification publication disabled. These deterministic tests do not establish OEM scheduling latency; see the physical test plan in BACKGROUND_SYNC_DESIGN.md.
+
+
+## Private local notifications (Phase 1F.2)
+
+Use Android Studio → select the physical device → Run app as usual. In Ghost Cloak Settings, Notifications explains the optional permission. On Android 13+, **Enable notifications** requests it only after your tap. After one request, use **Notification settings** to change Android permission/channel settings. Denial does not disable messaging or background synchronization.
+
+Only successfully accepted, decrypted and encrypted-store-committed incoming messages become eligible. One aggregate shows **Ghost Cloak / New message**, never a sender, preview, count or identifier. SECRET lock-screen visibility and disabled channel badges are defaults; Android/OEM/user settings can override presentation. OS history/listeners can observe generic content and timing. There is no external push provider. WorkManager remains best effort (30-minute interval, 15-minute flex), so notifications are not instant.
+
+All foreground screens rely on in-app unread indicators; they suppress system alerts. Dismissal does not mark messages read. A tap opens the ordinary app root/Chats, with no conversation identifier. App lock is not implemented yet. An encrypted ledger survives process death after ACK; an uncertain publication recovers silently to avoid another sound. Notification failures do not change delivery or ACK state. Explicit logout cancels alerts and automatic reconnection eligibility.
+
+### Two-phone validation
+
+1. Install the same staging debug build on Phones A and B using Android Studio Run. Connect existing accounts and enable notifications on B through Settings.
+2. Background B normally (do not force-stop). Send a synthetic message from A. Wait for a normal WorkManager opportunity; Doze/OEM restrictions may delay it well beyond 30 minutes.
+3. B should show one **Ghost Cloak / New message** notification, with no sender, body, count or avatar. Check the locked screen and system shade; default SECRET visibility hides it on the locked screen.
+4. Send more messages while B remains backgrounded. After later delivery, confirm one generic aggregate, without per-contact entries. Swipe it away, then open B: unread indicators should remain until the conversation is opened.
+5. Repeat with a notification tap: B opens normally to Chats; the message is stored and readable after selecting the conversation. A eventually shows Delivered through its existing receipt sync.
+6. Deny B's notification permission in Android settings. Background B and send again. No notification should appear. Open B later and verify the message is present and A eventually shows Delivered; denial must not block FETCH/STORE/ACK.
+7. With B's conversation open, send from A. Confirm the message appears through foreground sync without a redundant system alert. Repeat with B on another foreground screen: use its unread indication.
+8. Log out B explicitly, background it and confirm it does not reconnect or notify until explicit connection.
+
+Automated coverage: NotificationLedgerTest checks real decrypt/commit rollback, deduplication and read/block/delete pruning; LocalNotificationTest checks runtime publication, denied permission, crash recovery, dismissal, foreground suppression, immutable root intent and generic platform payload. Existing lifecycle, renewal, cooldown and background delivery suites must also pass. Automated emulator tests do not establish two-phone/OEM timing; run the physical checklist separately.
+
+Phase 1F.2 automated validation (2026-09-12): 81 JVM tests across test-support and debug/release app variants, 10 isolated PostgreSQL tests, and 72 Android emulator tests (62 app, 10 storage) passed. Debug/release assemblies and IDE source/Javadoc/sample resolution passed with strict dependency verification. The dedicated API-37 test emulator was used; the two-phone checklist above still needs physical-device validation.

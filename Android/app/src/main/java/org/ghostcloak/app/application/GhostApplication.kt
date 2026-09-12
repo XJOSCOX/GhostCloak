@@ -5,7 +5,8 @@ import kotlinx.coroutines.launch
 
 /** A single store/engine owner per process; activity recreation never opens a second engine. */
 class GhostApplication : Application(), androidx.work.Configuration.Provider {
-    val runtime by lazy { AppRuntime(this, backgroundEligibility = { BackgroundSyncSchedule.reconcile(this, it) }) }
+    val runtime by lazy { AppRuntime(this, backgroundEligibility = { BackgroundSyncSchedule.reconcile(this, it) },
+        notifications = AndroidLocalNotifications(this)) }
     override val workManagerConfiguration get() = androidx.work.Configuration.Builder()
         // Silence WorkManager's own logs; only our allowlisted debug events are emitted.
         .setMinimumLoggingLevel(Int.MAX_VALUE).build()
@@ -21,5 +22,13 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider {
         try { runtime.initializeBackground() }
         catch (e: kotlinx.coroutines.CancellationException) { throw e }
         catch (_: Exception) { BackgroundDiagnostics.emit(BackgroundEvent.WORK_SKIP) }
+    }
+    fun dismissNotifications(finished: () -> Unit) {
+        backgroundScope.launch {
+            try { runtime.dismissNotifications() }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { } // No private notification diagnostics.
+            finally { finished() }
+        }
     }
 }

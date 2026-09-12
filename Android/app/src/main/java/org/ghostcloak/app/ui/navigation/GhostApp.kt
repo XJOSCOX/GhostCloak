@@ -13,7 +13,7 @@ import org.ghostcloak.app.application.GhostViewModel
 import org.ghostcloak.app.ui.screens.*
 import org.ghostcloak.app.ui.components.*
 
-@Composable fun GhostApp(model: GhostViewModel) {
+@Composable fun GhostApp(model: GhostViewModel, chatsRequest: Int = 0) {
     val state by model.state.collectAsState()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(model, lifecycle) {
@@ -21,6 +21,17 @@ import org.ghostcloak.app.ui.components.*
     }
     val nav = rememberNavController()
     val entry by nav.currentBackStackEntryAsState()
+    var handledChatsRequest by remember { mutableIntStateOf(0) }
+    LaunchedEffect(chatsRequest, state.identity != null, entry != null) {
+        // The normal root must first install its graph (and, in future, pass the app-lock gate).
+        if (chatsRequest > handledChatsRequest && state.identity != null && entry != null) {
+            nav.navigate("contacts") {
+                popUpTo("contacts") { inclusive = true }
+                launchSingleTop = true
+            }
+            handledChatsRequest = chatsRequest
+        }
+    }
     val route = entry?.destination?.route
     Scaffold(containerColor = MaterialTheme.colorScheme.background, bottomBar = {
         if (state.identity != null && route in listOf("contacts", "people", "profiles", "settings")) {

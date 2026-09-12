@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
 
     <application
@@ -16,6 +17,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.GhostCloak">
+        <receiver android:name=".application.NotificationDismissReceiver" android:exported="false" android:directBootAware="false" />
         <!-- On API 30+ use JobScheduler only; no alarm or foreground-service delivery. -->
         <provider android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup" tools:node="merge">
@@ -31,6 +33,7 @@
         <receiver android:name="androidx.work.impl.background.systemalarm.ConstraintProxyUpdateReceiver" tools:node="remove" />
         <activity
             android:name=".MainActivity"
+            android:launchMode="singleTop"
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.GhostCloak"

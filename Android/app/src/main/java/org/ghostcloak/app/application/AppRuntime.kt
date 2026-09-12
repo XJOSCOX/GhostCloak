@@ -18,11 +18,15 @@ class AppRuntime internal constructor(
     private val endpointName: String = "local",
     private val connection: org.ghostcloak.transport.GhostCloakTransport = org.ghostcloak.transport.TransportPolicy.select(),
     private val backgroundEligibility: (Boolean) -> Unit = {},
+    private val notifications: LocalNotifications = NoLocalNotifications,
 ) : AutoCloseable {
     private val mutex = Mutex()
     private var store: EncryptedEndpointStore? = null
     private var local: ConversationService? = null
     private var network: NetworkController? = null
+    private var notificationLedger: NotificationLedger? = null
+    private val notificationGate = Any()
+    private var activityVisible = false
     val syncActive get() = network?.syncActive == true
     val fetchRetryDelayMillis get() = network?.fetchRetryDelayMillis ?: 0L
     val canAutoSync get() = !inDemo && network?.canAutoSync == true
@@ -36,8 +40,38 @@ class AppRuntime internal constructor(
         private set
     @Volatile private var foreground = false
     private var scheduledEligibility: Boolean? = null
-    fun foregroundStarted() { foreground = true }
-    fun foregroundStopped() { foreground = false }
+    fun foregroundStarted() = synchronized(notificationGate) { foreground = true; cancelNotificationSafely() }
+    fun foregroundStopped() = synchronized(notificationGate) { foreground = false }
+    fun notificationActivityVisible(visible: Boolean) = synchronized(notificationGate) {
+        activityVisible = visible
+        if (visible) cancelNotificationSafely()
+    }
+    private fun cancelNotificationSafely() { try { notifications.cancel() } catch (_: Exception) { } }
+    private fun reconcileNotifications() {
+        if (notifications === NoLocalNotifications) return
+        try {
+            val ledger = notificationLedger ?: return
+            if (inDemo || !canAutoSync) { cancelNotificationSafely(); return }
+            val entries = ledger.eligible()
+            val visible = synchronized(notificationGate) { foreground || activityVisible }
+            if (visible) { ledger.suppressAll(); cancelNotificationSafely(); return }
+            if (entries.isEmpty()) { cancelNotificationSafely(); return }
+            val waiting = entries.filter { it.state != NotificationLedger.ANNOUNCED }
+            if (waiting.isEmpty() || !notifications.allowed()) return
+            val quiet = waiting.any { it.state == NotificationLedger.POSTING } || notifications.active()
+            // Durable reservation precedes OS publication. Recovery posts silently, never another sound.
+            ledger.posting(waiting)
+            val posted = synchronized(notificationGate) {
+                if (foreground || activityVisible) false else notifications.post(quiet)
+            }
+            if (posted) ledger.announced(waiting)
+        } catch (_: Exception) {
+            // Optional presentation must never undo acceptance/ACK or leak failure details to logs/UI.
+        }
+    }
+    suspend fun dismissNotifications() {
+        if (canOpenExisting()) use { notificationLedger?.dismissPublished() }
+    }
     private fun reconcileBackground() {
         val eligible = canAutoSync
         if (scheduledEligibility != eligible) {
@@ -88,10 +122,14 @@ class AppRuntime internal constructor(
                     else org.ghostcloak.transport.FetchCooldown()
                 network=NetworkController(records,engine,apiOrigin,connection,cooldown)
                 local = ConversationService(engine, LocalRepository(records))
+                notificationLedger = NotificationLedger(records)
                 store = records
                 } catch (e: Exception) { records.close(); throw e }
             }
-            try { block(demo?.service ?: local!!) } finally { reconcileBackground() }
+            try { block(demo?.service ?: local!!) } finally {
+                reconcileBackground()
+                reconcileNotifications()
+            }
         }
     }
     suspend fun open(service: ConversationService): DeviceIdentity? = service.open().also { identity ->
@@ -124,7 +162,10 @@ class AppRuntime internal constructor(
     }
     suspend fun addNetwork(username: String, service: ConversationService) { network!!.add(username, service) }
     suspend fun publishNetwork() { network!!.publish() }
-    suspend fun logoutNetwork() { network!!.logout() }
+    suspend fun logoutNetwork() {
+        try { network!!.logout() }
+        finally { notificationLedger?.suppressAll(); cancelNotificationSafely() }
+    }
     /** Process owner closes only after all foreground operations have finished (also used by reopen tests). */
-    override fun close() { store?.close(); store = null; local = null; network = null; attached = false }
+    override fun close() { store?.close(); store = null; local = null; network = null; notificationLedger = null; attached = false }
 }

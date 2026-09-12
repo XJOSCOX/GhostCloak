@@ -1,0 +1,181 @@
+# Phase 1F: private background delivery design
+
+Status: design only, audited against main `d939b6e` on 2026-09-11. Proposed intervals and budgets are choices to validate, not implemented behavior or delivery guarantees.
+
+## 1. Executive summary
+
+Retain existing Phase 1E foreground synchronization. Recommend one unique ordinary WorkManager periodic task for best-effort background checks, sharing the application runtime and a sync coordinator with foreground work. Start with a 30-minute period and 15-minute flex window. Add a persisted bounded randomized not-before gate; accept longer delays. Do not use expedited work, alarms, permanent sockets or a foreground service by default.
+
+Fetch from the configured Ghost Cloak HTTPS origin (`https://api.ghostcloak.org` for staging), authenticate with existing credentials, decrypt/commit through the existing path, ACK according to current semantics, then generate a generic local notification. Notification is not transport: the encrypted mailbox remains transport. Release retains its explicit API-origin policy rather than inheriting staging.
+
+Expected background latency is tens of minutes when Android permits execution, potentially hours or until app launch under restrictions. There is no upper-bound latency promise. Opening the app remains the user-triggered catch-up path, subject to connectivity and cooldowns. No external push provider or identifier is introduced.
+
+## 2. Android platform constraints
+
+The app currently supports API 30 and targets API 37 (`app/build.gradle.kts`). Validate the eventual implementation across that range and recheck target-specific quotas before rollout.
+
+Periodic WorkManager has a 15-minute minimum interval. Flex permits scheduling within part of a period; neither interval nor flex is a deadline. Expedited work is quota-limited one-time work, not a recurring mailbox listener. Compatibility paths before Android 12 can require a foreground service. A network constraint does not establish endpoint reachability. See [work requests](https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work).
+
+Doze defers ordinary jobs/network into maintenance opportunities; App Standby, Battery Saver and OEM restrictions can delay them further. Battery-optimization exemptions are not universal guarantees and are not required by this design. See [Doze and App Standby](https://developer.android.com/training/monitoring-device-state/doze-standby) and [resource limits](https://developer.android.com/topic/performance/power/power-details).
+
+Process-local coroutines do not survive process death. Durable scheduling can restart work, not create an immortal process. Workers must be bounded and cooperate with stopping. See [persistent scheduling](https://developer.android.com/develop/background-work/background-tasks/persistent).
+
+## 3. Threat model
+
+Protect bodies, keys, contacts, identity continuity and notification privacy. Assume a functioning sandbox/Keystore but potentially curious server/network operators, nearby observers and notification listeners. A server may withhold or replay ciphertext; existing authentication, crypto and deduplication checks remain mandatory.
+
+| Observer | Visibility | Background difference |
+| --- | --- | --- |
+| Ghost Cloak operator | Authenticated account/device, poll time/frequency, mailbox activity, protocol routing/submission identifiers, ACK timing; client IP where exposed by ingress | Extends observation beyond active app use. ACK means stored, not read or user present |
+| Existing ingress/CDN | IP, TLS timing/size; HTTP authentication and encrypted envelopes if terminating TLS | Same path, more observations; E2EE bodies remain opaque |
+| ISP/local network/DNS | Destination information depending on DNS setup, connection timing/size | Scheduled wakeups can reveal behavior |
+| OS/listeners/local observers | Notification existence, timing and posted content | Generic content limits disclosure, not occurrence |
+
+Existing Cloudflare ingress/tunnel remains an existing trust dependency. “Only Ghost Cloak” means application requests target its configured origin and add no delivery provider; it does not remove DNS, network operators or Cloudflare from the path. No infrastructure change is proposed.
+
+Fixed polling can expose predictable reachability and behavior patterns. Radio transitions, batching and delays may fingerprint battery/network conditions. Use flex, bounded jitter, batching and slower background cadence; avoid recording precise user activity in scheduler metadata. Jitter reduces precise correlation, not anonymity. Foreground/background cadence differences remain observable. Cover traffic is not justified given battery/bandwidth cost.
+
+## 4. Candidate approaches table
+
+All latency estimates assume usable connectivity; none guarantees real time.
+
+| Approach | Latency / idle | Battery / privacy-security | Permission / persistent notification / user configuration | Reboot / restart |
+| --- | --- | --- | --- | --- |
+| Periodic WorkManager | Minimum 15 min; proposed 30 min with flex; hours of deferral possible | Low relative to foreground polling; recurring authenticated metadata | Ordinary work needs no exact-alarm/FGS access; review future merged manifest. No persistent notification or special settings by default | Durable rescheduling; secrets wait for first unlock; force-stop prevents work |
+| Ordinary one-time work | Initial delay is eligibility, not deadline; idle/quota delays remain | Useful finite work; chains risk excessive polling | Ordinary-work requirements; no persistent notification | Durable once enqueued; chain successors require crash-safe scheduling |
+| Expedited one-time work | Earlier when eligible, quota-limited; no remote wake signal | Higher resource pressure, same metadata | Not periodic; pre-12 FGS/notification compatibility implications | No instant reboot-delivery guarantee |
+| Direct JobScheduler | Periodic minimum/quota restrictions; no latency advantage | Similar cost, more recovery code | JobService binding; persisted jobs need RECEIVE_BOOT_COMPLETED; no ordinary-job ongoing notification | Requires explicit persisted setup |
+| Inexact AlarmManager | Batched/deferred; firing does not guarantee network completion | More manual wake/recovery complexity | No exact-alarm grant for inexact use; no persistent notification | Must reschedule after reboot |
+| Exact/allow-while-idle alarms | Restricted wakeups, not mailbox delivery guarantee | Battery cost and more predictable timing | Exact-alarm special access or narrowly eligible permission; unsuitable for polling; no ongoing notification | Boot rescheduling/permission handling required |
+| Socket / foreground service | Faster while actually running; interruptions remain | High idle cost, continuous reachability signal | Ongoing notification, FGS type/permissions/start restrictions; special settings cannot guarantee permanence | Unreliable unattended restart; rejected |
+| Existing foreground only | Immediate resume attempt then current adaptive cadence | Existing cost/metadata | Existing INTERNET permission | User opens app to resume |
+
+See [alarm restrictions](https://developer.android.com/develop/background-work/services/alarms) and [job persistence requirements](https://developer.android.com/reference/android/app/job/JobInfo.Builder). A dataSync FGS is unsuitable as an endless listener: Android 15+ targeting rules impose a six-hour background allowance in 24 hours and prohibit that type starting from BOOT_COMPLETED. See [FGS types](https://developer.android.com/develop/background-work/services/fgs/service-types). Do not misclassify a service to evade restrictions.
+
+## 5. Recommended architecture
+
+1. After explicit connection and background-sync enablement, reconcile one constant-name periodic request. No usernames, IDs, tokens or message data in work names, tags, input or output. WorkManager's database is not encrypted message storage.
+2. Require connectivity and unlocked credential storage. Worker obtains the process-owned runtime, never its own engine or registration path.
+3. Under a shared coordinator/runtime lock, recheck identity, logout eligibility, lifecycle generation, recent completion and global cooldown. Skip checks already covered by foreground sync; otherwise execute a bounded existing NetworkController sync.
+4. Existing acceptance commits decrypted content and deduplication state before ACK. Future local notification eligibility must be committed durably with acceptance without changing the wire protocol.
+5. Reconcile a generic notification from accepted, still-unread eligible messages, then finish. No notification on ciphertext arrival or failed decryption.
+
+Keep foreground immediate-on-resume and adaptive delays unchanged. Retain periodic registration while foregrounded, but skip execution through the coordinator: repeated cancel/re-enqueue can postpone periodic work indefinitely. Supersede stale one-time work if later introduced. On resume, join an in-flight worker result or wait for safe completion before the immediate attempt; never double-poll.
+
+Proposed jitter: after background completion persist eligibility 20–40 minutes later. At the next OS opportunity, skip if too early. Do not sleep inside workers or enqueue catch-up bursts. This can skip a period and increase delay, intentionally. Flex itself is not guaranteed randomization. Reject a frequent chained one-shot loop; its scheduling recovery and activity correlation costs outweigh unproven latency gains. Reconsider finite one-shot work only after measured need.
+
+## 6. Notification privacy model
+
+Default title: **Ghost Cloak**. Body: **New message**. One aggregate notification; no sender/avatar, conversation name, contact counts, preview, safety status or protocol metadata. Use an opaque local notification ID, generic channel name and immutable app-local PendingIntent opening Chats. No remote identifiers/content in extras, Persons, shortcuts, groups or actions. No inline reply initially.
+
+| Optional level | Content | Disclosure |
+| --- | --- | --- |
+| Maximum privacy (default) | Ghost Cloak / New message | App usage and notification timing |
+| Private | Ghost Cloak / 2 new messages | Aggregate unread activity |
+| Explicit sender opt-in | Sender name, never body | Contact relationships exposed to OS/history/listeners |
+
+Previews remain OFF and are not part of initial implementation. Default lock-screen SECRET visibility and disabled badges; later users may knowingly choose generic lock-screen content. Channel/user/OEM controls affect rendering. Any public version must remain generic. Channels apply on API 26+; ordinary notifications need POST_NOTIFICATIONS user permission on Android 13+. Denial must not prevent fetch/store/ACK. See [notification visibility](https://developer.android.com/develop/ui/compose/notifications/create-notification) and [permission](https://developer.android.com/develop/ui/views/notifications/notification-permission).
+
+History may retain posted content; canceling is not secure deletion. Listeners, wearables and OS integrations may read/forward it; lock-screen hiding does not isolate listeners. Screenshots/external cameras capture visible notifications, and app-window screenshot protection cannot secure the system shade. Generic content minimizes this exposure. If the device OS is fully compromised, no application can guarantee plaintext confidentiality after local decryption.
+
+## 7. Lifecycle / reboot behavior
+
+| Event | Required future behavior |
+| --- | --- |
+| STARTED / resume | Existing immediate sync coalesced with in-flight work, subject to cooldown |
+| STOPPED / screen off | Foreground loop cancels; only scheduled opportunities remain |
+| Memory process kill | No coroutine survives; durable scheduling may reopen the same identity |
+| Reboot before first unlock | No fetch/decrypt/notification; no Direct Boot migration |
+| First unlock after reboot | Work may resume when permitted, not necessarily immediately |
+| Relock after first unlock | Current key policy permits access in principle; OS scheduling still applies |
+| In-place app update | Same-identity data/Keystore normally retained; reconcile work and preserve worker-class compatibility/migrations |
+| Swipe from recents | Normally not force-stop; OEMs may stop work; no guarantee |
+| Settings force-stop | No background delivery until user interaction releases stopped state; no self-revival |
+| Battery Saver / background restriction / OEM auto-start disabled | Longer delays or no execution; honest settings guidance, no recurring prompts |
+| Explicit logout | Cancel scheduled work; generation fence suppresses in-flight notification publication. No silent reconnect |
+| Clear data / uninstall | Not an update; explicit recovery, never silent registered-identity replacement |
+
+Android's [stopped-state boundary](https://developer.android.com/about/versions/15/behavior-changes-all) is a user control, not an ordinary retryable error. Android 15 also cancels pending intents on force-stop. Reboot must not be used to bypass it.
+
+## 8. Storage and concurrency model
+
+Current source audit (paths relative to Android):
+
+- `storage/src/main/kotlin/org/ghostcloak/storage/EncryptedEndpointStore.kt`: SQLCipher Room records in ordinary-context `noBackupFilesDir`; random database secret wrapped by Keystore AES-GCM. No per-use authentication or unlocked-device-required setting. Missing/inconsistent existing key/files fail rather than regenerate. Hardware/software protection is reported, not universally guaranteed.
+- `storage/src/main/kotlin/org/ghostcloak/storage/KeystoreDeviceAuth.kt`: non-exportable EC signing key with no per-use authentication setting, no exported software fallback and no replacement of missing registered keys.
+- `messaging/src/main/kotlin/org/ghostcloak/messaging/NetworkAccount.kt`: account/routing/registered state, auth alias and token in encrypted EndpointRecords, scoped to API audience. NetworkController renewal logs into the existing device once; it never registers. Logout removes the stored token, preserving non-eligibility after restart.
+- `app/src/main/java/org/ghostcloak/app/application/GhostApplication.kt`: one lazy runtime per process. `AppRuntime.use` holds a mutex across initialization/operations on IO. This is per instance, not cross-process; workers must use this owner, with no separate `android:process` or engine.
+- `messaging/src/main/kotlin/org/ghostcloak/messaging/ConversationService.kt`: `acceptNetwork` checks accepted sender/envelope/hash, then uses `decryptAndCommit` to save incoming content/acceptance. NetworkController ACKs only after acceptance returns.
+
+Process death, normal relocking and normal in-place updates do not inherently remove credentials. Credential-encrypted files are unavailable before first unlock; the manifest is not Direct Boot aware. Do not move secrets to device-protected storage. See [Direct Boot](https://developer.android.com/privacy-and-security/direct-boot). Actual key failure/invalidation must fail closed. Future biometric-bound settings may prohibit locked execution; defer until authorized unlock rather than weaken protections.
+
+Future coordinator must coalesce as well as serialize: recheck completion generation after acquiring the lock to avoid redundant back-to-back FETCHes. Never close the runtime from a Worker or read Room on Main. Cancellation must not release ownership while blocking IO still operates. Current HttpURLConnection uses 5-second connect/read timeouts, not a total sync deadline; check execution budget between operations/pages.
+
+Add an encrypted pending-notification ledger in a future implementation. Commit eligibility with accepted message state and drain later even if a crash follows a successful ACK. Re-delivery must not create a duplicate message or alert. Use a stable aggregate notification ID and quiet updates: notification posting and database commit cannot be atomic, so exactly-once sound cannot be promised. Prefer missed repeat sound over duplicate alerts. Recheck read/deleted/blocked state and foreground visibility before publication. Dismissal suppresses re-alerts for the same messages without marking them read. Existing request/verification and changed-identity gates remain authoritative.
+
+## 9. Rate-limit interaction
+
+Current `ForegroundPolling` waits 2/3/5 seconds after completion: eventually about 12 idle FETCH/minute, about 30 while active, excluding latency/pages/retries. One empty NetworkController sync makes one combined FETCH with no separate receipt-status call. Busy sync can retry outbox SENDs, include receipt IDs, ACK individual deliveries and fetch up to 16 pages. Receipt expiry may cause a fallback FETCH: one cycle is not always one HTTP call.
+
+A nominal 30-minute period is about two empty FETCH/hour (48/day), before jitter skips or retries, well below the confirmed 60 FETCH/minute collision. Preserve combined fetch/status and server limits. Proposed background budget: at most four FETCH attempts per rolling minute, counting auth replay, receipt fallback and pages. Defer remaining work without dropping it. Validate against batch/retention behavior before implementation; no backend rate-limit changes.
+
+`transport/src/main/kotlin/org/ghostcloak/transport/FetchCooldown.kt` currently stores a monotonic deadline in memory. A 429 uses Retry-After or 15/30/60-second fallback with a 2-second minimum. Runtime sharing covers only one process lifetime. Future implementation must persist cooldown/failure state in encrypted records and restore it before foreground/manual/background FETCH. This is a prerequisite, not an existing guarantee. Use monotonic time within a boot and a persisted wall deadline plus boot/clock-change handling across restarts; test both clock directions to prevent early retry or indefinite artificial lockout. Never shorten valid Retry-After. Scheduler backoff uses the later eligibility time; resume does not bypass cooldown.
+
+## 10. Failure handling
+
+| Failure | Response |
+| --- | --- |
+| Offline / timeout / 503 | Preserve session/identity/outbox/contacts; bounded later retry with jitter; no repeated error notification or forced reconnect |
+| Expired token | Existing silent renewal and exact-byte one retry, coalesced through renewal mutex |
+| Repeated 401 / unavailable authentication | Pause automatic work pending explicit connect; no token in notification |
+| 429 | Shared durable cooldown, no immediate retry storm |
+| Key/DB failure or identity mismatch | Fail closed, actionable in-app recovery; no replacement keys or reset |
+| Invalid/undecryptable envelope | Existing rejection/ACK semantics; no notification |
+| ACK failure after commit | Retain message/eligibility; redelivery deduplicates and retries ACK |
+| Notification denied/channel disabled | Store/ACK normally; retain unread state, no repeated permission prompts |
+| Worker stopped / process death | Recover durable state; scheduler success never implies delivery |
+
+Partial cycles can commit valid messages before later failure. Reconcile their notification eligibility independently of whole-cycle success. Notification is neither Delivered nor read nor message-request acceptance.
+
+## 11. Battery/performance impact
+
+Radio wakeups, DNS/TLS, SQLCipher opening and decryption cost more than the empty request alone. Batch while awake; avoid persistent connections and sleeping workers. Proposed normal cycle budget is 30 seconds checked between operations; blocking IO may exceed it and must be validated. Do not use long-running workers/FGS to drain a backlog; continue at later bounded opportunities.
+
+Measure empty/busy wakeups, CPU, bytes and overnight battery delta versus foreground-only baseline. Record latency distributions and worst observed delays, not only fast cases. Measurements remain local and sanitized; no telemetry or remote crash SDK.
+
+## 12. Security tradeoffs
+
+Background decryption extends plaintext memory exposure when the app is not being viewed. Current Keystore policy permits this after first unlock; it does not imply biometric protection. Explain delayed delivery and this tradeoff when enabling background sync. Generic content limits OS disclosure but not timing; count/sender options weaken that boundary.
+
+Persist minimal scheduler state encrypted, no extra notification body copies. Preserve backup exclusions, TLS validation, Signal/identity/storage protections and existing network trust boundaries. Mailbox retention still bounds recovery after a long absence; background scheduling cannot guarantee indefinite retention.
+
+## 13. Implementation phases
+
+1. Approve architecture/privacy/latency defaults; recheck API-37 rules and existing mailbox retention/batch limits.
+2. Implement/test shared coordinator, durable cooldown, lifecycle/logout fences and notification eligibility. Preserve exact retry bytes and Phase 1E foreground behavior.
+3. Separately approve ordinary WorkManager dependency/unique scheduling. Review strict verification and merged manifest, including possible library boot/wake-lock/network-state permissions; do not assume INTERNET-only manifest remains sufficient.
+4. Separately add local channel/permission flow and generic notifications with privacy controls. No remote provider or message preview.
+5. Run regression/physical matrix and limited opt-in staging rollout with truthful delayed-delivery guidance and disable control.
+
+None of these implementation steps occurs in this commit.
+
+## 14. Physical-device test plan
+
+Use two consenting staging phones with synthetic accounts/messages, API-30/API-37 coverage and Pixel/AOSP plus Samsung/OEM hardware. Never clear real user data. Test release behavior separately from sanitized debug diagnostics.
+
+- Compare baseline and background mode over several unplugged overnight runs. Send at randomized times; record fetch, commit, ACK and notification separately. Include empty mailbox and backlog; no real identifiers/content in reports.
+- Test forced and natural Doze/standby, Battery Saver, restricted background and OEM auto-start settings, then restore settings. Hours-long deferrals are possible outcomes, not deadlines.
+- Kill process before fetch, after decrypt commit, around ACK and notification posting. Verify one stored message, intact ratchet, no repeated sound and recoverable ACK.
+- Reboot and keep locked: no secret access before first unlock. Unlock/relock and verify without changing key policy. Invalid test keys must never cause automatic replacement.
+- Compare recents swipe with Settings force-stop. Prove force-stop prevents work until user relaunch. Update in place with pending/running work; preserve identity/history and scheduling reconciliation.
+- Race resume/stop, manual Sync/send, worker, recreation and logout. Assert one sync and no redundant immediate FETCH, stale notification or silent reconnect after logout. Read/delete/block races suppress notices appropriately.
+- Inject token expiry, repeated 401, DNS/TLS/offline/503, 429 Retry-After, receipt expiry and cancellation. Count real HTTP attempts including replay/pages. Restart/reboot/change clocks during cooldown; no bypass/storm.
+- Check generic content only after authenticated durable acceptance; rejected crypto/blocked contacts never notify. Test permission/channel denial, lock screen/history/badges/listeners/screenshots and optional levels.
+- Audit packet destinations, dependencies, merged manifest, logs and scheduler database: no added broker, analytics, remote crash reporting, identifiers, content or tokens. Application delivery requests target the configured origin.
+- Run existing renewal, rate-budget, lifecycle, storage reopen, outbox/dedup, identity and request suites plus new coordinator/crash/privacy tests under strict dependency verification. Report measured physical outcomes, never universal guarantees.
+
+This design-only commit does not claim future physical tests have run.
+
+## 15. Explicit non-goals
+
+No jobs, alarms, dependencies, channels, permissions or services implemented here. No FCM, Google push APIs, OneSignal, Pusher, AWS SNS, Apple/third-party relay or external push broker. No permanent socket, exact alarms, battery-exemption prompts, analytics, remote crash reporting or cover traffic. No backend, Cloudflare/VPS, protocol, crypto, identity, delivery/request semantics, polling cadence or rate-limit changes. No instant-delivery SLA, plaintext server/notification transport, content/token logging or weakened local protections.

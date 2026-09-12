@@ -1,5 +1,7 @@
 # Messenger design
 
+Phase 1F's proposed private background delivery architecture and threat model are documented in [BACKGROUND_SYNC_DESIGN.md](BACKGROUND_SYNC_DESIGN.md). This is design only; foreground behavior remains unchanged.
+
 The theme follows the local GoXEV reference: Space Grotesk typography and neutral charcoal surfaces, now with a soft blue accent. Dark primary is `#8FB5FF`, with background `#1A1A1A` and surface `#222222`. Light mode uses `#315FAD` blue for text/button contrast and cool neutral surfaces. Avatars use the semantic brand container, without unrelated color palettes. Chat, Contact, Profiles and Settings have separate bottom-navigation destinations. Settings offers persistent Light, Dark and Automatic choices; Automatic is the default and follows Android's system appearance. System-bar icons also follow the selected appearance. The app uses local vector icons and initials; reference photos, artwork and unavailable feature controls are not copied into the product.
 
 Layout references: [Inbox Chat App](https://dribbble.com/shots/24369393-Inbox-Chat-App) for inbox hierarchy and [Material canonical layouts](https://m3.material.io/foundations/layout/canonical-examples/overview) for list/detail organization.

@@ -1,5 +1,7 @@
 # Android Studio development
 
+For the proposed background-delivery architecture, platform limitations and future physical-device test matrix, see [BACKGROUND_SYNC_DESIGN.md](BACKGROUND_SYNC_DESIGN.md). Background jobs and notifications are not implemented by that design phase.
+
 ## Run staging on a phone
 
 1. Pull the latest `main` source and open the repository's **Android/** directory in Android Studio.

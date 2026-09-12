@@ -18,10 +18,10 @@ class UnreadMessagesTest {
             a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork("bob", it) }
             val aid = a.use { it.open()!!.deviceId }; val bid = b.use { it.open()!!.deviceId }
             repeat(2) { a.use { a.send(it, bid, "Unread fixture") } }
-            b.use { b.syncNetwork(it); assertEquals(2, it.unreadCount()) }
+            b.use { b.syncNetwork(it); assertEquals(2, it.unreadCount()); assertEquals(2, it.unreadCounts()[aid]) }
             a.use { a.syncNetwork(it); assertTrue(it.messages(bid).all { m -> m.state == MessageState.DELIVERED }) }
             val requests = api.requests
-            b.use { it.markRead(aid); assertEquals(0, it.unreadCount()) }
+            b.use { it.markRead(aid); assertEquals(0, it.unreadCount()); assertEquals(0, it.unreadCounts()[aid]) }
             assertEquals(requests, api.requests)
             b.close(); b = AppRuntime(context, "https://fixture.invalid", name, api)
             b.use { assertEquals(0, it.unreadCount()) }

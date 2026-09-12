@@ -53,7 +53,8 @@ import org.ghostcloak.app.ui.components.*
             } else LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(bottom=GhostLayout.pageInset)) {
                 if(directory) item {Text("YOUR CONTACTS",Modifier.padding(start=GhostDimensions.tiny,bottom=GhostDimensions.controlGap),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
                 items(chats,key={it.contact.contactId}) { status ->
-                    ChatRow(status,if(directory) null else state.previews[status.contact.remoteDeviceId],open)
+                    ChatRow(status,if(directory) null else state.previews[status.contact.remoteDeviceId],open,
+                        unreadCount = if(directory) 0 else state.unreadByConversation[status.contact.remoteDeviceId] ?: 0)
                     Spacer(Modifier.height(GhostDimensions.micro))
                 }
             }

@@ -7,8 +7,8 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ThemeTest {
-    @Test fun darkMatchesReferenceAndTextOnPrimaryRemainsReadable() {
-        assertEquals(Color(0xFF94B86F), DarkColors.primary)
+    @Test fun blueAccentAndTextOnPrimaryRemainReadable() {
+        assertEquals(Color(0xFF8FB5FF), DarkColors.primary)
         assertEquals(Color(0xFF1A1A1A), DarkColors.background)
         for (scheme in listOf(LightColors, DarkColors)) {
             val first = scheme.primary.luminance()

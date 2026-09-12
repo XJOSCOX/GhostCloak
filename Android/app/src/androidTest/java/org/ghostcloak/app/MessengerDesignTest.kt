@@ -27,6 +27,16 @@ class MessengerDesignTest {
             File(context.getExternalFilesDir(null), name).outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
         }
     }
+    @Test fun unreadDotBelongsToItsConversationAndClearsWhenRead() {
+        val unread = mutableStateOf(2)
+        var opened: String? = null
+        compose.setContent { GhostCloakTheme { org.ghostcloak.app.ui.components.ChatRow(contact, message,
+            { opened = it; unread.value = 0 }, unreadCount = unread.value) } }
+        compose.onNodeWithContentDescription("2 unread messages", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("alice").performClick()
+        assertEquals(id, opened)
+        compose.onNodeWithContentDescription("2 unread messages", useUnmergedTree = true).assertDoesNotExist()
+    }
     @Test fun unreadHeaderReplacesChatsAndMovesSearchLeftUntilAllMessagesAreRead() {
         val unread = mutableStateOf(1)
         compose.setContent { GhostCloakTheme { ContactsScreen(AppState(loading = false, unreadCount = unread.value), {}, {}) } }
@@ -95,7 +105,7 @@ class MessengerDesignTest {
         val dark = mutableStateOf(false)
         compose.setContent { GhostCloakTheme(darkTheme=dark.value) { Surface(color = androidx.compose.material3.MaterialTheme.colorScheme.background) { ContactsScreen(AppState(loading = false,
             identity = DeviceIdentity(RandomIdentifiers.create(), "bob", RandomIdentifiers.create(), byteArrayOf()),
-            unreadCount = 3, contacts = listOf(contact, known)+extras.map {it.first}, previews = mapOf(known.contact.remoteDeviceId to last)+extras.associate {it.first.contact.remoteDeviceId to it.second}), {}, {}) } } }
+            unreadCount = 3, unreadByConversation = mapOf(known.contact.remoteDeviceId to 3), contacts = listOf(contact, known)+extras.map {it.first}, previews = mapOf(known.contact.remoteDeviceId to last)+extras.associate {it.first.contact.remoteDeviceId to it.second}), {}, {}) } } }
         compose.onNodeWithText("Ghost Cloak").assertDoesNotExist()
         compose.onNodeWithText("Chats").assertDoesNotExist()
         compose.onNodeWithText("Search chats").assertDoesNotExist()

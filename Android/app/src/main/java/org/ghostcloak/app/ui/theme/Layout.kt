@@ -8,6 +8,7 @@ object GhostLayout {
     val contentGap = 16.dp
     val headerHeight = 56.dp
     val headerIcon = 20.dp
+    val unreadDot = 8.dp
     val headerAvatar = 32.dp
     val headerAvatarGap = 8.dp
     val touchTarget = 48.dp

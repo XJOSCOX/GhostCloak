@@ -16,6 +16,7 @@ data class ContactStatus(val contact: Contact, val identity: RemoteIdentityStatu
 data class Message(val localId: String, val conversationId: String, val direction: Direction,
     val body: String, val timestamp: Long, val state: MessageState, val envelopeId: String? = null,
     val disappearingSeconds: Int = 0, val expiry: ExpiryDeadline? = null, val policyEvent: Boolean = false) {
+    val activeExpiry: ExpiryDeadline? get() = if (direction == Direction.OUTGOING && state != MessageState.DELIVERED) null else expiry
     override fun toString() = "Message(redacted)"
 }
 enum class AppError { INVALID_USERNAME, INVALID_CARD, DUPLICATE_CONTACT, AMBIGUOUS_IDENTITY, EMPTY_MESSAGE,

@@ -38,13 +38,24 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         val now = clock.now()
         val prefix = if (conversationId == null) "app/message/" else "app/message/$conversationId/"
         val expired = records.keys(prefix).map { read<Message>(it) ?: throw EndpointStorageFailure() }
-            .filter { it.expiry?.reached(now) == true }
+            .map { message ->
+                // Upgrade old acceptance-started deadlines before any expiry deletion.
+                if (message.direction == Direction.OUTGOING && message.state != MessageState.DELIVERED && message.expiry != null)
+                    message.copy(expiry = null).also(::save) else message
+            }.filter { it.activeExpiry?.reached(now) == true }
         expired.forEach { delete(it.conversationId, it.localId) }
         expired.size
     }
     fun acceptedOutgoing(id: String, localId: String) = records.transaction {
         val message = read<Message>("app/message/$id/$localId") ?: return@transaction
-        save(message.copy(state = MessageState.SERVER_ACCEPTED, expiry = message.expiry ?: if (!message.policyEvent && message.disappearingSeconds > 0)
+        if (message.direction != Direction.OUTGOING || message.state == MessageState.DELIVERED) return@transaction
+        save(message.copy(state = MessageState.SERVER_ACCEPTED, expiry = null))
+    }
+    fun deliveredOutgoing(id: String, localId: String) = records.transaction {
+        val message = read<Message>("app/message/$id/$localId") ?: return@transaction
+        if (message.direction != Direction.OUTGOING || message.state != MessageState.SERVER_ACCEPTED) return@transaction
+        // A queued deadline from the previous implementation is not a delivery deadline.
+        save(message.copy(state = MessageState.DELIVERED, expiry = if (!message.policyEvent && message.disappearingSeconds > 0)
             ExpiryDeadline.start(message.disappearingSeconds, clock.now()) else null))
     }
     fun unreadCount(id: String): Int = records.transaction {

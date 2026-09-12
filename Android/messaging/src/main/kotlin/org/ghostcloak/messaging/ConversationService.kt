@@ -173,7 +173,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         val delivered = statuses.filter { it.acknowledged }.map { it.submissionId }.toSet()
         repository.contacts().forEach { contact -> repository.messages(contact.remoteDeviceId)
             .filter { it.direction == Direction.OUTGOING && it.state == MessageState.SERVER_ACCEPTED && it.localId in delivered }
-            .forEach { repository.save(it.copy(state = MessageState.DELIVERED)) } }
+            .forEach { repository.deliveredOutgoing(it.conversationId, it.localId) } }
     }
     suspend fun fingerprint(id: String, pending: Boolean = false) = action {
         repository.contact(id)

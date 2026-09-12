@@ -5,6 +5,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ExpiredContentTest {
+    @Test fun staleLegacyQueuedDeadlineCannotHideOutgoingContent() {
+        val message = Message("id", "peer", Direction.OUTGOING, "queued", 0, MessageState.SERVER_ACCEPTED,
+            disappearingSeconds = 30, expiry = ExpiryDeadline(1, 1, 1))
+        val visible = AppState(messages = listOf(message), previews = mapOf("peer" to message))
+            .withoutExpired(ExpiryMoment(100_000, 100_000, 1))
+        assertEquals(listOf(message), visible.messages); assertEquals(message, visible.previews["peer"])
+    }
     @Test fun staleSnapshotNeverRendersExpiredPlaintextPreviewOrUnreadContribution() {
         val deadline = ExpiryDeadline(1000, 2000, 1)
         val message = Message("id", "contact", Direction.INCOMING, "secret", 1, MessageState.RECEIVED, expiry = deadline)

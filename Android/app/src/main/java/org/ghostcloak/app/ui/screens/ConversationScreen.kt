@@ -116,7 +116,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
         dismissButton = { TextButton(onClick = { clearing = false }) { Text("Cancel") } })
     if (timerSelector) AlertDialog(onDismissRequest = { timerSelector = false }, title = { Text("Disappearing messages") },
         text = { Column {
-            Text("Both devices need disappearing-message support. Applies to future messages. Your timer starts at server acceptance; theirs starts when received and saved, not when read.", style = MaterialTheme.typography.bodySmall)
+            Text("Both devices need disappearing-message support. Applies to future messages. Your timer starts when their delivery ACK is observed; theirs starts when received and saved, not when read. Queued messages have no countdown.", style = MaterialTheme.typography.bodySmall)
             DisappearingTimer.entries.forEach { timer ->
                 TextButton(onClick = { timerSelector = false; disappearing(timer.seconds) }, modifier = Modifier.fillMaxWidth()) {
                     Text(if (timer.seconds == (state.disappearingPolicies[status.contact.remoteDeviceId] ?: 0)) "${timer.label} ✓" else timer.label)

@@ -59,7 +59,7 @@ class DisappearingTest {
         p.a.setDisappearing(p.bid, 0, p.ao); p.b.acceptNetwork(p.aw.envelopes.last()); assertEquals(0, p.bp.policy(p.aid))
     }
 
-    @Test fun pendingDoesNotExpireThenAcceptedAndIncomingUseIndependentFixedDeadlines() = runBlocking {
+    @Test fun pendingAndQueuedDoNotExpireThenDeliveryAndIncomingUseIndependentFixedDeadlines() = runBlocking {
         val p = Pairing(); p.prepare()
         val off = p.a.sendNetwork(p.bid, "keep", p.ao)
         assertNull(off.expiry)
@@ -71,19 +71,28 @@ class DisappearingTest {
         assertTrue(p.a.messages(p.bid).any { it.localId == pending.localId })
         p.aw.offline = false; p.a.retryNetwork(p.ao)
         val accepted = p.a.messages(p.bid).single { it.localId == pending.localId }
-        assertEquals(p.time.wall + 30_000, accepted.expiry!!.wall)
+        assertNull(accepted.expiry)
         val envelope = p.aw.envelopes.last()
+        p.time.advance(7_200_000)
+        assertNull(p.a.messages(p.bid).single { it.localId == pending.localId }.expiry)
+        p.a.setDisappearing(p.bid, 300, p.ao) // The queued message still carries 30 seconds.
         p.time.advance(10_000); p.b.acceptNetwork(envelope)
         val received = p.b.messages(p.aid).single()
         assertEquals(p.time.wall + 30_000, received.expiry!!.wall)
+        val ack = listOf(DeliveryStatus(pending.localId, true))
+        p.a.deliveryStatuses(ack)
+        val deadline = p.a.messages(p.bid).single { it.localId == pending.localId }.expiry!!
+        assertEquals(p.time.wall + 30_000, deadline.wall)
         p.a.setDisappearing(p.bid, 0, p.ao)
         p.time.advance(20_000)
-        assertFalse(p.a.messages(p.bid).any { it.localId == pending.localId })
+        p.a.deliveryStatuses(ack)
+        assertEquals(deadline, p.a.messages(p.bid).single { it.localId == pending.localId }.expiry)
         assertTrue(p.a.messages(p.bid).any { it.localId == off.localId })
         assertEquals(1, p.b.unreadCount())
         val secure = p.br.keys("").filterNot { it.startsWith("app/message/") || it.startsWith("app/read/") || it.startsWith("app/notification/") }
             .associateWith { p.br.read(it)!! }
         p.b.markRead(p.aid); p.time.advance(10_000); p.b.reconcileExpiry()
+        assertFalse(p.a.messages(p.bid).any { it.localId == pending.localId })
         assertTrue(p.b.messages(p.aid).isEmpty()); assertNull(p.br.read("app/read/${p.aid}"))
         assertTrue(NotificationLedger(p.br, p.bp.clock).eligible().isEmpty())
         secure.forEach { (key, bytes) -> assertArrayEquals(bytes, p.br.read(key)) }

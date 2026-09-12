@@ -11,6 +11,43 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ForegroundSyncTest {
+    @Test fun foregroundRateLimitWaitsThenRecoversAutomaticallyAndResumeStartsImmediately() = runBlocking {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
+        val api = SyntheticNetwork()
+        var fetches = 0
+        val transport = org.ghostcloak.transport.GhostCloakTransport { request ->
+            if (org.ghostcloak.protocol.NetworkCodec.decode<org.ghostcloak.protocol.ApiRequest>(request.body) is org.ghostcloak.protocol.ApiRequest.Fetch && ++fetches == 1)
+                org.ghostcloak.transport.TransportResponse(429, null, byteArrayOf(), 3000)
+            else api.execute(request)
+        }
+        val runtime = AppRuntime(app, "https://fixture.invalid", RandomIdentifiers.create(), transport)
+        val store = ViewModelStore()
+        var loop: Job? = null
+        try {
+            runtime.use { runtime.create(it, "alice") }
+            val logins = api.logins
+            val owner = withContext(Dispatchers.Main) { Owner() }
+            val model = withContext(Dispatchers.Main) { GhostViewModel(app, runtime).also { store.put("test", it) } }
+            loop = launch(Dispatchers.Main) { owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { model.foregroundSync() } }
+            withContext(Dispatchers.Main) { owner.registry.currentState = Lifecycle.State.STARTED }
+            withTimeout(2000) { while (model.state.value.networkStatus != NetworkStatus.RATE_LIMITED) delay(25) }
+            assertEquals(1, fetches)
+            delay(1500); assertEquals(1, fetches)
+            assertFalse(model.state.value.networkRequiresConnect)
+            withTimeout(4000) { while (model.state.value.networkStatus != NetworkStatus.CONNECTED) delay(25) }
+            assertEquals(2, fetches); assertEquals(logins, api.logins)
+            withContext(Dispatchers.Main) { owner.registry.currentState = Lifecycle.State.CREATED }
+            delay(300); val stopped = fetches
+            delay(5500); assertEquals(stopped, fetches)
+            withContext(Dispatchers.Main) { owner.registry.currentState = Lifecycle.State.STARTED }
+            withTimeout(1500) { while (fetches == stopped) delay(25) }
+        } finally {
+            loop?.cancelAndJoin()
+            withContext(Dispatchers.Main) { store.clear() }
+            runtime.close()
+        }
+    }
+
     private class Owner : LifecycleOwner {
         val registry = LifecycleRegistry(this)
         override val lifecycle: Lifecycle get() = registry
@@ -45,7 +82,7 @@ class ForegroundSyncTest {
             assertEquals(MessageState.SERVER_ACCEPTED, a.use { it.messages(bid).single().state })
             val firstCycle = api.requests
             // Only Alice is STARTED. A subsequent poll must occur at the new cadence.
-            withTimeout(2000) { while (api.requests == firstCycle) delay(25) }
+            withTimeout(3500) { while (api.requests == firstCycle) delay(25) }
             withContext(Dispatchers.Main) { owners[1].registry.currentState = Lifecycle.State.STARTED }
             withTimeout(15000) {
                 while (models[1].state.value.contacts.isEmpty() || a.use { it.messages(bid).single().state } != MessageState.DELIVERED) delay(100)
@@ -58,7 +95,7 @@ class ForegroundSyncTest {
             withContext(Dispatchers.Main) { owners.forEach { it.registry.currentState = Lifecycle.State.CREATED } }
             delay(300) // Allow cancellation to release the serialized runtime operation.
             val stopped = api.requests
-            delay(2500) // More than two polling intervals: STOPPED must make no requests.
+            delay(5500) // Longer than the slowest polling interval: STOPPED must make no requests.
             assertEquals(stopped, api.requests)
             a.use { a.send(it, bid, "After resume") }
             withContext(Dispatchers.Main) {

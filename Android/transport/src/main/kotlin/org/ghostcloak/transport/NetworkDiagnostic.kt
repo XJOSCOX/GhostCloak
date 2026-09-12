@@ -24,7 +24,7 @@ data class NetworkDiagnostic(
     }
     companion object {
         private val SAFE_CODES = setOf("unauthorized", "connect_required", "credential_missing", "credential_unavailable",
-            "legacy_auth_requires_reset", "network_unavailable", "server_rejected", "invalid_response", "response_size",
+            "legacy_auth_requires_reset", "network_unavailable", "server_rejected", "rate_limited", "invalid_response", "response_size",
             "body_size", "route_unknown", "not_found", "invalid_challenge", "challenge_binding",
             "duplicate_delivery", "directory_mismatch", "invalid_network_username", "identity_required", "routing_changed",
             "credential_changed", "platform_credential_required", "server_not_configured")
@@ -34,7 +34,7 @@ data class NetworkDiagnostic(
 
 fun networkOperation(request: ApiRequest): NetworkOperation = when (request) {
     is ApiRequest.Send -> NetworkOperation.SEND
-    is ApiRequest.Fetch -> if (request.submissionIds.isEmpty()) NetworkOperation.FETCH else NetworkOperation.RECEIPT_STATUS
+    is ApiRequest.Fetch -> if (request.includeSenders || request.submissionIds.isEmpty()) NetworkOperation.FETCH else NetworkOperation.RECEIPT_STATUS
     is ApiRequest.Ack -> NetworkOperation.ACK
     is ApiRequest.Lookup -> NetworkOperation.LOOKUP
     is ApiRequest.Prekeys -> NetworkOperation.PUBLISH

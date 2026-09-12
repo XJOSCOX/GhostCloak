@@ -23,6 +23,7 @@ import org.ghostcloak.app.application.NetworkStatus
             NetworkStatus.CONNECTED -> "Connected"
             NetworkStatus.CONNECTING -> "Connecting…"
             NetworkStatus.SYNCING -> "Syncing…"
+            NetworkStatus.RATE_LIMITED -> "Sync temporarily delayed"
             NetworkStatus.OFFLINE -> "Offline · Try Sync"
             NetworkStatus.ERROR -> "Needs attention · Try Sync"
             else -> "Connect to start messaging"

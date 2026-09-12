@@ -1,4 +1,34 @@
-# Phase 1E physical-device disconnect diagnostic
+# Phase 1E.4: confirmed FETCH rate-limit collision
+
+Physical-device Logcat supplied by the user confirmed repeated HTTP 429s on FETCH, followed by recovery at the rate-limit window boundary. The former inbox and RECEIPT_STATUS calls shared the existing 60/minute per-device bucket. This update fixes client request amplification; server rate limits and backend protocol are unchanged.
+
+## Current behavior
+
+- The first inbox Fetch includes up to `NetworkLimits.BATCH` (8) rotating queued submission IDs. One response supplies deliveries and statuses. Normal idle/light cycles perform **one FETCH**, including when delivery receipts are pending.
+- Full inbox batches paginate, bounded to the existing 16 pages. Subsequent pages carry skip IDs but no receipt IDs. Messages are still decrypted/committed before ACK. Status IDs/counts are validated before updating outgoing messages; only recorded recipient ACK makes a message Delivered. Inbox commits survive a subsequent invalid receipt response.
+- An expired/unknown receipt can cause the existing server to reject the entire combined request with 404. Only that case falls back to an inbox-only Fetch, preserving retrieval and the existing seven-day receipt retention behavior. It does not mark expired receipts Delivered.
+- Foreground entry syncs immediately. After completion, active/pending-receipt cycles wait 2 seconds (at most about 30 normal FETCH/minute before latency). Consecutive unchanged cycles relax to 3 seconds from the fourth and 5 seconds from the eighth. Sending resets the fast policy and wakes an idle wait, while maintaining at least 2 seconds after cycle completion. Resume resets the policy. Lifecycle STOP cancels polling and in-flight coroutine work; a mutex and the serialized runtime prevent overlapping loops/operations.
+- HTTP 429 maps to **RATE_LIMITED**, with a subtle “Sync temporarily delayed” label. It never clears credentials or initiates auth renewal. Both manual and automatic Fetch calls honor a shared monotonic cooldown. `Retry-After` accepts seconds or HTTP-date; absent/invalid values use 15, 30, then at most 60 seconds. A minimum 2-second wait avoids a zero-delay loop. Successful Fetch resets fallback backoff. Other HTTP errors and the one-retry 401 renewal policy retain their behavior.
+- Cooldown headers are local transport metadata, not a change to serialized request/response fields. No error body, header value, identifier, token or URL is logged. Combined requests are categorized as FETCH. Release diagnostics remain disabled.
+
+A typical active debug cycle now shows:
+
+```text
+SYNC START cycle=...
+FETCH START elapsed=0ms
+FETCH HTTP elapsed=... http=200
+FETCH END elapsed=... http=200
+status SYNCING -> CONNECTED
+SYNC END cycle=... elapsed=...ms
+```
+
+Incoming messages may add ACK calls and full inboxes may add FETCH pages. Manual Sync, pagination, expired-receipt fallback, and a one-time 401 retry can add requests beyond the normal polling budget; the server limit and explicit 429 cooldown still apply. No physical-phone run is claimed by automated emulator tests.
+
+`CombinedSyncTest` covers combined replies/receipts, accurate ACK state, rotation, pagination, invalid receipts, retention fallback and 429 recovery. `ForegroundSyncTest` exercises real STARTED/STOPPED/resumed lifecycles, automatic renewal and cooldown recovery. `ForegroundBudgetTest` applies the actual cadence policy to the unchanged server limiter over ten simulated minutes and verifies Retry-After through a real loopback HTTP server. Existing JVM/PostgreSQL, privacy, session and Android tests remain regression coverage.
+
+## Historical Phase 1E diagnostic (before this fix)
+
+The following audit records the earlier behavior and candidate analysis, superseded by the confirmed finding and implementation above.
 
 Baseline: `2580573`. This commit instruments the client; it does not establish the cause of the recurring physical-device failure. Capture a complete occurrence on the affected debug phones before changing timing or adding UI debounce. Healthy server processes and tunnel counters do not exclude DNS, TLS, mobile routing, response validation, or endpoint-local failures.
 

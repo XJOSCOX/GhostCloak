@@ -23,9 +23,13 @@ class HttpGhostClient(
     private val diagnostics: ((NetworkDiagnostic) -> Unit)? = null,
 ) : GhostAuthClient, GhostDirectoryClient {
     private val base = URI(baseUrl)
+    private val fetchCooldown = FetchCooldown()
+    val fetchRetryDelayMillis get() = fetchCooldown.remainingMillis
     init { validateApiOrigin(base, allowLoopbackForTests) }
     override suspend fun unauthenticated(request: ApiRequest) = call(request, false)
     suspend fun call(request: ApiRequest, authenticated: Boolean = true): ApiResponse = withContext(Dispatchers.IO) {
+        if (request is ApiRequest.Fetch && fetchCooldown.remainingMillis > 0)
+            throw ApiFailure(429, "rate_limited", fetchCooldown.remainingMillis)
         val category = networkOperation(request)
         val started = System.nanoTime()
         fun diagnostic(event: NetworkEvent, http: Int? = null, failure: ApiFailure? = null, exception: Exception? = null, since: Long = started) {
@@ -46,16 +50,19 @@ class HttpGhostClient(
                 }
                 val result = transport.execute(TransportRequest(base.resolve(ApiRoutes.path(request)), bytes, authorization, reportStatus))
                 httpStatus = result.status
+                if (result.status == 429) throw ApiFailure(429, "rate_limited", result.retryAfterMillis)
                 requireApi(result.contentType == NetworkLimits.CONTENT_TYPE, "invalid_response", 502)
                 requireApi(result.body.size <= NetworkLimits.RESPONSE, "response_size", 502)
                 val response = NetworkCodec.decode<ApiResponse>(result.body, NetworkLimits.RESPONSE)
                 requireApi(response.version == 1, "invalid_response", 502)
                 if (result.status !in 200..299) throw ApiFailure(result.status, "server_rejected")
                 requireApi(response.error == null, "invalid_response", 502)
+                if (request is ApiRequest.Fetch) fetchCooldown.succeeded()
                 return response
             } catch (e: kotlinx.coroutines.CancellationException) {
                 diagnostic(NetworkEvent.CANCELLED, httpStatus, since = attemptStarted); throw e
             } catch (e: ApiFailure) {
+                if (e.status == 429 && request is ApiRequest.Fetch) fetchCooldown.rejected(e.retryAfterMillis)
                 diagnostic(NetworkEvent.API_FAILURE, httpStatus, failure = e, since = attemptStarted); throw e
             } catch (e: Exception) {
                 diagnostic(NetworkEvent.TRANSPORT_FAILURE, httpStatus, exception = e, since = attemptStarted)

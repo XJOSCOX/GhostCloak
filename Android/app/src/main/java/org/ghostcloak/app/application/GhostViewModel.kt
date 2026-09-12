@@ -59,9 +59,12 @@ class GhostViewModel internal constructor(application: Application, private val 
         }
     }
     private var foregroundCycle = 0L
+    private val polling = org.ghostcloak.transport.ForegroundPolling()
+    private val pollingWake = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
     private val foregroundMutex = kotlinx.coroutines.sync.Mutex()
     suspend fun foregroundSync() {
         foregroundMutex.lock()
+        polling.reset()
         try {
             while (true) {
                 if (runtime.networkConfigured && !runtime.inDemo) {
@@ -75,7 +78,12 @@ class GhostViewModel internal constructor(application: Application, private val 
                     }
                 }
                 // Wait after completion; lifecycle restart begins with an immediate cycle.
-                kotlinx.coroutines.delay(1000)
+                val interval = polling.completed(runtime.syncActive)
+                // A send wakes idle waiting, but never bypasses a known FETCH cooldown.
+                val waitingSince = System.nanoTime()
+                kotlinx.coroutines.withTimeoutOrNull(interval) { pollingWake.receive() }
+                kotlinx.coroutines.delay((2000L - (System.nanoTime() - waitingSince) / 1_000_000).coerceAtLeast(0))
+                while (runtime.fetchRetryDelayMillis > 0) kotlinx.coroutines.delay(runtime.fetchRetryDelayMillis)
             }
         } finally { foregroundMutex.unlock() }
     }
@@ -101,6 +109,8 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun delete(id: String, localId: String) = run { it.delete(id, localId); null }
     fun send(id: String, text: String, success: () -> Unit) = run {
         val message = runtime.send(it, id, text)
+        polling.reset()
+        pollingWake.trySend(Unit)
         // A saved pending message owns its draft now; Sync retries it without creating a duplicate.
         withContext(Dispatchers.Main) { success() }
         when (message.state) {

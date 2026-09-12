@@ -22,6 +22,8 @@ class AppRuntime internal constructor(
     private var store: EncryptedEndpointStore? = null
     private var local: ConversationService? = null
     private var network: NetworkController? = null
+    val syncActive get() = network?.syncActive == true
+    val fetchRetryDelayMillis get() = network?.fetchRetryDelayMillis ?: 0L
     val canAutoSync get() = !inDemo && network?.canAutoSync == true
     val networkRequiresConnect get() = networkConfigured && !inDemo && network?.canAutoSync != true
     val networkConfigured get() = apiOrigin.isNotEmpty()

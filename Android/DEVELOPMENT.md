@@ -77,3 +77,10 @@ Strict IDE attachment validation remains:
 ```powershell
 .\Android\gradlew.bat -p Android -I gradle/verify-ide-sources.init.gradle verifyIdeSources --no-configuration-cache --dependency-verification strict
 ```
+
+
+## Foreground synchronization (Phase 1E.4)
+
+Opening/resuming the app starts an immediate sync. Active or pending-delivery polling waits 2 seconds after each completed cycle; idle polling gradually relaxes to 3–5 seconds. Backgrounding stops polling. The combined inbox/receipt Fetch normally uses one request per cycle. Rate limiting preserves the session and waits for Retry-After or bounded backoff automatically; manual Sync also respects that cooldown.
+
+In Android Studio Logcat, select the debug app/device and filter `tag:GhostCloakNet`. Normal cycles should show one FETCH and no separate RECEIPT_STATUS request. ACKs and pagination are expected when receiving messages. See [network diagnostics](NETWORK_DIAGNOSTICS.md) for sanitized examples, request budget and retention fallback. These diagnostics are disabled in release builds.

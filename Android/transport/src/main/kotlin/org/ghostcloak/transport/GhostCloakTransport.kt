@@ -19,7 +19,7 @@ class TransportRequest(val endpoint: URI, val body: ByteArray, val applicationAu
 }
 
 /** Only protocol-relevant fields are returned; headers cannot supply an authenticated identity. */
-class TransportResponse(val status: Int, val contentType: String?, val body: ByteArray) {
+class TransportResponse(val status: Int, val contentType: String?, val body: ByteArray, val retryAfterMillis: Long? = null) {
     override fun toString() = "TransportResponse(<redacted>)"
 }
 
@@ -68,6 +68,8 @@ class DirectHttpsTransport(private val allowLoopbackForTests: Boolean = false) :
             val status = connection.responseCode
             try { request.diagnosticHttpStatus?.invoke(status) } catch (_: Exception) { }
             val contentType = connection.getHeaderField("Content-Type")
+            if (status == 429) return TransportResponse(status, contentType, byteArrayOf(),
+                parseRetryAfter(connection.getHeaderField("Retry-After")))
             requireApi(contentType == NetworkLimits.CONTENT_TYPE, "invalid_response", 502)
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             requireApi(stream != null, "invalid_response", 502)

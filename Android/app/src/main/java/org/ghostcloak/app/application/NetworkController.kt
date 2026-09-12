@@ -27,13 +27,16 @@ class NetworkController(
     private var renewalBlocked = false
     private var loggingOut = false
     private var receiptOffset = 0
+    var syncActive = false
+        private set
+    val fetchRetryDelayMillis get() = if (configured) client.fetchRetryDelayMillis else 0L
     val canAutoSync get() = configured && !renewalBlocked && !loggingOut && state.registered() && state.read() != null
     var status = if (configured) NetworkStatus.NEEDS_CONNECT else NetworkStatus.DISABLED
         private set(value) { NetworkDiagnostics.status(field, value); field = value }
     private fun device() = records.transaction { records.read("local/device")?.decodeToString() ?: throw ApiFailure(401, "credential_missing") }
     private fun networkFailure(e: ApiFailure) {
         if (e.status == 401) renewalBlocked = true
-        status = when (e.status) { 401 -> NetworkStatus.NEEDS_CONNECT; 503 -> NetworkStatus.OFFLINE; else -> NetworkStatus.ERROR }
+        status = when (e.status) { 401 -> NetworkStatus.NEEDS_CONNECT; 429 -> NetworkStatus.RATE_LIMITED; 503 -> NetworkStatus.OFFLINE; else -> NetworkStatus.ERROR }
     }
     private suspend fun renewSession(rejectedToken: String) = renewalMutex.withLock {
         requireApi(canAutoSync, "connect_required", 401)
@@ -99,9 +102,26 @@ class NetworkController(
         suspend fun exchange() {
             status = NetworkStatus.SYNCING
             service.retryNetwork(outbox)
+            val queued = service.queuedSubmissions()
+            val ids = if (queued.isEmpty()) emptyList() else {
+                receiptOffset %= queued.size
+                queued.drop(receiptOffset).take(NetworkLimits.BATCH).also {
+                    receiptOffset = (receiptOffset + it.size) % queued.size
+                }
+            }
+            syncActive = queued.isNotEmpty()
             val seen = mutableListOf<String>()
             for (page in 0 until 16) {
-                val response = client.call(ApiRequest.Fetch(includeSenders = true, skipMessageIds = seen.toList()))
+                val receiptIds = if (page == 0) ids else emptyList()
+                var receiptsExpired = false
+                val request = ApiRequest.Fetch(includeSenders = true, skipMessageIds = seen.toList(), submissionIds = receiptIds)
+                val response = try { client.call(request) } catch (e: ApiFailure) {
+                    if (e.status != 404 || receiptIds.isEmpty()) throw e
+                    // Retention can remove a receipt and reject the entire combined response.
+                    receiptsExpired = true
+                    client.call(ApiRequest.Fetch(includeSenders = true, skipMessageIds = seen.toList()))
+                }
+                if (response.deliveries.isNotEmpty()) syncActive = true
                 requireApi(response.deliveries.size <= NetworkLimits.BATCH, "invalid_response", 502)
                 for (delivery in response.deliveries) {
                     requireApi(delivery.serverMessageId !in seen, "duplicate_delivery", 502)
@@ -116,18 +136,11 @@ class NetworkController(
                     catch (e: CryptoFailure) { if (e.error == CryptoError.StorageFailure) throw e else continue }
                     transport.acknowledgeAccepted(listOf(delivery.serverMessageId))
                 }
+                // Inbox commits and ACKs precede receipt validation; invalid statuses cannot undo accepted messages.
+                val expectedIds = if (receiptsExpired) emptyList() else receiptIds
+                requireApi(response.statuses.size == expectedIds.size && response.statuses.map { it.submissionId }.toSet() == expectedIds.toSet(), "invalid_response", 502)
+                service.deliveryStatuses(response.statuses)
                 if (response.deliveries.size < NetworkLimits.BATCH) break
-            }
-            val queued = service.queuedSubmissions()
-            if (queued.isNotEmpty()) {
-                receiptOffset %= queued.size
-                val ids = queued.drop(receiptOffset).take(NetworkLimits.BATCH)
-                receiptOffset = (receiptOffset + ids.size) % queued.size
-                try {
-                    val statuses = client.call(ApiRequest.Fetch(submissionIds = ids)).statuses
-                    requireApi(statuses.size == ids.size && statuses.map { it.submissionId }.toSet() == ids.toSet(), "invalid_response", 502)
-                    service.deliveryStatuses(statuses)
-                } catch (e: ApiFailure) { if (e.status != 404) throw e } // Receipt retention may have elapsed.
             }
         }
         exchange()

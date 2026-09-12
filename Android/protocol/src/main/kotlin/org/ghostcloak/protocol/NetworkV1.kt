@@ -18,7 +18,7 @@ object NetworkLimits {
     const val BATCH = 8
     const val CONTENT_TYPE = "application/vnd.ghostcloak.v1+cbor"
 }
-class ApiFailure(val status: Int, val code: String) : RuntimeException(code)
+class ApiFailure(val status: Int, val code: String, val retryAfterMillis: Long? = null) : RuntimeException(code)
 fun requireApi(ok: Boolean, code: String = "invalid_request", status: Int = 400) { if (!ok) throw ApiFailure(status, code) }
 object Usernames {
     fun normalize(value: String): String {

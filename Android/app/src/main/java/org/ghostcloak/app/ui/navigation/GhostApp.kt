@@ -5,7 +5,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import org.ghostcloak.app.ui.theme.GhostDimensions
 import androidx.navigation.compose.*
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -25,18 +24,8 @@ import org.ghostcloak.app.ui.components.*
     val route = entry?.destination?.route
     Scaffold(containerColor = MaterialTheme.colorScheme.background, bottomBar = {
         if (state.identity != null && route in listOf("contacts", "people", "profiles", "settings")) {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = GhostDimensions.none) {
-                listOf(Triple("contacts", "Chat", Glyph.CHAT), Triple("people", "Contact", Glyph.CONTACTS), Triple("profiles", "Profiles", Glyph.PERSON), Triple("settings", "Settings", Glyph.SETTINGS)).forEach { (destination, label, glyph) ->
-                    NavigationBarItem(selected = route == destination,
-                        onClick = { nav.navigate(destination) { popUpTo("contacts"); launchSingleTop = true } },
-                        icon = { AppIcon(glyph) }, label = { Text(label) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant))
-                }
+            GhostBottomBar(route) { destination ->
+                nav.navigate(destination) { popUpTo("contacts"); launchSingleTop = true }
             }
         }
     }) { padding ->

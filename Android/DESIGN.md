@@ -4,6 +4,8 @@ The theme follows the local GoXEV reference: Space Grotesk typography and neutra
 
 Layout references: [Inbox Chat App](https://dribbble.com/shots/24369393-Inbox-Chat-App) for inbox hierarchy and [Material canonical layouts](https://m3.material.io/foundations/layout/canonical-examples/overview) for list/detail organization.
 
+The bottom navigation uses a compact rounded surface with a horizontal icon-and-label pill for the active destination; inactive destinations retain accessible icon-only tabs. Colors, typography, spacing and shapes use shared theme roles, including light and dark mode. The bar respects the system navigation inset and keeps 48 dp minimum tap targets.
+
 ## Screens
 
 - Chats: With no unread messages, a compact “Chats” title and search/compose icons on the right. When unread messages exist, Search moves left, the centered count replaces “Chats”, and Compose stays right. Only unread incoming messages contribute to the count. Search toggles a local conversation-name field; closing it clears the query. The header has no brand icon or second title. Existing avatars stay in conversation rows. An 8 dp primary-color dot beside the preview identifies each conversation with unread incoming messages, with an accessible unread count. The dot disappears when the conversation is read.

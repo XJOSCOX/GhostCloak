@@ -15,7 +15,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
-enum class Glyph { CHAT, SEARCH, SETTINGS, BACK, SEND, PLUS, SHIELD, CLOSE, MORE, PERSON, CONTACTS }
+enum class Glyph { CHAT, SEARCH, SETTINGS, BACK, SEND, PLUS, SHIELD, CLOSE, MORE, PERSON, CONTACTS, COMPOSE }
 
 /** Small local vector set; no icon font, downloaded assets or additional dependencies. */
 @Composable fun AppIcon(glyph: Glyph, description: String? = null, modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) {
@@ -24,6 +24,11 @@ enum class Glyph { CHAT, SEARCH, SETTINGS, BACK, SEND, PLUS, SHIELD, CLOSE, MORE
             val stroke = Stroke(1.8f, cap = StrokeCap.Round)
             fun line(a: Float, b: Float, c: Float, d: Float) = drawLine(tint, Offset(a,b), Offset(c,d), 1.8f, StrokeCap.Round)
             when (glyph) {
+                Glyph.COMPOSE -> {
+                    drawPath(Path().apply { moveTo(11f,4f); lineTo(5f,4f); quadraticTo(3f,4f,3f,6f); lineTo(3f,19f); quadraticTo(3f,21f,5f,21f); lineTo(18f,21f); quadraticTo(20f,21f,20f,19f); lineTo(20f,13f) },tint,style=stroke)
+                    drawPath(Path().apply { moveTo(10f,11f); lineTo(18f,3f); lineTo(21f,6f); lineTo(13f,14f); lineTo(9f,15f); close() },tint,style=stroke)
+                    line(16f,5f,19f,8f)
+                }
                 Glyph.PLUS -> { line(12f,5f,12f,19f); line(5f,12f,19f,12f) }
                 Glyph.CLOSE -> { line(6f,6f,18f,18f); line(18f,6f,6f,18f) }
                 Glyph.BACK -> { line(19f,12f,5f,12f); line(5f,12f,11f,6f); line(5f,12f,11f,18f) }

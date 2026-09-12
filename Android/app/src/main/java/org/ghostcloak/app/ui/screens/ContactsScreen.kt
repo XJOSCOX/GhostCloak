@@ -36,10 +36,7 @@ import org.ghostcloak.app.ui.components.*
                 }
                 if(!directory) {
                     IconButton(onClick=add,modifier=Modifier.size(48.dp)) {
-                        Surface(Modifier.size(32.dp),shape=RoundedCornerShape(10.dp),color=MaterialTheme.colorScheme.primary,
-                            contentColor=MaterialTheme.colorScheme.onPrimary) {
-                            Box(contentAlignment=Alignment.Center) { AppIcon(Glyph.PLUS,"New chat",Modifier.size(18.dp)) }
-                        }
+                        AppIcon(Glyph.COMPOSE,"New chat",Modifier.size(20.dp),tint=MaterialTheme.colorScheme.primary)
                     }
                     Spacer(Modifier.width(4.dp))
                     BrandMark(Modifier.size(20.dp))

@@ -21,11 +21,12 @@ import org.ghostcloak.messaging.*
 import org.ghostcloak.protocol.EnvelopeCodec
 
 @Composable fun ConversationScreen(state: AppState, status: ContactStatus, back: () -> Unit,
-    security: () -> Unit, send: (String, () -> Unit) -> Unit, delete: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, accept: () -> Unit = {}, reject: () -> Unit = {}) {
+    security: () -> Unit, send: (String, () -> Unit) -> Unit, delete: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, accept: () -> Unit = {}, reject: () -> Unit = {}, clear: () -> Unit = {}) {
     var draft by remember(status.contact.remoteDeviceId) { mutableStateOf("") }
     var rejectedPaste by remember { mutableStateOf(false) }
     var actions by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<String?>(null) }
+    var clearing by remember { mutableStateOf(false) }
     val size = remember(draft) { val bytes = draft.encodeToByteArray(); try { bytes.size } finally { bytes.fill(0) } }
     val changed = status.identity?.trustState == IdentityTrustState.CHANGED
     val active = status.session == SessionLifecycle.ACTIVE && !changed && !status.contact.blocked && !status.contact.request
@@ -40,10 +41,12 @@ import org.ghostcloak.protocol.EnvelopeCodec
             else -> null
         }, back = back, avatarName = status.contact.displayName) {
             HeaderAction(Glyph.SHIELD, "Security", security)
-            if (state.networkConfigured && !state.demo) Box {
+            Box {
                 HeaderAction(Glyph.MORE, "Conversation options") { actions = true }
                 DropdownMenu(expanded = actions, onDismissRequest = { actions = false }) {
-                    DropdownMenuItem(text = { Text("Sync") }, onClick = { actions = false; sync() })
+                    if (state.networkConfigured && !state.demo)
+                        DropdownMenuItem(text = { Text("Sync") }, onClick = { actions = false; sync() })
+                    DropdownMenuItem(text = { Text("Clear conversation") }, onClick = { actions = false; clearing = true })
                 }
             }
         }
@@ -92,8 +95,12 @@ import org.ghostcloak.protocol.EnvelopeCodec
         }
     }
     }
-    deleting?.let { id -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text("Delete from this device?") },
-        text = { Text("The other endpoint keeps its copy. Erasure from backups, memory or flash remnants is not guaranteed.") },
-        confirmButton = { TextButton(onClick = { deleting = null; delete(id) }) { Text("Delete locally") } },
+    deleting?.let { id -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text("Delete message?") },
+        text = { Text("This removes the message from this device only.") },
+        confirmButton = { TextButton(onClick = { deleting = null; delete(id) }) { Text("Delete") } },
         dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } }) }
+    if (clearing) AlertDialog(onDismissRequest = { clearing = false }, title = { Text("Clear conversation?") },
+        text = { Text("This removes all messages with this contact from this device. The contact will remain.") },
+        confirmButton = { TextButton(onClick = { clearing = false; clear() }) { Text("Clear") } },
+        dismissButton = { TextButton(onClick = { clearing = false }) { Text("Cancel") } })
 }

@@ -134,7 +134,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         require(contact.request)
         // Retain a blocked identity tombstone so polling cannot recreate the request.
         repository.save(contact.copy(blocked = true))
-        repository.messages(id).forEach { repository.delete(id, it.localId) }
+        repository.clear(id)
     }
     suspend fun unreadCounts() = action { repository.contacts().filter { !it.blocked }.associate { it.remoteDeviceId to repository.unreadCount(it.remoteDeviceId) } }
     suspend fun unreadCount() = unreadCounts().values.sum()
@@ -165,6 +165,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     }
     suspend fun block(id: String, blocked: Boolean) = action { repository.save(repository.contact(id).copy(blocked = blocked)) }
     suspend fun delete(id: String, localId: String) = action { repository.contact(id); repository.delete(id, localId) }
+    suspend fun clearConversation(id: String) = action { repository.contact(id); repository.clear(id) }
     suspend fun send(id: String, body: String): Message = action {
         val bytes = TextRules.encode(body)
         try {

@@ -129,6 +129,7 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun trust(id: String, expected: String) = run { it.trustReplacement(id, expected); null }
     fun block(id: String, blocked: Boolean) = run { it.block(id, blocked); null }
     fun delete(id: String, localId: String) = run { it.delete(id, localId); null }
+    fun clearConversation(id: String) = run { it.clearConversation(id); null }
     fun send(id: String, text: String, success: () -> Unit) = run {
         val message = runtime.send(it, id, text)
         polling.reset()

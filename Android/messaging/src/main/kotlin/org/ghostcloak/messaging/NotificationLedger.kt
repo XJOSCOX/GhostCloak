@@ -10,6 +10,12 @@ class NotificationLedger(private val records: EndpointRecords) {
     }
     companion object {
         private const val PREFIX = "app/notification/"
+        internal fun remove(records: EndpointRecords, conversationId: String, localId: String) {
+            records.remove("$PREFIX$conversationId/$localId")
+        }
+        internal fun clear(records: EndpointRecords, conversationId: String) {
+            records.keys("$PREFIX$conversationId/").forEach(records::remove)
+        }
         const val PENDING = 1
         const val POSTING = 2
         const val ANNOUNCED = 3

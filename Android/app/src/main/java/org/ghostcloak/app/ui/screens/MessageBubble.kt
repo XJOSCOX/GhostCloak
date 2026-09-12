@@ -24,7 +24,7 @@ import java.time.format.DateTimeFormatter
             Surface(shape=RoundedCornerShape(GhostDimensions.sectionGap,GhostDimensions.sectionGap,if(outgoing) GhostDimensions.tiny else GhostDimensions.sectionGap,if(outgoing) GhostDimensions.sectionGap else GhostDimensions.tiny),
                 color=if(outgoing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
                 contentColor=if(outgoing) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                modifier=Modifier.widthIn(max=GhostDimensions.previewWidth).combinedClickable(onClick={menu=true},onLongClick={menu=true})
+                modifier=Modifier.widthIn(max=GhostDimensions.previewWidth).combinedClickable(onClick={},onLongClick={menu=true})
                     .semantics { customActions=listOf(CustomAccessibilityAction("Delete from this device") { onDelete();true }) }) {
                 Column(Modifier.padding(horizontal=GhostDimensions.fieldCorner,vertical=GhostDimensions.controlGap),verticalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
                     Text(message.body,style=MaterialTheme.typography.bodyLarge)
@@ -32,7 +32,7 @@ import java.time.format.DateTimeFormatter
                 }
             }
             DropdownMenu(expanded=menu,onDismissRequest={menu=false}) {
-                DropdownMenuItem(text={Text("Delete from this device")},onClick={menu=false;onDelete()})
+                DropdownMenuItem(text={Text("Delete")},onClick={menu=false;onDelete()})
             }
         }
         if(outgoing) Text(when(message.state) {

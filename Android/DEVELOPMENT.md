@@ -156,3 +156,13 @@ With Biometric or Biometric + PIN fallback enabled, a locked cold start, expired
 The attempt flag is process-local and is never a biometric-success cache. Process recreation starts locked and gets one new automatic attempt. Notification navigation still waits behind the root gate and continues to Chats after successful unlock. Background synchronization, notification content, PIN throttling and identity/session behavior are unchanged.
 
 Automatic-prompt validation (2026-09-12): 105 JVM tests and 77 emulator tests (67 app, 10 storage) passed, including existing app-lock, Phase 1E and Phase 1F coverage. Debug/release builds and emulator tests passed with strict dependency verification. The foreground-sync fixture now awaits cancelled ViewModel jobs before closing its databases. Automatic prompt orchestration and callbacks are tested with simulated biometric results; physical sensor presentation remains a manual device check.
+
+## Phase 1H.1 — testing local cleanup
+
+Delete means LOCAL DEVICE ONLY: it does not recall, unsend, notify the recipient, delete remotely or alter another participant's copy. Long-press a message → Delete → confirm. Conversation options → Clear conversation → confirm removes history and keeps the contact. Cancel must leave content unchanged. Pending outgoing sends can still finish delivery; this is not an unsend feature.
+
+On two test devices, delete an unread incoming message and check the local badge/count; clear one conversation and check other conversations remain. Send a queued message, delete its local display, then let the recipient sync: delivery should continue. The receiver's history stays intact when the sender deletes a delivered message. Check clear preserves request/accepted, verification and block state. Deletion requires the app to be unlocked and cannot be triggered by a notification intent.
+
+Automated coverage exercises local unread/notification cleanup, all three notification ledger states, transaction rollback, encrypted-store reopen, acceptance-hash replay rejection, identity/session preservation, pending-send completion without history resurrection, unrelated receipt progress, aggregate notification cancellation, UI confirmations and root-lock isolation. Existing storage, Phase 1E/1F and app-lock regression suites remain part of validation. No schema migration or dependency change is needed.
+
+Phase 1H.1 validation (2026-09-12): 108 JVM tests and 81 API-37 emulator tests (71 app, 10 storage) passed. Debug and release builds passed. All Gradle validation ran with strict dependency verification. No physical-device result is claimed for this slice.

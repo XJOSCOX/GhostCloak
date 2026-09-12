@@ -49,7 +49,21 @@ class LocalRepository(private val records: EndpointRecords) {
         if (key !in existing && existing.size >= 5000) throw AppFailure(AppError.LOCAL_CAPACITY)
         put(key, message)
     }
-    fun delete(id: String, localId: String) = records.transaction { records.remove("app/message/$id/$localId") }
+    fun delete(id: String, localId: String) = records.transaction {
+        records.remove("app/message/$id/$localId")
+        val readKey = "app/read/$id"
+        val remaining = read<List<String>>(readKey).orEmpty().filterNot { it == localId }
+        if (remaining.isEmpty()) records.remove(readKey) else put(readKey, remaining)
+        NotificationLedger.remove(records, id, localId)
+        // Keep app/accepted and engine replay evidence. Deletion is not an unsend:
+        // unfinished outbox delivery continues, without recreating visible history.
+        // Receipt polling is derived from visible SERVER_ACCEPTED messages, not a separate ledger.
+    }
+    fun clear(id: String) = records.transaction {
+        records.keys("app/message/$id/").forEach(records::remove)
+        records.remove("app/read/$id")
+        NotificationLedger.clear(records, id)
+    }
     fun capacity() = records.transaction { if (records.keys("app/message/").size >= 5000) throw AppFailure(AppError.LOCAL_CAPACITY) }
     fun accepted(sender:String,id:String,hash:ByteArray):Boolean=records.transaction {
         val existing=records.read("app/accepted/$sender/$id") ?: return@transaction false

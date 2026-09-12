@@ -37,6 +37,16 @@ class ErrorNoticeTest {
             runtime.close()
         }
     }
+    @Test fun ordinaryNoticeExpiresAfterFiveSeconds() {
+        compose.mainClock.autoAdvance = false
+        compose.setContent { GhostCloakTheme { ErrorNotice("Username not found") } }
+        compose.onNodeWithText("Username not found").assertIsDisplayed()
+        compose.mainClock.advanceTimeBy(4500)
+        compose.onNodeWithContentDescription("Dismiss notice").assertIsDisplayed()
+        compose.mainClock.advanceTimeBy(600)
+        compose.onNodeWithText("Username not found").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Dismiss notice").assertDoesNotExist()
+    }
     @Test fun ordinaryNoticeCanBeDismissedButCriticalFailureStaysVisible() {
         val important = mutableStateOf(false)
         val message = mutableStateOf("Temporary connection problem")

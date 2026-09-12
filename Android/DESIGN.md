@@ -46,4 +46,4 @@ This never sends read receipts or changes recipient ACK/Delivered behavior. New 
 
 ## Error presentation
 
-Routine action errors use a compact neutral notice with Dismiss. A successful foreground sync clears prior temporary HTTP 429/503 action errors. Background polling does not repeatedly publish ordinary notices. Cryptographic, invalid-response argument and encrypted-storage failures use a persistent red Action needed panel; dedicated changed-identity warnings and send gates remain unchanged. Presentation does not alter retry, rate-limit or session-renewal behavior.
+Routine action errors use a compact red notice with an X, 12 dp space below it, and a five-second display duration. Critical warnings do not auto-dismiss. A successful foreground sync clears prior temporary HTTP 429/503 action errors. Background polling does not repeatedly publish ordinary notices. Cryptographic, invalid-response argument and encrypted-storage failures use a persistent red Action needed panel; dedicated changed-identity warnings and send gates remain unchanged. Presentation does not alter retry, rate-limit or session-renewal behavior.

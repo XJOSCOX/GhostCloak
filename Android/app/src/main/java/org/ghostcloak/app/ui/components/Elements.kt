@@ -10,6 +10,8 @@ import androidx.compose.ui.Modifier
 import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.identity.IdentityTrustState
 import org.ghostcloak.app.ui.theme.avatarColors
+import org.ghostcloak.app.ui.theme.GhostEffects
+import org.ghostcloak.app.ui.theme.GhostLayout
 
 @Composable fun Wordmark() {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(GhostDimensions.controlGap)) {
@@ -44,14 +46,19 @@ import org.ghostcloak.app.ui.theme.avatarColors
 @Composable fun ErrorNotice(message: String?, important: Boolean = false) {
     var dismissed by remember(message, important) { mutableStateOf(false) }
     if (message == null) return
+    LaunchedEffect(message, important) {
+        if (!important) { kotlinx.coroutines.delay(GhostEffects.NoticeDurationMillis); dismissed = true }
+    }
     if (important) {
         InfoPanel("Action needed", message, warning = true)
     } else if (!dismissed) {
-        Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceVariant) {
+        Surface(modifier = Modifier.padding(bottom = GhostDimensions.medium), shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.errorContainer) {
             Row(Modifier.fillMaxWidth().padding(start = GhostDimensions.regular), verticalAlignment = Alignment.CenterVertically) {
                 Text(message, Modifier.weight(1f).padding(vertical = GhostDimensions.compact),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                HeaderAction(Glyph.CLOSE, "Dismiss notice") { dismissed = true }
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                IconButton(onClick = { dismissed = true }, modifier = Modifier.size(GhostLayout.touchTarget)) {
+                    AppIcon(Glyph.CLOSE, "Dismiss notice", Modifier.size(GhostLayout.headerIcon), tint = MaterialTheme.colorScheme.onErrorContainer)
+                }
             }
         }
     }

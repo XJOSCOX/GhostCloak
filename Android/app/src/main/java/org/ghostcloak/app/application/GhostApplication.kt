@@ -24,6 +24,15 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider {
         // No Direct Boot access; WorkManager itself handles OS-approved persistence/reboot.
         if (getSystemService(android.os.UserManager::class.java).isUserUnlocked) {
             backgroundScope.launchInitialization()
+            // One local cleanup loop, no network/alarms/wake lock. Android may suspend it.
+            backgroundScope.launch {
+                while (true) {
+                    try { runtime.reconcileLocalExpiry() }
+                    catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                    catch (_: Exception) { } // Storage failures never expose message metadata.
+                    kotlinx.coroutines.delay(1000)
+                }
+            }
         }
     }
     private fun kotlinx.coroutines.CoroutineScope.launchInitialization() = launch {

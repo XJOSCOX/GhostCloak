@@ -7,7 +7,7 @@ import org.ghostcloak.crypto.EndpointRecords
 import org.ghostcloak.crypto.EndpointStorageFailure
 
 /** Only the endpoint's encrypted store may back this repository in the application. */
-class LocalRepository(private val records: EndpointRecords) {
+class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClock = ExpiryClock()) {
     private val format = Cbor { encodeDefaults = true; ignoreUnknownKeys = false }
     private inline fun <reified T> read(key: String): T? = records.read(key)?.let { bytes ->
         try { format.decodeFromByteArray<T>(bytes) }
@@ -29,18 +29,34 @@ class LocalRepository(private val records: EndpointRecords) {
     fun card(id: String): String? = records.transaction { read<String>("app/card/$id") }
     fun card(id: String, text: String) = records.transaction { put("app/card/$id", text) }
     fun messages(id: String): List<Message> = records.transaction {
+        expire(id)
         records.keys("app/message/$id/").map { read<Message>(it) ?: throw EndpointStorageFailure() }.sortedBy { it.timestamp }
+    }
+    fun policy(id: String): Int = records.transaction { read<Int>("app/disappearing/$id")?.also { DisappearingTimer.from(it) } ?: 0 }
+    fun policy(id: String, seconds: Int) = records.transaction { DisappearingTimer.from(seconds); put("app/disappearing/$id", seconds) }
+    fun expire(conversationId: String? = null): Int = records.transaction {
+        val now = clock.now()
+        val prefix = if (conversationId == null) "app/message/" else "app/message/$conversationId/"
+        val expired = records.keys(prefix).map { read<Message>(it) ?: throw EndpointStorageFailure() }
+            .filter { it.expiry?.reached(now) == true }
+        expired.forEach { delete(it.conversationId, it.localId) }
+        expired.size
+    }
+    fun acceptedOutgoing(id: String, localId: String) = records.transaction {
+        val message = read<Message>("app/message/$id/$localId") ?: return@transaction
+        save(message.copy(state = MessageState.SERVER_ACCEPTED, expiry = message.expiry ?: if (!message.policyEvent && message.disappearingSeconds > 0)
+            ExpiryDeadline.start(message.disappearingSeconds, clock.now()) else null))
     }
     fun unreadCount(id: String): Int = records.transaction {
         val seen = read<List<String>>("app/read/$id").orEmpty().toSet()
-        messages(id).count { it.direction == Direction.INCOMING && it.localId !in seen }
+        messages(id).count { it.direction == Direction.INCOMING && !it.policyEvent && it.localId !in seen }
     }
     fun unreadMessageIds(id: String): Set<String> = records.transaction {
         val seen = read<List<String>>("app/read/$id").orEmpty().toSet()
-        messages(id).filter { it.direction == Direction.INCOMING && it.localId !in seen }.map { it.localId }.toSet()
+        messages(id).filter { it.direction == Direction.INCOMING && !it.policyEvent && it.localId !in seen }.map { it.localId }.toSet()
     }
     fun markRead(id: String) = records.transaction {
-        val seen = messages(id).filter { it.direction == Direction.INCOMING }.map { it.localId }
+        val seen = messages(id).filter { it.direction == Direction.INCOMING && !it.policyEvent }.map { it.localId }
         if (read<List<String>>("app/read/$id") != seen) put("app/read/$id", seen)
     }
     fun save(message: Message) = records.transaction {

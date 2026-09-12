@@ -69,16 +69,29 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     }
     suspend fun messages(id: String) = action { repository.contact(id); repository.messages(id) }
     suspend fun sendNetwork(id:String,body:String,outbox:DurableOutbox):Message=action {
+        enqueueNetwork(id, body, repository.policy(id), false, outbox)
+    }
+    suspend fun setDisappearing(id: String, seconds: Int, outbox: DurableOutbox): Message = action {
+        enqueueNetwork(id, "", seconds, true, outbox)
+    }
+    suspend fun policies() = action { repository.contacts().associate { it.remoteDeviceId to repository.policy(it.remoteDeviceId) } }
+    suspend fun reconcileExpiry() = action { repository.expire() }
+    private suspend fun enqueueNetwork(id: String, body: String, seconds: Int, control: Boolean, outbox: DurableOutbox): Message {
         networkAllowed(id)
         repository.capacity()
-        val bytes=TextRules.encode(body)
-        val submission=try {outbox.enqueue(id,bytes)} finally {bytes.fill(0)}
-        val message=Message(submission,id,Direction.OUTGOING,body,System.currentTimeMillis(),MessageState.PENDING)
-        repository.save(message)
-        val result=try {outbox.process(submission)} catch(_:org.ghostcloak.protocol.ApiFailure) {return@action message}
-        message.copy(state=if(result.state==OutboxState.SERVER_ACCEPTED) MessageState.SERVER_ACCEPTED else MessageState.FAILED).also {
-            repository.save(it);outbox.removeFinished(submission)
-        }
+        val bytes = ConversationPayload.encode(body, seconds, control)
+        lateinit var message: Message
+        val submission = try { outbox.enqueue(id, bytes) { submission ->
+            message = Message(submission, id, Direction.OUTGOING, if (control) ConversationPayload.policyText(seconds) else body,
+                repository.clock.now().wall, MessageState.PENDING, disappearingSeconds = seconds, policyEvent = control)
+            repository.save(message)
+            if (control) repository.policy(id, seconds)
+        } } finally { bytes.fill(0) }
+        val result = try { outbox.process(submission) { repository.acceptedOutgoing(id, it.submissionId) } }
+            catch (_: org.ghostcloak.protocol.ApiFailure) { return message }
+        if (result.state == OutboxState.FAILED) repository.save(message.copy(state = MessageState.FAILED))
+        outbox.removeFinished(submission)
+        return repository.messages(id).firstOrNull { it.localId == submission } ?: message
     }
     private suspend fun networkAllowed(id:String) {
         if(repository.contact(id).blocked || repository.contact(id).request) throw AppFailure(AppError.BLOCKED)
@@ -94,7 +107,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 if (e.error in setOf(CryptoError.IdentityChanged, CryptoError.UnknownSession, CryptoError.ReauthenticationRequired)) continue
                 throw e
             }
-            val result=outbox.process(id)
+            val result=outbox.process(id) { repository.acceptedOutgoing(entry.deviceId, it.submissionId) }
             repository.messages(entry.deviceId).firstOrNull {it.localId==id}?.let { message ->
                 repository.save(message.copy(state=if(result.state==OutboxState.SERVER_ACCEPTED) MessageState.SERVER_ACCEPTED else MessageState.FAILED))
             }
@@ -117,11 +130,17 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         if(contact.blocked) throw AppFailure(AppError.BLOCKED)
         repository.capacity()
         engine.decryptAndCommit(envelope) { bytes ->
-            val body=bytes.decodeToString(throwOnInvalidSequence=true)
-            TextRules.encode(body).fill(0)
+            val content = ConversationPayload.decode(bytes)
+            // Defer controls until this side has explicitly accepted/added the contact.
+            if (content.control && (contacts.none { it.remoteDeviceId == contact.remoteDeviceId } || contact.request))
+                throw AppFailure(AppError.BLOCKED)
             repository.save(contact)
-            repository.saveAccepted(Message(envelope.envelopeId,contact.remoteDeviceId,Direction.INCOMING,body,
-                System.currentTimeMillis(),MessageState.RECEIVED,envelope.envelopeId),hash)
+            val now = repository.clock.now()
+            repository.saveAccepted(Message(envelope.envelopeId,contact.remoteDeviceId,Direction.INCOMING,
+                if (content.control) ConversationPayload.policyText(content.seconds) else content.body,
+                now.wall,MessageState.RECEIVED,envelope.envelopeId, content.seconds,
+                if (!content.control && content.seconds > 0) ExpiryDeadline.start(content.seconds, now) else null, content.control),hash)
+            if (content.control) repository.policy(contact.remoteDeviceId, content.seconds)
         }
     }
     suspend fun acceptRequest(id: String) = action {
@@ -138,6 +157,12 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     }
     suspend fun unreadCounts() = action { repository.contacts().filter { !it.blocked }.associate { it.remoteDeviceId to repository.unreadCount(it.remoteDeviceId) } }
     suspend fun unreadCount() = unreadCounts().values.sum()
+    suspend fun unreadExpiries() = action {
+        repository.contacts().filter { !it.blocked }.associate { contact ->
+            val unread = repository.unreadMessageIds(contact.remoteDeviceId)
+            contact.remoteDeviceId to repository.messages(contact.remoteDeviceId).filter { it.localId in unread }.mapNotNull { it.expiry }
+        }
+    }
     suspend fun markRead(id: String) = action { repository.markRead(id) }
     suspend fun queuedSubmissions() = action {
         repository.contacts().flatMap { repository.messages(it.remoteDeviceId) }

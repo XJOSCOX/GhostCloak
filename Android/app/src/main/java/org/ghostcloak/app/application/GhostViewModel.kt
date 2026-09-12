@@ -14,6 +14,8 @@ import org.ghostcloak.messaging.*
 import org.ghostcloak.transport.TransportFailure
 
 data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? = null,
+    val disappearingPolicies: Map<String, Int> = emptyMap(),
+    val unreadExpiries: Map<String, List<ExpiryDeadline>> = emptyMap(),
     val unreadCount: Int = 0, val unreadByConversation: Map<String, Int> = emptyMap(), val contacts: List<ContactStatus> = emptyList(), val previews: Map<String, Message> = emptyMap(), val messages: List<Message> = emptyList(),
     val error: String? = null, val errorImportant: Boolean = false, val errorTransient: Boolean = false, val card: String = "", val fingerprint: String = "",
     val demo: Boolean = false, val protection: String = "", val ready: Boolean = false,
@@ -29,7 +31,11 @@ class GhostViewModel internal constructor(application: Application, private val 
     val developerAvailable get() = runtime.developerAvailable
     @Volatile private var selected: String? = null
     private var workCount = 0
-    init { refresh() }
+    init {
+        refresh()
+        viewModelScope.launch { runtime.expiryRevision.collect { if (it > 0) run(quiet = true) } }
+    }
+    fun expiryNow() = runtime.expiryNow()
     private fun run(quiet: Boolean = false, activity: NetworkStatus? = null, block: suspend (ConversationService) -> String? = { null }): kotlinx.coroutines.Job {
         if (!quiet) workCount++
         if (!quiet) mutable.value = mutable.value.copy(loading = true, error = null, errorImportant = false, errorTransient = false,
@@ -54,6 +60,8 @@ class GhostViewModel internal constructor(application: Application, private val 
                     selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.markRead(it) }
                     val unread = if (identity != null) active.unreadCounts() else emptyMap()
                     mutable.value = mutable.value.copy(identity = identity, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
+                        disappearingPolicies = if (identity != null) active.policies() else emptyMap(),
+                        unreadExpiries = if (identity != null) active.unreadExpiries() else emptyMap(),
                         previews = contacts.mapNotNull { c -> active.messages(c.contact.remoteDeviceId).lastOrNull()?.let { c.contact.remoteDeviceId to it } }.toMap(),
                         messages = selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.messages(it) } ?: emptyList(),
                         demo = runtime.inDemo, protection = runtime.protection, ready = true,
@@ -130,6 +138,13 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun block(id: String, blocked: Boolean) = run { it.block(id, blocked); null }
     fun delete(id: String, localId: String) = run { it.delete(id, localId); null }
     fun clearConversation(id: String) = run { it.clearConversation(id); null }
+    fun setDisappearing(id: String, seconds: Int) = run {
+        val message = runtime.setDisappearing(it, id, seconds)
+        pollingWake.trySend(Unit)
+        if (message.state == MessageState.PENDING) "Timer applies locally. The encrypted update is pending and will retry during sync."
+        else if (message.state == MessageState.FAILED) "Timer applies locally, but the update failed. Choose the timer again to retry."
+        else null
+    }
     fun send(id: String, text: String, success: () -> Unit) = run {
         val message = runtime.send(it, id, text)
         polling.reset()
@@ -161,7 +176,7 @@ class GhostViewModel internal constructor(application: Application, private val 
         AppError.DUPLICATE_CONTACT -> "This device is already in your contacts."
         AppError.AMBIGUOUS_IDENTITY -> "This card conflicts with an existing identity. It was not imported."
         AppError.EMPTY_MESSAGE -> "Write a message before sending."
-        AppError.MESSAGE_TOO_LARGE -> "Message exceeds the 16,384-byte UTF-8 limit. Shorten it and try again."
+        AppError.MESSAGE_TOO_LARGE -> "Message is too large. Shorten it and try again."
         AppError.INVALID_TEXT -> "This text contains invalid Unicode."
         AppError.BLOCKED -> "This contact is blocked on this device."
         AppError.LOCAL_CAPACITY -> "Local prototype capacity reached. No existing data was removed."

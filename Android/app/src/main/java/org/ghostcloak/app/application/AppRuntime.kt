@@ -19,7 +19,13 @@ class AppRuntime internal constructor(
     private val connection: org.ghostcloak.transport.GhostCloakTransport = org.ghostcloak.transport.TransportPolicy.select(),
     private val backgroundEligibility: (Boolean) -> Unit = {},
     private val notifications: LocalNotifications = NoLocalNotifications,
+    private val expiryClock: ExpiryClock = ExpiryClock(System::currentTimeMillis, android.os.SystemClock::elapsedRealtime,
+        { android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0) }),
 ) : AutoCloseable {
+    private val expiryChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
+    val expiryRevision: kotlinx.coroutines.flow.StateFlow<Long> get() = expiryChanges
+    fun expiryNow() = expiryClock.now()
+    suspend fun reconcileLocalExpiry() { if (canOpenExisting()) use { } }
     private val mutex = Mutex()
     private var store: EncryptedEndpointStore? = null
     private var local: ConversationService? = null
@@ -131,12 +137,14 @@ class AppRuntime internal constructor(
                     android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0))
                     else org.ghostcloak.transport.FetchCooldown()
                 network=NetworkController(records,engine,apiOrigin,connection,cooldown)
-                local = ConversationService(engine, LocalRepository(records))
-                notificationLedger = NotificationLedger(records)
+                local = ConversationService(engine, LocalRepository(records, expiryClock))
+                notificationLedger = NotificationLedger(records, expiryClock)
                 store = records
                 } catch (e: Exception) { records.close(); throw e }
             }
+            if (local!!.reconcileExpiry() > 0) expiryChanges.value++
             try { block(demo?.service ?: local!!) } finally {
+                if (local!!.reconcileExpiry() > 0) expiryChanges.value++
                 reconcileBackground()
                 reconcileNotifications()
             }
@@ -165,6 +173,10 @@ class AppRuntime internal constructor(
         return message
     }
     suspend fun connectNetwork(service: ConversationService) { network!!.connect(service.open()!!.username) }
+    suspend fun setDisappearing(service: ConversationService, id: String, seconds: Int): Message {
+        check(networkConfigured && !inDemo)
+        return network!!.setDisappearing(service, id, seconds)
+    }
     suspend fun syncNetwork(service: ConversationService, requested: Long? = null) {
         if (requested != null && requested != syncGeneration) return
         network!!.sync(service)

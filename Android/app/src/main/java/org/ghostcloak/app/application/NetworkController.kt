@@ -112,6 +112,14 @@ class NetworkController(
             // Preserve request failure status when the outbox retains a pending message.
         }
     }
+    suspend fun setDisappearing(service: ConversationService, id: String, seconds: Int): Message = operation(NetworkOperation.SEND) {
+        requireApi(state.registered(), "connect_required", 401)
+        status = NetworkStatus.SYNCING
+        service.setDisappearing(id, seconds, outbox).also {
+            if (it.state == MessageState.SERVER_ACCEPTED) { renewalBlocked = false; status = NetworkStatus.CONNECTED }
+            else if (status == NetworkStatus.SYNCING) status = NetworkStatus.ERROR
+        }
+    }
     suspend fun sync(service: ConversationService) = operation(NetworkOperation.FETCH) {
         requireApi(canAutoSync, "connect_required", 401)
         suspend fun exchange() {

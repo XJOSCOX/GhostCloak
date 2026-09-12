@@ -4,7 +4,7 @@ import org.ghostcloak.crypto.EndpointRecords
 import org.ghostcloak.crypto.EndpointStorageFailure
 
 /** References stay in encrypted records, never in Android notification or intent metadata. */
-class NotificationLedger(private val records: EndpointRecords) {
+class NotificationLedger(private val records: EndpointRecords, private val clock: ExpiryClock = ExpiryClock()) {
     data class Entry internal constructor(internal val key: String, val state: Int) {
         override fun toString() = "NotificationEntry(redacted)"
     }
@@ -20,7 +20,7 @@ class NotificationLedger(private val records: EndpointRecords) {
         const val POSTING = 2
         const val ANNOUNCED = 3
         internal fun accepted(records: EndpointRecords, message: Message) {
-            if (message.direction == Direction.INCOMING)
+            if (message.direction == Direction.INCOMING && !message.policyEvent)
                 records.write("$PREFIX${message.conversationId}/${message.localId}", byteArrayOf(PENDING.toByte()))
         }
     }
@@ -31,7 +31,7 @@ class NotificationLedger(private val records: EndpointRecords) {
     }
     /** Prune before publication so read, deleted and blocked messages cannot cause an alert. */
     fun eligible(): List<Entry> = records.transaction {
-        val repository = LocalRepository(records)
+        val repository = LocalRepository(records, clock)
         val unread = repository.contacts().filter { !it.blocked }
             .associate { it.remoteDeviceId to repository.unreadMessageIds(it.remoteDeviceId) }
         records.keys(PREFIX).mapNotNull { key ->

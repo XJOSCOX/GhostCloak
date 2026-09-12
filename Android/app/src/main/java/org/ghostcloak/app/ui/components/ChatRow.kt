@@ -37,7 +37,7 @@ import java.time.format.DateTimeFormatter
                 Text(when {
                     contact.blocked -> "Blocked on this device"
                     contact.request -> "Message request - Unverified"
-                    last != null -> (if (last.direction == Direction.OUTGOING) "You: " else "") + last.body
+                    last != null -> (if (last.direction == Direction.OUTGOING && !last.policyEvent) "You: " else "") + last.body
                     else -> "Start an encrypted conversation"
                 }, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium,
                     color = if (contact.request) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)

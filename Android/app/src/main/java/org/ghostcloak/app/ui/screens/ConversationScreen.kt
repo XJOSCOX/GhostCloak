@@ -21,12 +21,13 @@ import org.ghostcloak.messaging.*
 import org.ghostcloak.protocol.EnvelopeCodec
 
 @Composable fun ConversationScreen(state: AppState, status: ContactStatus, back: () -> Unit,
-    security: () -> Unit, send: (String, () -> Unit) -> Unit, delete: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, accept: () -> Unit = {}, reject: () -> Unit = {}, clear: () -> Unit = {}) {
+    security: () -> Unit, send: (String, () -> Unit) -> Unit, delete: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, accept: () -> Unit = {}, reject: () -> Unit = {}, clear: () -> Unit = {}, disappearing: (Int) -> Unit = {}) {
     var draft by remember(status.contact.remoteDeviceId) { mutableStateOf("") }
     var rejectedPaste by remember { mutableStateOf(false) }
     var actions by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<String?>(null) }
     var clearing by remember { mutableStateOf(false) }
+    var timerSelector by remember { mutableStateOf(false) }
     val size = remember(draft) { val bytes = draft.encodeToByteArray(); try { bytes.size } finally { bytes.fill(0) } }
     val changed = status.identity?.trustState == IdentityTrustState.CHANGED
     val active = status.session == SessionLifecycle.ACTIVE && !changed && !status.contact.blocked && !status.contact.request
@@ -47,6 +48,9 @@ import org.ghostcloak.protocol.EnvelopeCodec
                     if (state.networkConfigured && !state.demo)
                         DropdownMenuItem(text = { Text("Sync") }, onClick = { actions = false; sync() })
                     DropdownMenuItem(text = { Text("Clear conversation") }, onClick = { actions = false; clearing = true })
+                    if (state.networkConfigured && !state.demo)
+                        DropdownMenuItem(text = { Text("Disappearing messages · ${DisappearingTimer.from(state.disappearingPolicies[status.contact.remoteDeviceId] ?: 0).label}") },
+                            enabled = active && !state.loading, onClick = { actions = false; timerSelector = true })
                 }
             }
         }
@@ -66,7 +70,14 @@ import org.ghostcloak.protocol.EnvelopeCodec
                                 Modifier.padding(horizontal=GhostDimensions.medium,vertical=GhostDimensions.tight),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-                    MessageBubble(message,onDelete={deleting=message.localId})
+                    if (message.policyEvent) Column(Modifier.fillMaxWidth().padding(GhostDimensions.medium), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(message.body, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        if (message.direction == Direction.OUTGOING && message.state in setOf(MessageState.PENDING, MessageState.FAILED))
+                            Text(if (message.state == MessageState.PENDING) "Update pending · applies locally" else "Update not delivered · choose the timer again to retry",
+                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    else MessageBubble(message,onDelete={deleting=message.localId})
                 }
             }
         }
@@ -82,16 +93,16 @@ import org.ghostcloak.protocol.EnvelopeCodec
         }
         Surface(color=MaterialTheme.colorScheme.surface) { Column(Modifier.padding(horizontal = GhostLayout.pageInset, vertical=GhostDimensions.controlGap), verticalArrangement = Arrangement.spacedBy(GhostDimensions.compact)) {
             ErrorNotice(state.error, important = state.errorImportant)
-            if (size > EnvelopeCodec.MAX_BODY || rejectedPaste) Text("Too large. Maximum 16,384 UTF-8 bytes; text was not sent.", color = MaterialTheme.colorScheme.error)
+            if (size > ConversationPayload.MAX_TEXT || rejectedPaste) Text("Too large. Maximum 16,368 UTF-8 bytes; text was not sent.", color = MaterialTheme.colorScheme.error)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(GhostDimensions.controlGap)) {
                 OutlinedTextField(draft, onValueChange = { rejectedPaste = it.length > 65536; if (!rejectedPaste) draft = it },
                     enabled = active && !state.loading, modifier = Modifier.weight(1f), placeholder = { Text("Write a message…") }, maxLines = 5,
                     colors=OutlinedTextFieldDefaults.colors(unfocusedBorderColor=androidx.compose.ui.graphics.Color.Transparent,unfocusedContainerColor=MaterialTheme.colorScheme.surface,focusedContainerColor=MaterialTheme.colorScheme.surface),
-                    shape = RoundedCornerShape(GhostDimensions.spacious), isError = size > EnvelopeCodec.MAX_BODY)
-                FilledIconButton(onClick = { send(draft) { draft = "" } }, enabled = active && !state.loading && draft.isNotBlank() && size <= EnvelopeCodec.MAX_BODY && !rejectedPaste,
+                    shape = RoundedCornerShape(GhostDimensions.spacious), isError = size > ConversationPayload.MAX_TEXT)
+                FilledIconButton(onClick = { send(draft) { draft = "" } }, enabled = active && !state.loading && draft.isNotBlank() && size <= ConversationPayload.MAX_TEXT && !rejectedPaste,
                     modifier = Modifier.size(GhostDimensions.avatar)) { AppIcon(Glyph.SEND,"Send") }
             }
-            Text(if (size > 14000) "$size / 16,384 bytes" else "End-to-end encrypted", Modifier.padding(start = GhostDimensions.controlGap, bottom = GhostDimensions.medium), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(if (size > 14000) "$size / 16,368 bytes" else "End-to-end encrypted", Modifier.padding(start = GhostDimensions.controlGap, bottom = GhostDimensions.medium), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
     }
@@ -103,4 +114,13 @@ import org.ghostcloak.protocol.EnvelopeCodec
         text = { Text("This removes all messages with this contact from this device. The contact will remain.") },
         confirmButton = { TextButton(onClick = { clearing = false; clear() }) { Text("Clear") } },
         dismissButton = { TextButton(onClick = { clearing = false }) { Text("Cancel") } })
+    if (timerSelector) AlertDialog(onDismissRequest = { timerSelector = false }, title = { Text("Disappearing messages") },
+        text = { Column {
+            Text("Both devices need disappearing-message support. Applies to future messages. Your timer starts at server acceptance; theirs starts when received and saved, not when read.", style = MaterialTheme.typography.bodySmall)
+            DisappearingTimer.entries.forEach { timer ->
+                TextButton(onClick = { timerSelector = false; disappearing(timer.seconds) }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (timer.seconds == (state.disappearingPolicies[status.contact.remoteDeviceId] ?: 0)) "${timer.label} ✓" else timer.label)
+                }
+            }
+        } }, confirmButton = {}, dismissButton = { TextButton(onClick = { timerSelector = false }) { Text("Cancel") } })
 }

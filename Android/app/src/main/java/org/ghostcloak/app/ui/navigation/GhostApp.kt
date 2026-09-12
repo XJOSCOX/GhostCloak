@@ -10,11 +10,22 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import org.ghostcloak.app.application.GhostViewModel
+import org.ghostcloak.app.application.withoutExpired
+import org.ghostcloak.app.application.nextExpiryUiDelay
 import org.ghostcloak.app.ui.screens.*
 import org.ghostcloak.app.ui.components.*
 
 @Composable fun GhostApp(model: GhostViewModel, chatsRequest: Int = 0) {
-    val state by model.state.collectAsState()
+    val snapshot by model.state.collectAsState()
+    var expiryTick by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(snapshot) {
+        while (true) {
+            kotlinx.coroutines.delay(snapshot.nextExpiryUiDelay(model.expiryNow()))
+            expiryTick++
+        }
+    }
+    // Read tick to invalidate even if storage/network work is delayed. No private stale frame.
+    val state = expiryTick.let { snapshot.withoutExpired(model.expiryNow()) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(model, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { model.foregroundSync() }
@@ -68,7 +79,8 @@ import org.ghostcloak.app.ui.components.*
                         }
                         ConversationScreen(state, contact, { nav.popBackStack() }, { nav.navigate("security/$id") },
                             { text, success -> model.send(id, text, success) }, { model.delete(id, it) }, model::connectNetwork, model::syncNetwork,
-                            { model.acceptRequest(id) }, { model.deleteRequest(id); nav.popBackStack() }, { model.clearConversation(id) })
+                            { model.acceptRequest(id) }, { model.deleteRequest(id); nav.popBackStack() }, { model.clearConversation(id) },
+                            { model.setDisappearing(id, it) })
                     }
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable

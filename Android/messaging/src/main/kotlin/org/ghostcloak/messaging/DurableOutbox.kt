@@ -30,16 +30,17 @@ class DurableOutbox(private val records: EndpointRecords, private val engine: Se
     private fun put(e: OutboxEntry) = records.write(key(e.submissionId), NetworkCodec.encode(e))
     fun get(id: String): OutboxEntry = records.transaction { NetworkCodec.decode(records.read(key(id)) ?: throw ApiFailure(404, "outbox_missing")) }
     fun pendingIds(): List<String> = records.transaction { records.keys("outbox/").map { it.removePrefix("outbox/") } }
-    suspend fun enqueue(deviceId: String, plaintext: ByteArray): String = withContext(Dispatchers.IO) { mutex.withLock {
+    suspend fun enqueue(deviceId: String, plaintext: ByteArray, committed: (String) -> Unit = {}): String = withContext(Dispatchers.IO) { mutex.withLock {
         requireApi(RandomIdentifiers.valid(deviceId) && plaintext.size in 1..EnvelopeCodec.MAX_BODY)
         val id = RandomIdentifiers.create()
-        records.transaction { requireApi(records.keys("outbox/").size < 128, "outbox_full", 429); put(OutboxEntry(id, deviceId, OutboxState.LOCAL, plaintext.copyOf(), createdAt = time())) }
+        records.transaction { requireApi(records.keys("outbox/").size < 128, "outbox_full", 429); put(OutboxEntry(id, deviceId, OutboxState.LOCAL, plaintext.copyOf(), createdAt = time())); committed(id) }
         crash(CrashPoint.AFTER_LOCAL)
         id
     } }
-    suspend fun process(id: String): OutboxEntry = withContext(Dispatchers.IO) { mutex.withLock {
+    suspend fun process(id: String, accepted: (OutboxEntry) -> Unit = {}): OutboxEntry = withContext(Dispatchers.IO) { mutex.withLock {
         var entry = get(id)
-        if (entry.state == OutboxState.SERVER_ACCEPTED || entry.state == OutboxState.FAILED) return@withLock entry
+        if (entry.state == OutboxState.SERVER_ACCEPTED) { records.transaction { accepted(entry) }; return@withLock entry }
+        if (entry.state == OutboxState.FAILED) return@withLock entry
         if (entry.state == OutboxState.ENCRYPTION_PENDING || time() - entry.createdAt >= 86400000) {
             // No crypto rollback or automatic resend of an ambiguous/too-old operation.
             entry = OutboxEntry(id, entry.deviceId, OutboxState.FAILED, createdAt = entry.createdAt)
@@ -58,7 +59,7 @@ class DurableOutbox(private val records: EndpointRecords, private val engine: Se
         val serverId = transport.submit(id, entry.deviceId, EnvelopeCodec.decode(entry.ciphertext))
         crash(CrashPoint.AFTER_SERVER_ACCEPTANCE)
         entry = OutboxEntry(id, entry.deviceId, OutboxState.SERVER_ACCEPTED, createdAt = entry.createdAt, serverId = serverId)
-        records.transaction { put(entry) }; entry
+        records.transaction { put(entry); accepted(entry) }; entry
     } }
     fun removeFinished(id: String) = records.transaction { val entry = get(id); require(entry.state in setOf(OutboxState.SERVER_ACCEPTED, OutboxState.FAILED)); records.remove(key(id)) }
 }

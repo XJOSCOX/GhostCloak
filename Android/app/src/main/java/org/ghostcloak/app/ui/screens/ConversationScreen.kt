@@ -37,8 +37,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
             changed -> "! Security identity changed"
             status.contact.request -> "Message request - Unverified"
             !active -> "Session unavailable"
-            status.identity?.trustState == IdentityTrustState.VERIFIED -> "Encrypted · Verified"
-            else -> "Encrypted · Unverified"
+            else -> null
         }, back = back) {
             HeaderAction(Glyph.SHIELD, "Security", security)
             if (state.networkConfigured && !state.demo) Box {

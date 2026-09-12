@@ -33,25 +33,25 @@ class LocalDemoTest {
         runtime.close()
     }
     @Test fun appNavigationRunsIsolatedEncryptedDemo() {
-        compose.waitUntil(20000) { compose.onAllNodesWithText("Settings").fetchSemanticsNodes().isNotEmpty() ||
+        compose.waitUntil(20000) { compose.onAllNodesWithContentDescription("Settings").fetchSemanticsNodes().isNotEmpty() ||
             compose.onAllNodesWithText("Create local identity").fetchSemanticsNodes().isNotEmpty() }
         if (compose.onAllNodesWithText("Create local identity").fetchSemanticsNodes().isNotEmpty()) {
             compose.onNodeWithText("Username").performTextInput("LocalTest")
             compose.waitUntil(20000) { compose.onNodeWithText("Create local identity").isEnabled() }
             compose.onNodeWithText("Create local identity").performScrollTo().performClick()
         }
-        compose.waitUntil(20000) { compose.onAllNodesWithText("Settings").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("Settings").performClick()
+        compose.waitUntil(20000) { compose.onAllNodesWithContentDescription("Settings").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Open local demo").performScrollTo().performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText("Return to my identity").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("Contact").performClick()
+        compose.onNodeWithContentDescription("Contact").performClick()
         compose.onNodeWithText("Contacts").assertIsDisplayed()
-        compose.onNodeWithText("Profiles").performClick()
+        compose.onNodeWithContentDescription("Profiles").performClick()
         compose.onNodeWithText("Your profile").assertIsDisplayed()
         compose.onNodeWithText("Edit").performClick()
         compose.onNodeWithText("Edit your name").assertIsDisplayed()
         compose.onNodeWithText("Cancel").performClick()
-        compose.onAllNodes(hasText("Chat") and hasClickAction()).onFirst().performClick()
+        compose.onNodeWithContentDescription("Chat").performClick()
         compose.onNodeWithText("Bob").performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText("Write a message…").fetchSemanticsNodes().isNotEmpty() }
         compose.waitUntil(20000) { compose.onNodeWithText("Write a message…").isEnabled() }
@@ -67,7 +67,7 @@ class LocalDemoTest {
         compose.waitUntil(20000) { compose.onAllNodesWithText("✓ Verified").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Back").assertIsDisplayed().performClick()
         compose.onNodeWithContentDescription("Back").performClick()
-        compose.onNodeWithText("Settings").performClick()
+        compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Return to my identity").performScrollTo().performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText("Open local demo").fetchSemanticsNodes().isNotEmpty() }
     }

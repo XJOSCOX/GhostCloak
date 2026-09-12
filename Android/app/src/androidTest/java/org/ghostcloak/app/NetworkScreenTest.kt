@@ -56,7 +56,7 @@ class NetworkScreenTest {
             compose.onRoot().captureToImage().asAndroidBitmap().let { bitmap ->
                 File(context.getExternalFilesDir(null), "e0-connected.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
             }
-            compose.onNodeWithText("Settings").performClick()
+            compose.onNodeWithContentDescription("Settings").performClick()
             compose.onNodeWithText("Sync").performScrollTo().performClick()
             compose.waitUntil(20000) { !model.state.value.loading }
             assertNull(model.state.value.error)

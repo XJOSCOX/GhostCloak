@@ -12,15 +12,19 @@ fun parseRetryAfter(value: String?, nowMillis: Long = System.currentTimeMillis()
 }
 
 class FetchCooldown(private val clockMillis: () -> Long = { System.nanoTime() / 1_000_000 }) {
+    // Installed by the Android owner after restoring encrypted scheduling state.
+    var checkpoint: (Long, Int) -> Unit = { _, _ -> }
     private var until = 0L
     private var failures = 0
     val remainingMillis: Long @Synchronized get() = (until - clockMillis()).coerceAtLeast(0)
     @Synchronized fun rejected(retryAfterMillis: Long?) {
         val fallback = 15000L shl failures.coerceAtMost(2)
-        failures++
+        failures = (failures + 1L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         val delay = (retryAfterMillis ?: fallback).coerceAtLeast(2000L)
         val now = clockMillis()
         until = maxOf(until, now + delay.coerceAtMost(Long.MAX_VALUE - now))
+        checkpoint(until, failures)
     }
-    @Synchronized fun succeeded() { failures = 0; until = 0 }
+    @Synchronized fun succeeded() { failures = 0; until = 0; checkpoint(until, failures) }
+    @Synchronized fun restore(deadline: Long, count: Int) { until = deadline; failures = count.coerceAtLeast(0) }
 }

@@ -16,15 +16,30 @@ class NetworkController(
     private val engine: SecureSessionEngine,
     private val origin: String = BuildConfig.API_ORIGIN,
     connection: GhostCloakTransport = TransportPolicy.select(),
+    private val cooldown: FetchCooldown = FetchCooldown(),
 ) {
     val configured get() = origin.isNotEmpty()
     private val state by lazy { EndpointNetworkState(records, URI(origin).host, KeystoreDeviceAuth()) }
-    private val client: HttpGhostClient by lazy { HttpGhostClient(origin, state, transport = connection, renewSession = ::renewSession, authenticatedFailure = ::networkFailure, diagnostics = NetworkDiagnostics.observer) }
+    private var backgroundFetches: Int? = null
+    private val client: HttpGhostClient by lazy { HttpGhostClient(origin, state, transport = connection, renewSession = ::renewSession, authenticatedFailure = ::networkFailure, diagnostics = NetworkDiagnostics.observer,
+        fetchCooldown = cooldown, beforeFetch = {
+            backgroundFetches?.let { count ->
+                if (count >= 4) throw BackgroundDeferred()
+                backgroundFetches = count + 1
+            }
+        }) }
     private val account: NetworkAccount by lazy { NetworkAccount(client, state) }
     private val transport by lazy { NetworkMailboxTransport(client, state) }
     private val outbox by lazy { DurableOutbox(records, engine, transport) }
     private val renewalMutex = Mutex()
-    private var renewalBlocked = false
+    private val renewalBlockKey = "app/renewal-blocked/${URI(origin).host}"
+    private var renewalBlocked = records.transaction { records.read(renewalBlockKey) != null }
+        set(value) {
+            records.transaction {
+                if (value) records.write(renewalBlockKey, byteArrayOf(1)) else records.remove(renewalBlockKey)
+            }
+            field = value
+        }
     private var loggingOut = false
     private var receiptOffset = 0
     var syncActive = false
@@ -145,6 +160,10 @@ class NetworkController(
         }
         exchange()
         status = NetworkStatus.CONNECTED
+    }
+    suspend fun syncBackground(service: ConversationService) {
+        backgroundFetches = 0
+        try { sync(service) } finally { backgroundFetches = null }
     }
     suspend fun publish() = operation(NetworkOperation.PUBLISH) {
         requireApi(canAutoSync, "connect_required", 401)

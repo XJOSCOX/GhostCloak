@@ -1,6 +1,18 @@
 # Phase 1F: private background delivery design
 
-Status: design only, audited against main `d939b6e` on 2026-09-11. Proposed intervals and budgets are choices to validate, not implemented behavior or delivery guarantees.
+Status: Phase 1F.1 implements the first background FETCH/STORE/ACK slice (2026-09-12). The original architecture audit was against `d939b6e`; app lock and notification design remain future work. Proposed options below are not delivery guarantees.
+
+### Implemented in Phase 1F.1
+
+- AndroidX WorkManager 2.11.2 (current stable per [official release notes](https://developer.android.com/jetpack/androidx/releases/work)), ordinary unique periodic work named `ghostcloak-background-sync`, 30-minute interval, 15-minute flex, connected-network constraint, initial delay 30 minutes. KEEP reconciliation avoids resetting the schedule on every resume. Retry uses exponential WorkManager backoff starting at 15 minutes; no expedited or one-shot work is added.
+- Existing eligible registered connections automatically reconcile scheduling at process initialization and after runtime operations. Missing identity, logout, disabled origin and demo mode are ineligible. Worker checks first unlock before touching encrypted state and never creates a new endpoint. No separate background-enable UI is added in this slice.
+- Worker obtains the application's AppRuntime. Its existing mutex serializes storage/network operations; lifecycle ownership and completion-generation checks suppress background checks during foreground polling and coalesce requests waiting on the same successful cycle. Foreground delays and immediate-resume intent remain unchanged; an in-flight cycle can satisfy the resume request.
+- Existing NetworkController combined FETCH, decryption/commit, ACK, outbox, request and renewal paths are reused. Background cycles have a 30-second cooperative timeout and at most four FETCH attempts, including replays/pages. Backlog continues on later opportunities. Blocking platform IO can finish after timeout before ownership is released; this is not a hard wall-clock network deadline.
+- FETCH cooldown/failure count now checkpoints in encrypted records per origin. Same-boot restoration uses elapsed time; across reboot it conservatively waits the saved remaining duration again. Wall-clock changes cannot shorten it. Successful FETCH clears it. Repeated-401 renewal blocking is also persisted; explicit connect clears the block, logout clears the session and cancels unique work.
+- Worker never publishes ordinary errors to the ViewModel. Transient failures produce scheduler retry; permanent/security failures skip without wiping local state. Debug `GhostCloakBg` emits only the five fixed WORK events; release is a no-op. Library logging is disabled.
+- Merged manifest adds ordinary WorkManager INTERNET-adjacent capabilities: ACCESS_NETWORK_STATE, WAKE_LOCK and RECEIVE_BOOT_COMPLETED (no runtime permission prompt). SystemJobService runs in the same process and is not Direct Boot aware. Alarm service/proxies, foreground service/permission and the library diagnostics receiver are removed. WorkManager's API-30+ scheduling uses JobScheduler; its internal pre-30 force-stop alarm fallback is outside this app's supported API range. Android stopped-state restrictions remain authoritative.
+
+**Still proposed:** randomized 20–40-minute eligibility, optional background enable/settings controls, local notification ledger/channels/permission, generic notifications, app lock, biometric/PIN unlock and maximum-security mode. No notification or app-lock behavior is implemented. Physical overnight/OEM latency measurements remain future validation.
 
 ## 1. Executive summary
 
@@ -99,7 +111,7 @@ Android's [stopped-state boundary](https://developer.android.com/about/versions/
 
 ## 8. Storage and concurrency model
 
-Current source audit (paths relative to Android):
+Original pre-1F.1 source audit (paths relative to Android; see implemented delta above):
 
 - `storage/src/main/kotlin/org/ghostcloak/storage/EncryptedEndpointStore.kt`: SQLCipher Room records in ordinary-context `noBackupFilesDir`; random database secret wrapped by Keystore AES-GCM. No per-use authentication or unlocked-device-required setting. Missing/inconsistent existing key/files fail rather than regenerate. Hardware/software protection is reported, not universally guaranteed.
 - `storage/src/main/kotlin/org/ghostcloak/storage/KeystoreDeviceAuth.kt`: non-exportable EC signing key with no per-use authentication setting, no exported software fallback and no replacement of missing registered keys.
@@ -119,7 +131,7 @@ Current `ForegroundPolling` waits 2/3/5 seconds after completion: eventually abo
 
 A nominal 30-minute period is about two empty FETCH/hour (48/day), before jitter skips or retries, well below the confirmed 60 FETCH/minute collision. Preserve combined fetch/status and server limits. Proposed background budget: at most four FETCH attempts per rolling minute, counting auth replay, receipt fallback and pages. Defer remaining work without dropping it. Validate against batch/retention behavior before implementation; no backend rate-limit changes.
 
-`transport/src/main/kotlin/org/ghostcloak/transport/FetchCooldown.kt` currently stores a monotonic deadline in memory. A 429 uses Retry-After or 15/30/60-second fallback with a 2-second minimum. Runtime sharing covers only one process lifetime. Future implementation must persist cooldown/failure state in encrypted records and restore it before foreground/manual/background FETCH. This is a prerequisite, not an existing guarantee. Use monotonic time within a boot and a persisted wall deadline plus boot/clock-change handling across restarts; test both clock directions to prevent early retry or indefinite artificial lockout. Never shorten valid Retry-After. Scheduler backoff uses the later eligibility time; resume does not bypass cooldown.
+`transport/src/main/kotlin/org/ghostcloak/transport/FetchCooldown.kt` originally stored a monotonic deadline only in memory. A 429 uses Retry-After or 15/30/60-second fallback with a 2-second minimum. Phase 1F.1 adds encrypted checkpoints through StoredFetchCooldown before any foreground/manual/background FETCH. The implemented policy uses boot count and monotonic deadlines, conservatively rebasing the saved remaining delay after reboot rather than trusting a wall-clock deadline. Repeated reboots can extend this delay, an intentional fail-safe tradeoff; within a stable boot it expires normally. Never shorten valid Retry-After. Scheduler backoff uses the later eligibility time; resume does not bypass cooldown.
 
 ## 10. Failure handling
 
@@ -207,7 +219,7 @@ With the current monolithic encrypted records, network tokens, identity/ratchet 
 6. Separately implement optional A: root navigation/action gate, process-owned timing, BiometricPrompt, vetted local PIN verifier/throttling, generic locked notifications and snapshot protection. State clearly that background decryption continues. Review dependencies/permissions and run the lock matrix below before release.
 7. Treat B as a later maximum-security project: review supported auth-bound key policy, store/engine teardown, crash-safe migration, recovery limitations and background suspension before implementation. Do not enable it as a transparent upgrade to A.
 
-None of these implementation steps occurs in this commit.
+Phase 1F.1 implements the scheduling/coordinator/cooldown subset of steps 2–3. Notifications, notification eligibility ledger, settings controls, jitter and both app-lock modes remain unimplemented. See the implemented delta above.
 
 ## 14. Physical-device test plan
 
@@ -233,8 +245,8 @@ App-lock test matrix (future implementation):
 - For B, kill during migration, unwrap, transaction and teardown; verify no unrestricted wrapper remains, no identity/Signal key regeneration, no access after lock/process restart, and recoverability or explicit fail-closed behavior after key invalidation.
 - Verify forgotten PIN has no server/email/SMS recovery or implicit reset; a configured alternate unlock can authorize PIN change. Verify lock is independent of logout and network session renewal.
 
-This design-only commit does not claim future physical tests have run.
+Automated JVM/emulator coverage is part of Phase 1F.1; this document does not claim the future physical/OEM and app-lock matrices have run.
 
 ## 15. Explicit non-goals
 
-No jobs, alarms, dependencies, channels, permissions or services implemented here. No FCM, Google push APIs, OneSignal, Pusher, AWS SNS, Apple/third-party relay or external push broker. No permanent socket, exact alarms, battery-exemption prompts, analytics, remote crash reporting or cover traffic. No backend, Cloudflare/VPS, protocol, crypto, identity, delivery/request semantics, polling cadence or rate-limit changes. No instant-delivery SLA, plaintext server/notification transport, content/token logging or weakened local protections.
+Phase 1F.1 adds only the ordinary WorkManager scheduling dependency/components described above. Notifications/channels, notification permission and app lock remain non-goals for this slice. No FCM, Google push APIs, OneSignal, Pusher, AWS SNS, Apple/third-party relay or external push broker. No permanent socket, exact alarms, battery-exemption prompts, analytics, remote crash reporting or cover traffic. No backend, Cloudflare/VPS, protocol, crypto, identity, delivery/request semantics, polling cadence or rate-limit changes. No instant-delivery SLA, plaintext server/notification transport, content/token logging or weakened local protections.

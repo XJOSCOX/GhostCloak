@@ -71,6 +71,8 @@ tasks.withType<Test>().configureEach {
 }
 
 dependencies {
+    implementation(libs.androidx.work.runtime)
+    androidTestImplementation(libs.androidx.work.testing)
     implementation(project(":messaging"))
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.viewmodel.compose)

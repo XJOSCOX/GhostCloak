@@ -17,6 +17,7 @@ class AppRuntime internal constructor(
     private val apiOrigin: String = org.ghostcloak.app.BuildConfig.API_ORIGIN,
     private val endpointName: String = "local",
     private val connection: org.ghostcloak.transport.GhostCloakTransport = org.ghostcloak.transport.TransportPolicy.select(),
+    private val backgroundEligibility: (Boolean) -> Unit = {},
 ) : AutoCloseable {
     private val mutex = Mutex()
     private var store: EncryptedEndpointStore? = null
@@ -31,6 +32,47 @@ class AppRuntime internal constructor(
     private var demo: DemoSession? = null
     private val router = LocalEncryptedRouter()
     private var attached = false
+    @Volatile var syncGeneration = 0L
+        private set
+    @Volatile private var foreground = false
+    private var scheduledEligibility: Boolean? = null
+    fun foregroundStarted() { foreground = true }
+    fun foregroundStopped() { foreground = false }
+    private fun reconcileBackground() {
+        val eligible = canAutoSync
+        if (scheduledEligibility != eligible) {
+            try {
+                backgroundEligibility(eligible)
+                scheduledEligibility = eligible
+            } catch (_: Exception) { BackgroundDiagnostics.emit(BackgroundEvent.WORK_SKIP) }
+        }
+    }
+    private fun canOpenExisting() = context.getSystemService(android.os.UserManager::class.java).isUserUnlocked &&
+        java.io.File(context.noBackupFilesDir, "$endpointName.db").exists() &&
+        java.io.File(context.noBackupFilesDir, "$endpointName.wrapped").exists()
+    suspend fun initializeBackground() = withContext(Dispatchers.IO) {
+        val existing = mutex.withLock {
+            if (!networkConfigured || !canOpenExisting()) {
+                backgroundEligibility(false)
+                scheduledEligibility = false
+                false
+            } else true
+        }
+        if (existing) use { } // Reconcile without registration or network traffic.
+    }
+    suspend fun backgroundSync(): BackgroundResult {
+        if (!networkConfigured || !canOpenExisting()) return BackgroundResult.SKIP
+        val requested = syncGeneration
+        return use { service ->
+            if (foreground || requested != syncGeneration || !canAutoSync || service.open() == null) BackgroundResult.SKIP
+            else if (fetchRetryDelayMillis > 0) BackgroundResult.RETRY
+            else {
+                kotlinx.coroutines.withTimeout(30_000) { network!!.syncBackground(service) }
+                syncGeneration++
+                BackgroundResult.SUCCESS
+            }
+        }
+    }
     val developerAvailable get() = DeveloperMode.available
     val inDemo get() = demo != null
     fun currentService() = demo?.service ?: local!!
@@ -39,12 +81,17 @@ class AppRuntime internal constructor(
         mutex.withLock {
             if (local == null) {
                 val records = EncryptedEndpointStore.open(context, endpointName)
-                store = records
+                try {
                 val engine=SignalProtocolEngine(records)
+                val cooldown = if (networkConfigured) storedFetchCooldown(records, java.net.URI(apiOrigin).host,
+                    android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0))
+                    else org.ghostcloak.transport.FetchCooldown()
+                network=NetworkController(records,engine,apiOrigin,connection,cooldown)
                 local = ConversationService(engine, LocalRepository(records))
-                network=NetworkController(records,engine,apiOrigin,connection)
+                store = records
+                } catch (e: Exception) { records.close(); throw e }
             }
-            block(demo?.service ?: local!!)
+            try { block(demo?.service ?: local!!) } finally { reconcileBackground() }
         }
     }
     suspend fun open(service: ConversationService): DeviceIdentity? = service.open().also { identity ->
@@ -70,7 +117,11 @@ class AppRuntime internal constructor(
         return message
     }
     suspend fun connectNetwork(service: ConversationService) { network!!.connect(service.open()!!.username) }
-    suspend fun syncNetwork(service: ConversationService) { network!!.sync(service) }
+    suspend fun syncNetwork(service: ConversationService, requested: Long? = null) {
+        if (requested != null && requested != syncGeneration) return
+        network!!.sync(service)
+        syncGeneration++
+    }
     suspend fun addNetwork(username: String, service: ConversationService) { network!!.add(username, service) }
     suspend fun publishNetwork() { network!!.publish() }
     suspend fun logoutNetwork() { network!!.logout() }

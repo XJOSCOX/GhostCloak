@@ -21,9 +21,10 @@ class HttpGhostClient(
     private val renewSession: (suspend (String) -> Unit)? = null,
     private val authenticatedFailure: (ApiFailure) -> Unit = {},
     private val diagnostics: ((NetworkDiagnostic) -> Unit)? = null,
+    private val fetchCooldown: FetchCooldown = FetchCooldown(),
+    private val beforeFetch: () -> Unit = {},
 ) : GhostAuthClient, GhostDirectoryClient {
     private val base = URI(baseUrl)
-    private val fetchCooldown = FetchCooldown()
     val fetchRetryDelayMillis get() = fetchCooldown.remainingMillis
     init { validateApiOrigin(base, allowLoopbackForTests) }
     override suspend fun unauthenticated(request: ApiRequest) = call(request, false)
@@ -39,6 +40,7 @@ class HttpGhostClient(
         val bytes = NetworkCodec.encode(request)
         requireApi(bytes.size <= NetworkLimits.BODY, "body_size", 413)
         suspend fun attempt(token: String?): ApiResponse {
+            if (request is ApiRequest.Fetch) beforeFetch()
             val attemptStarted = System.nanoTime()
             var httpStatus: Int? = null
             diagnostic(NetworkEvent.START, since = attemptStarted)

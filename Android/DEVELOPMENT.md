@@ -1,6 +1,6 @@
 # Android Studio development
 
-For the proposed background-delivery architecture, platform limitations and future physical-device test matrix, see [BACKGROUND_SYNC_DESIGN.md](BACKGROUND_SYNC_DESIGN.md). Background jobs and notifications are not implemented by that design phase.
+For the proposed background-delivery architecture, platform limitations and future physical-device test matrix, see [BACKGROUND_SYNC_DESIGN.md](BACKGROUND_SYNC_DESIGN.md). Phase 1F.1 implements background FETCH/STORE/ACK only; notifications and app lock remain proposed.
 
 ## Run staging on a phone
 
@@ -86,3 +86,16 @@ Strict IDE attachment validation remains:
 Opening/resuming the app starts an immediate sync. Active or pending-delivery polling waits 2 seconds after each completed cycle; idle polling gradually relaxes to 3–5 seconds. Backgrounding stops polling. The combined inbox/receipt Fetch normally uses one request per cycle. Rate limiting preserves the session and waits for Retry-After or bounded backoff automatically; manual Sync also respects that cooldown.
 
 In Android Studio Logcat, select the debug app/device and filter `tag:GhostCloakNet`. Normal cycles should show one FETCH and no separate RECEIPT_STATUS request. ACKs and pagination are expected when receiving messages. See [network diagnostics](NETWORK_DIAGNOSTICS.md) for sanitized examples, request budget and retention fallback. These diagnostics are disabled in release builds.
+
+
+## Background synchronization (Phase 1F.1)
+
+After an existing account connects, Android schedules one ordinary periodic check: 30 minutes with 15 minutes of flex and a connected-network requirement. The first check is delayed 30 minutes. Pull, open Android/ and Run as usual; no separate service or manual APK install is needed. There is no notification or new runtime permission prompt in this slice. WorkManager brings ACCESS_NETWORK_STATE, WAKE_LOCK and RECEIVE_BOOT_COMPLETED for scheduling; no foreground service, exact alarm or push provider is used.
+
+Background checks reuse the application runtime, existing identity and encrypted mailbox acceptance/ACK path. They do not display action-error banners. Foreground polling still stops on backgrounding and retains its existing cadence on resume. Logout cancels scheduled work; reopening after logout never reconnects automatically. Before the first unlock after reboot, no encrypted state is accessed. Force-stop prevents work until Android permits execution following user interaction. Doze/OEM restrictions may delay checks for hours; no instant background-delivery promise is made.
+
+Debug Logcat filter: `tag:GhostCloakBg`. Events are only WORK_START, WORK_SKIP, WORK_SUCCESS, WORK_RETRY and WORK_STOP. They contain no reason strings, IDs, URLs, bodies or credentials. Release emits none. `GhostCloakNet` remains the existing sanitized debug network trace. Do not enable general WorkManager verbose logging.
+
+A worker uses a cooperative 30-second cycle budget and four FETCH-attempt budget. Retry starts at 15 minutes and respects the encrypted rate-limit checkpoint. Same-boot cooldowns use elapsed time; reboot conservatively restarts the last saved remaining duration. No wall-clock jump bypasses it. The proposed extra jitter, background settings controls, notifications and app lock are deferred.
+
+Tests: run JVM `test`, plus `:app:connectedDebugAndroidTest :storage:connectedDebugAndroidTest` on an explicitly selected test emulator, all with `--dependency-verification strict`. BackgroundSyncTest exercises real encrypted endpoints over an isolated synthetic transport, unique scheduling policy, foreground coalescing, logout/reopen, renewal, cooldown, ACK/deduplication, cancellation, budgets and absence of notifications. These deterministic tests do not establish OEM scheduling latency; see the physical test plan in BACKGROUND_SYNC_DESIGN.md.

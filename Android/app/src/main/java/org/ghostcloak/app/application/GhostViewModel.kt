@@ -80,6 +80,7 @@ class GhostViewModel internal constructor(application: Application, private val 
     private val foregroundMutex = kotlinx.coroutines.sync.Mutex()
     suspend fun foregroundSync() {
         foregroundMutex.lock()
+        runtime.foregroundStarted()
         polling.reset()
         try {
             while (true) {
@@ -87,7 +88,8 @@ class GhostViewModel internal constructor(application: Application, private val 
                     val cycle = ++foregroundCycle
                     val started = System.nanoTime()
                     NetworkDiagnostics.cycle(cycle, true)
-                    val job = run(quiet = true) { if (runtime.canAutoSync) runtime.syncNetwork(it); null }
+                    val requested = runtime.syncGeneration
+                    val job = run(quiet = true) { if (runtime.canAutoSync) runtime.syncNetwork(it, requested); null }
                     try { job.join() } finally {
                         job.cancel()
                         NetworkDiagnostics.cycle(cycle, false, (System.nanoTime() - started) / 1_000_000)
@@ -101,13 +103,16 @@ class GhostViewModel internal constructor(application: Application, private val 
                 kotlinx.coroutines.delay((2000L - (System.nanoTime() - waitingSince) / 1_000_000).coerceAtLeast(0))
                 while (runtime.fetchRetryDelayMillis > 0) kotlinx.coroutines.delay(runtime.fetchRetryDelayMillis)
             }
-        } finally { foregroundMutex.unlock() }
+        } finally { runtime.foregroundStopped(); foregroundMutex.unlock() }
     }
     fun acceptRequest(id: String) = run { it.acceptRequest(id); null }
     fun deleteRequest(id: String) = run { it.deleteRequest(id); null }
     fun refresh() = run()
     fun connectNetwork() = run(activity = NetworkStatus.CONNECTING) { runtime.connectNetwork(it); null }
-    fun syncNetwork() = run(activity = NetworkStatus.SYNCING) { runtime.syncNetwork(it); null }
+    fun syncNetwork(): kotlinx.coroutines.Job {
+        val requested = runtime.syncGeneration
+        return run(activity = NetworkStatus.SYNCING) { runtime.syncNetwork(it, requested); null }
+    }
     fun publishNetwork() = run { runtime.publishNetwork(); null }
     fun logoutNetwork() = run { runtime.logoutNetwork(); null }
     fun addNetwork(username: String, success: () -> Unit) = run {

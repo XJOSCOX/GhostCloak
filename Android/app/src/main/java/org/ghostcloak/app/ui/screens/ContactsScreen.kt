@@ -22,12 +22,13 @@ import org.ghostcloak.app.ui.components.*
     val matching = state.contacts.filter { (!it.contact.request || !it.contact.blocked) &&
         (!directory || !it.contact.request) && it.contact.displayName.contains(query,ignoreCase=true) }
     val chats = if(directory) matching.sortedBy {it.contact.displayName.lowercase()} else matching.sortedByDescending {state.previews[it.contact.remoteDeviceId]?.timestamp ?: 0}
-    val accent = MaterialTheme.colorScheme.primary
+    val hasUnread = !directory && state.unreadCount > 0
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(Modifier.fillMaxSize()) {
-            PageHeader(if (directory) "Contacts" else "Chats", center = if (!directory && state.unreadCount > 0)
-                "${state.unreadCount} new ${if (state.unreadCount == 1) "message" else "messages"}" else null) {
-                if (!directory) HeaderAction(Glyph.SEARCH, "Search conversations") { searching = !searching; query = "" }
+            PageHeader(if (directory) "Contacts" else if (hasUnread) "" else "Chats",
+                center = if (hasUnread) "${state.unreadCount} new ${if (state.unreadCount == 1) "message" else "messages"}" else null,
+                leading = if (hasUnread) {{ HeaderAction(Glyph.SEARCH, "Search conversations") { searching = !searching; query = "" } }} else null) {
+                if (!directory && !hasUnread) HeaderAction(Glyph.SEARCH, "Search conversations") { searching = !searching; query = "" }
                 HeaderAction(Glyph.COMPOSE, if (directory) "Add contact" else "New chat", add)
             }
             Column(Modifier.weight(1f).padding(horizontal = GhostLayout.pageInset)) {

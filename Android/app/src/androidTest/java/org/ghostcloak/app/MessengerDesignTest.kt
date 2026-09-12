@@ -27,6 +27,24 @@ class MessengerDesignTest {
             File(context.getExternalFilesDir(null), name).outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
         }
     }
+    @Test fun unreadHeaderReplacesChatsAndMovesSearchLeftUntilAllMessagesAreRead() {
+        val unread = mutableStateOf(1)
+        compose.setContent { GhostCloakTheme { ContactsScreen(AppState(loading = false, unreadCount = unread.value), {}, {}) } }
+        compose.onNodeWithText("Chats").assertDoesNotExist()
+        compose.onNodeWithText("1 new message").assertIsDisplayed()
+        val leftSearch = compose.onNodeWithContentDescription("Search conversations").getUnclippedBoundsInRoot()
+        val count = compose.onNodeWithText("1 new message").getUnclippedBoundsInRoot()
+        val composeAction = compose.onNodeWithContentDescription("New chat").getUnclippedBoundsInRoot()
+        assertTrue(leftSearch.right < count.left)
+        assertTrue(count.right < composeAction.left)
+        compose.runOnIdle { unread.value = 24 }
+        compose.onNodeWithText("24 new messages").assertIsDisplayed()
+        compose.runOnIdle { unread.value = 0 }
+        compose.onNodeWithText("Chats").assertIsDisplayed()
+        compose.onNodeWithText("24 new messages").assertDoesNotExist()
+        assertTrue(compose.onNodeWithContentDescription("Search conversations").getUnclippedBoundsInRoot().left > leftSearch.left)
+        compose.onNodeWithContentDescription("New chat").assertIsDisplayed()
+    }
     @Test fun rootAndDetailPagesShareHeaderGeometryAndBackAction() {
         val page = mutableStateOf(0)
         var backs = 0
@@ -78,7 +96,7 @@ class MessengerDesignTest {
             identity = DeviceIdentity(RandomIdentifiers.create(), "bob", RandomIdentifiers.create(), byteArrayOf()),
             unreadCount = 3, contacts = listOf(contact, known)+extras.map {it.first}, previews = mapOf(known.contact.remoteDeviceId to last)+extras.associate {it.first.contact.remoteDeviceId to it.second}), {}, {}) } } }
         compose.onNodeWithText("Ghost Cloak").assertDoesNotExist()
-        compose.onNodeWithText("Chats").assertIsDisplayed()
+        compose.onNodeWithText("Chats").assertDoesNotExist()
         compose.onNodeWithText("Search chats").assertDoesNotExist()
         compose.onNodeWithText("All").assertDoesNotExist()
         compose.onNodeWithText("Requests 1").assertDoesNotExist()

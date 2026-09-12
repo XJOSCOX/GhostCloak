@@ -7,18 +7,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 
 @Composable fun ProfilesScreen(state: AppState, rename: (String) -> Unit) {
     var username by remember(state.identity?.username) { mutableStateOf(state.identity?.username.orEmpty()) }
     var editing by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),verticalArrangement=Arrangement.spacedBy(24.dp)) {
-        Text("Profiles",style=MaterialTheme.typography.headlineLarge)
-        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(16.dp),verticalAlignment=Alignment.CenterVertically) {
-            Avatar(state.identity?.username.orEmpty(),Modifier.size(64.dp))
-            Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+    PageContent("Profiles") {
+        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(GhostDimensions.regular),verticalAlignment=Alignment.CenterVertically) {
+            Avatar(state.identity?.username.orEmpty(),Modifier.size(GhostDimensions.profileAvatar))
+            Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
                 Text(state.identity?.username.orEmpty(),style=MaterialTheme.typography.titleLarge)
                 Text("Your Ghost Cloak identity",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -31,7 +30,7 @@ import org.ghostcloak.app.ui.components.*
         }
     }
     if(editing) AlertDialog(onDismissRequest={editing=false},title={Text("Edit your name")},text={
-        Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
+        Column(verticalArrangement=Arrangement.spacedBy(GhostDimensions.medium)) {
             OutlinedTextField(username,{if(it.length<=32) username=it},singleLine=true,label={Text("Username")})
             Text(if(state.networkConfigured && !state.demo) "Before registration, this is your network username. After registration, only your local display name changes. Your keys stay the same." else "This changes your display name only. Your keys stay the same.")
         }

@@ -14,8 +14,7 @@ import org.ghostcloak.app.ui.components.*
 @Composable fun SettingsScreen(state: AppState, developerAvailable: Boolean,
     demo: () -> Unit, leave: () -> Unit, connect:()->Unit={}, sync:()->Unit={}, publish:()->Unit={}, logout:()->Unit={}) {
     var advanced by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),verticalArrangement=Arrangement.spacedBy(24.dp)) {
-        Text("Settings",style=MaterialTheme.typography.headlineLarge)
+    PageContent("Settings") {
         ErrorNotice(state.error)
         SettingsGroup("Appearance") { AppearanceSelector() }
         SettingsGroup("Privacy") {

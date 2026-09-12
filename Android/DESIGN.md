@@ -6,16 +6,16 @@ Layout references: [Inbox Chat App](https://dribbble.com/shots/24369393-Inbox-Ch
 
 ## Screens
 
-- Chats: Solid theme background throughout, matching GoXEV’s home canvas, with slightly contrasting cards and no header color wash. Compact Ghost Cloak header with reduced top/side padding and smaller top-right compose/brand icons. A fading divider separates the header from the small Chats label. The compose action uses an unfilled 20 dp square-and-pencil icon matching the brand icon size, with a 48 dp touch target. No search or filter controls. Conversation previews and incoming requests share the list; request labels and acceptance gating are preserved.
-- Contacts: an alphabetical list of existing contacts, local search and an Add contact action. Pending requests remain in Chats.
-- Conversation: compact avatar header, safety control, date separators, incoming/outgoing bubbles and an icon send button. Tap or long-press a bubble for local deletion. The options menu retains manual Sync. Request acceptance and changed-key gates still control the composer.
+- Chats: compact “Chats” title, a centered unread incoming-message count when nonzero, and search/compose icons on the right. Search toggles a local conversation-name field; closing it clears the query. The header has no brand icon or second title. Existing avatars stay in conversation rows.
+- Contacts: the same header and insets, alphabetical contacts, local search and a header Add contact action. Pending requests remain in Chats.
+- Conversation: the same header with Back, the contact name/security status, Security and existing connection options; no header avatar. Date separators and incoming/outgoing bubbles remain. Request acceptance and changed-key gates still control the composer.
 - New chat: exact-username lookup, with contact-card tools retained in local/demo mode.
 - Onboarding: one username and one deliberate create action, with concise device-key information.
 - Profiles: the current device profile and name editor, kept in its own screen file.
 - Settings: visual Light/Dark/Automatic selectors, privacy information, connection actions and separate developer tools. Manual Sync is here; prekey publication is under Connection details.
 - Contact security: identity state, safety-number panel, explicit verification/replacement confirmation and blocking controls.
 
-No unread counters, presence, calls, attachments or typing indicators are invented. Delivered still means recipient storage plus ACK. Accept still does not mean Verified. This is a presentation change; backend, Signal, network sync and build-type endpoint policy are unchanged.
+Unread counts come from encrypted local state. No presence, calls, attachments or typing indicators are invented. Delivered still means recipient storage plus ACK. Accept still does not mean Verified. The local read markers do not alter backend, Signal, network sync or build-type endpoint policy.
 
 ## File boundaries
 
@@ -23,6 +23,9 @@ No unread counters, presence, calls, attachments or typing indicators are invent
 - `Theme.kt`: semantic light/dark Material color roles and theme composition.
 - `Type.kt`: Space Grotesk for every Material typography role, with variable font weights 300–700. Safety numbers retain a centrally defined monospaced style for comparisons.
 - `Shapes.kt` and `Effects.kt`: shared corner shapes and decorative opacity values.
+- `Layout.kt`: common 16 dp page inset, 56 dp minimum header row, 20 dp header icons, 48 dp touch targets, 4 dp divider spacing and maximum page width.
+- `Dimensions.kt`: reusable dimensions for controls and internal content. Screens/components contain no raw dp, font-size or color literals.
+- `components/PageHeader.kt`: shared title/back/actions/divider and scrollable PageContent used by onboarding, settings, profiles, new chat and security. Chats and conversation use the same header with lazy-list content; system insets remain owned by the root Scaffold.
 - `AvatarColors.kt`: semantic avatar color selection; `Appearance.kt`: persisted Light/Dark/Automatic preference.
 - Screens and components consume MaterialTheme roles; appearance previews use the same light/dark schemes. Do not add color hex values, font resources or text-style overrides to screens.
 
@@ -34,3 +37,9 @@ The unchanged font asset is copied from the user's GoXEV project (`app/src/main/
 
 
 `ThemeTest` checks the exact dark primary/background, primary-content contrast, and font coverage across every Material typography role in debug and release.
+
+## Local unread state
+
+The top-center count is the number of incoming messages not yet viewed on this device, excluding blocked contacts. Read message IDs are stored in the existing encrypted endpoint repository, separately from Message and delivery receipt data. Opening a STARTED conversation marks its currently stored messages read; incoming messages while it remains open are marked read during refresh. Leaving the route or backgrounding stops that behavior. A deleted message no longer contributes to the count. Existing incoming history without local read markers appears unread until opened.
+
+This never sends read receipts or changes recipient ACK/Delivered behavior. New counts survive process restart. `UnreadMessagesTest` verifies persistence, new arrivals, duplicate polling, deletion and independence from server ACK. `MessengerDesignTest` verifies shared header bounds/back actions, search, new-message labeling and light/dark layouts.

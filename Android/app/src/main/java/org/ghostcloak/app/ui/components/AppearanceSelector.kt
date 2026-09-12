@@ -9,21 +9,21 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.semantics.*
-import androidx.compose.ui.unit.dp
+import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.app.ui.theme.*
 
 @Composable fun AppearanceSelector() {
     val appearance = LocalAppearance.current
-    Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+    Column(verticalArrangement=Arrangement.spacedBy(GhostDimensions.medium)) {
+        Row(horizontalArrangement=Arrangement.spacedBy(GhostDimensions.controlGap)) {
             listOf(AppearanceMode.LIGHT,AppearanceMode.DARK,AppearanceMode.AUTOMATIC).forEach { mode ->
                 val chosen = mode == appearance.mode
                 Surface(onClick={appearance.select(mode)},modifier=Modifier.weight(1f).semantics {selected=chosen;role=Role.RadioButton},
                     shape=MaterialTheme.shapes.medium,
-                    border=androidx.compose.foundation.BorderStroke(if(chosen) 2.dp else 1.dp,if(chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+                    border=androidx.compose.foundation.BorderStroke(if(chosen) GhostDimensions.micro else GhostDimensions.hairline,if(chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
                     color=MaterialTheme.colorScheme.surface) {
-                    Column(Modifier.padding(10.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-                        Canvas(Modifier.fillMaxWidth().height(58.dp)) {
+                    Column(Modifier.padding(GhostDimensions.controlGap),verticalArrangement=Arrangement.spacedBy(GhostDimensions.controlGap)) {
+                        Canvas(Modifier.fillMaxWidth().height(GhostDimensions.previewHeight)) {
                             val dark = mode == AppearanceMode.DARK
                             drawRoundRect(if(dark) DarkColors.background else LightColors.background,cornerRadius=CornerRadius(8f))
                             if(mode==AppearanceMode.AUTOMATIC) drawRect(DarkColors.background,Offset(size.width/2,0f),Size(size.width/2,size.height))

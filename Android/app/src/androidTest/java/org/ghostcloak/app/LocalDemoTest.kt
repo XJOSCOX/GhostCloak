@@ -65,7 +65,7 @@ class LocalDemoTest {
         compose.waitUntil(20000) { compose.onAllNodesWithText("I compared it · Verify").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("I compared it · Verify").performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText("✓ Verified").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithContentDescription("Back").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Back").assertIsDisplayed().performClick()
         compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithText("Settings").performClick()
         compose.onNodeWithText("Return to my identity").performScrollTo().performClick()

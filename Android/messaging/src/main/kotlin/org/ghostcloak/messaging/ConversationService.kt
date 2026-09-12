@@ -136,6 +136,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         repository.save(contact.copy(blocked = true))
         repository.messages(id).forEach { repository.delete(id, it.localId) }
     }
+    suspend fun unreadCount() = action { repository.contacts().filter { !it.blocked }.sumOf { repository.unreadCount(it.remoteDeviceId) } }
+    suspend fun markRead(id: String) = action { repository.markRead(id) }
     suspend fun queuedSubmissions() = action {
         repository.contacts().flatMap { repository.messages(it.remoteDeviceId) }
             .filter { it.state == MessageState.SERVER_ACCEPTED && System.currentTimeMillis() - it.timestamp < 604800000 }

@@ -11,66 +11,52 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.unit.dp
-import org.ghostcloak.app.ui.theme.GhostEffects
+import org.ghostcloak.app.ui.theme.GhostDimensions
+import org.ghostcloak.app.ui.theme.GhostLayout
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 
 @Composable fun ContactsScreen(state: AppState, add: () -> Unit, open: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, directory: Boolean = false) {
     var query by remember { mutableStateOf("") }
+    var searching by remember { mutableStateOf(false) }
     val matching = state.contacts.filter { (!it.contact.request || !it.contact.blocked) &&
-        (!directory || !it.contact.request) && (!directory || it.contact.displayName.contains(query,ignoreCase=true)) }
+        (!directory || !it.contact.request) && it.contact.displayName.contains(query,ignoreCase=true) }
     val chats = if(directory) matching.sortedBy {it.contact.displayName.lowercase()} else matching.sortedByDescending {state.previews[it.contact.remoteDeviceId]?.timestamp ?: 0}
     val accent = MaterialTheme.colorScheme.primary
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Column(Modifier.fillMaxSize().padding(horizontal=if(directory) 16.dp else 12.dp)) {
-            Row(Modifier.fillMaxWidth().padding(horizontal=if(directory) 4.dp else 0.dp,vertical=if(directory) 20.dp else 6.dp),verticalAlignment=Alignment.CenterVertically) {
-                Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)) {
-                    Text(if(directory) "Contacts" else "Ghost Cloak",style=MaterialTheme.typography.headlineMedium)
-                    if(directory) Text("People you know",
-                        style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.primary)
-                }
-                if(!directory) {
-                    IconButton(onClick=add,modifier=Modifier.size(48.dp)) {
-                        AppIcon(Glyph.COMPOSE,"New chat",Modifier.size(20.dp),tint=MaterialTheme.colorScheme.primary)
-                    }
-                    Spacer(Modifier.width(4.dp))
-                    BrandMark(Modifier.size(20.dp))
-                }
+        Column(Modifier.fillMaxSize()) {
+            PageHeader(if (directory) "Contacts" else "Chats", center = if (!directory && state.unreadCount > 0)
+                "${state.unreadCount} new ${if (state.unreadCount == 1) "message" else "messages"}" else null) {
+                if (!directory) HeaderAction(Glyph.SEARCH, "Search conversations") { searching = !searching; query = "" }
+                HeaderAction(Glyph.COMPOSE, if (directory) "Add contact" else "New chat", add)
             }
-            if(!directory) {
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Brush.horizontalGradient(
-                    listOf(accent.copy(alpha=GhostEffects.DividerStartAlpha),accent.copy(alpha=GhostEffects.DividerEndAlpha),Color.Transparent))))
-                Text("Chats",Modifier.padding(top=10.dp),style=MaterialTheme.typography.labelLarge,color=accent)
-            }
-            if(directory) OutlinedTextField(query,{if(it.length<=64) query=it},singleLine=true,placeholder={Text(if(directory) "Search contacts" else "Search chats")},
+            Column(Modifier.weight(1f).padding(horizontal = GhostLayout.pageInset)) {
+            if(directory || searching) OutlinedTextField(query,{if(it.length<=64) query=it},singleLine=true,placeholder={Text(if(directory) "Search contacts" else "Search conversations")},
                 leadingIcon={AppIcon(Glyph.SEARCH)},trailingIcon=if(query.isEmpty()) null else {{IconButton(onClick={query=""}) {AppIcon(Glyph.CLOSE,"Clear search")}}},
-                shape=RoundedCornerShape(14.dp),modifier=Modifier.fillMaxWidth(),
+                shape=RoundedCornerShape(GhostDimensions.fieldCorner),modifier=Modifier.fillMaxWidth(),
                 colors=OutlinedTextFieldDefaults.colors(unfocusedBorderColor=Color.Transparent,focusedBorderColor=MaterialTheme.colorScheme.primary,
                     unfocusedContainerColor=MaterialTheme.colorScheme.surface,focusedContainerColor=MaterialTheme.colorScheme.surface))
-            Spacer(Modifier.height(if(directory) 16.dp else 12.dp))
+            Spacer(Modifier.height(GhostLayout.dividerGap))
             if(state.networkConfigured && !state.demo && !state.networkConnected) NetworkActions(state,connect,sync)
             if(state.error!=null) ErrorNotice(state.error)
             if(chats.isEmpty()) {
-                Column(Modifier.weight(1f).fillMaxWidth().padding(28.dp),verticalArrangement=Arrangement.Center,horizontalAlignment=Alignment.CenterHorizontally) {
+                Column(Modifier.weight(1f).fillMaxWidth().padding(GhostDimensions.roomy),verticalArrangement=Arrangement.Center,horizontalAlignment=Alignment.CenterHorizontally) {
                     Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer) {
-                        Box(Modifier.size(72.dp),contentAlignment=Alignment.Center) {AppIcon(Glyph.CHAT,modifier=Modifier.size(30.dp),tint=MaterialTheme.colorScheme.primary)}
+                        Box(Modifier.size(GhostDimensions.emptyStateIcon),contentAlignment=Alignment.Center) {AppIcon(Glyph.CHAT,modifier=Modifier.size(GhostDimensions.featureIcon),tint=MaterialTheme.colorScheme.primary)}
                     }
-                    Spacer(Modifier.height(20.dp))
+                    Spacer(Modifier.height(GhostDimensions.large))
                     Text(when {query.isNotEmpty()->"No matches found"; directory->"Your people, here"; else->"A little more private."},style=MaterialTheme.typography.titleLarge)
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(GhostDimensions.compact))
                     Text(when {query.isNotEmpty()->"Try another name."; else->"Start with someone's Ghost Cloak username."},style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-            } else LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(bottom=if(directory) 100.dp else 24.dp)) {
-                if(directory) item {Text("YOUR CONTACTS",Modifier.padding(start=4.dp,bottom=10.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+            } else LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(bottom=GhostLayout.pageInset)) {
+                if(directory) item {Text("YOUR CONTACTS",Modifier.padding(start=GhostDimensions.tiny,bottom=GhostDimensions.controlGap),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
                 items(chats,key={it.contact.contactId}) { status ->
                     ChatRow(status,if(directory) null else state.previews[status.contact.remoteDeviceId],open)
-                    Spacer(Modifier.height(2.dp))
+                    Spacer(Modifier.height(GhostDimensions.micro))
                 }
             }
         }
-        if(directory) ExtendedFloatingActionButton(onClick=add,modifier=Modifier.align(Alignment.BottomEnd).padding(20.dp),
-            icon={AppIcon(Glyph.PLUS)},text={Text(if(directory) "Add contact" else "New chat")},
-            containerColor=MaterialTheme.colorScheme.primary,contentColor=MaterialTheme.colorScheme.onPrimary)
+        }
     }
 }

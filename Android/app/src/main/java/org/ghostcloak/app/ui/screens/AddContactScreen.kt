@@ -7,7 +7,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
+import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.privacy.copySensitive
@@ -17,12 +17,11 @@ import org.ghostcloak.messaging.ContactCardCodec
     var draft by remember { mutableStateOf("") }; var tooLarge by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
     val context = LocalContext.current
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        ScreenHeader("New chat", if (state.networkConfigured && !state.demo) "Find someone on Ghost Cloak." else "Exchange a public contact card.", back)
+    PageContent("New chat", if (state.networkConfigured && !state.demo) "Find someone on Ghost Cloak." else "Exchange a public contact card.", back) {
         if(state.networkConfigured && !state.demo && lookup!=null) {
             var username by remember {mutableStateOf("")}
             Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer) {
-                Box(Modifier.fillMaxWidth().padding(32.dp),contentAlignment=androidx.compose.ui.Alignment.Center) { AppIcon(Glyph.PERSON,modifier=Modifier.size(48.dp),tint=MaterialTheme.colorScheme.primary) }
+                Box(Modifier.fillMaxWidth().padding(GhostDimensions.heroInset),contentAlignment=androidx.compose.ui.Alignment.Center) { AppIcon(Glyph.PERSON,modifier=Modifier.size(GhostDimensions.touchTarget),tint=MaterialTheme.colorScheme.primary) }
             }
             OutlinedTextField(username,{if(it.length<=24) username=it},label={Text("Exact username")},singleLine=true,modifier=Modifier.fillMaxWidth())
             FullButton("Find and add contact",!state.loading && username.isNotBlank()) {lookup(username)}
@@ -40,7 +39,7 @@ import org.ghostcloak.messaging.ContactCardCodec
             HorizontalDivider()
             SectionLabel("SHARE YOUR CARD")
             Text("Your private keys never leave encrypted storage.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (state.card.isEmpty()) OutlinedButton(onClick = export, enabled = !state.loading, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Generate public contact card") }
+            if (state.card.isEmpty()) OutlinedButton(onClick = export, enabled = !state.loading, modifier = Modifier.fillMaxWidth().heightIn(min = GhostDimensions.avatar)) { Text("Generate public contact card") }
             else {
                 InfoPanel("Public contact card ready", "This card is for one contact exchange. It does not connect devices over a network.")
                 FullButton(if (copied) "Copy again" else "Copy public card") { copySensitive(context, state.card); copied = true }

@@ -27,6 +27,23 @@ class MessengerDesignTest {
             File(context.getExternalFilesDir(null), name).outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
         }
     }
+    @Test fun rootAndDetailPagesShareHeaderGeometryAndBackAction() {
+        val page = mutableStateOf(0)
+        var backs = 0
+        compose.setContent { GhostCloakTheme { Surface { when (page.value) {
+            0 -> ContactsScreen(AppState(loading = false), {}, {})
+            1 -> SettingsScreen(AppState(loading = false), false, {}, {})
+            2 -> AddContactScreen(AppState(loading = false), { backs++ }, {}, import = {})
+            else -> ConversationScreen(AppState(loading = false), contact, { backs++ }, {}, { _, _ -> }, {})
+        } } } }
+        val header = compose.onNodeWithTag("page-header").getUnclippedBoundsInRoot()
+        for (index in 1..3) {
+            compose.runOnIdle { page.value = index }
+            assertEquals(header, compose.onNodeWithTag("page-header").getUnclippedBoundsInRoot())
+            if (index >= 2) compose.onNodeWithContentDescription("Back").performClick()
+        }
+        assertEquals(2, backs)
+    }
     @Test fun requestRequiresAcceptanceButNotVerificationToReply() {
         val status = mutableStateOf(contact)
         var accepted = false
@@ -59,14 +76,21 @@ class MessengerDesignTest {
         val dark = mutableStateOf(false)
         compose.setContent { GhostCloakTheme(darkTheme=dark.value) { Surface(color = androidx.compose.material3.MaterialTheme.colorScheme.background) { ContactsScreen(AppState(loading = false,
             identity = DeviceIdentity(RandomIdentifiers.create(), "bob", RandomIdentifiers.create(), byteArrayOf()),
-            contacts = listOf(contact, known)+extras.map {it.first}, previews = mapOf(known.contact.remoteDeviceId to last)+extras.associate {it.first.contact.remoteDeviceId to it.second}), {}, {}) } } }
-        compose.onNodeWithText("Ghost Cloak").assertIsDisplayed()
+            unreadCount = 3, contacts = listOf(contact, known)+extras.map {it.first}, previews = mapOf(known.contact.remoteDeviceId to last)+extras.associate {it.first.contact.remoteDeviceId to it.second}), {}, {}) } } }
+        compose.onNodeWithText("Ghost Cloak").assertDoesNotExist()
         compose.onNodeWithText("Chats").assertIsDisplayed()
         compose.onNodeWithText("Search chats").assertDoesNotExist()
         compose.onNodeWithText("All").assertDoesNotExist()
         compose.onNodeWithText("Requests 1").assertDoesNotExist()
         compose.onNodeWithContentDescription("New chat").assertHasClickAction()
         compose.onNodeWithText("You: Sounds good. I'll bring coffee.").assertIsDisplayed()
+        compose.onNodeWithText("alice").assertIsDisplayed()
+        compose.onNodeWithText("3 new messages").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Search conversations").performClick()
+        compose.onNodeWithText("Search conversations").performTextInput("morgan")
+        compose.onAllNodesWithText("morgan").assertCountEquals(2) // Search field plus matching conversation.
+        compose.onNodeWithText("alice").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Search conversations").performClick()
         compose.onNodeWithText("alice").assertIsDisplayed()
         screenshot("organized-chats-light.png")
         compose.runOnIdle { dark.value = true }

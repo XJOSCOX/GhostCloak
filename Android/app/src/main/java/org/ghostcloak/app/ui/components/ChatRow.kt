@@ -6,7 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
+import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.messaging.*
 import java.time.Instant
 import java.time.ZoneId
@@ -16,10 +16,10 @@ import java.time.format.DateTimeFormatter
     val contact = status.contact
     Surface(onClick = { open(contact.remoteDeviceId) }, shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(vertical = 13.dp, horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Row(Modifier.padding(vertical = GhostDimensions.previewInset, horizontal = GhostDimensions.fieldCorner), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(GhostDimensions.regular)) {
             Avatar(contact.displayName)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(GhostDimensions.tiny)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(contact.displayName, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)

@@ -14,7 +14,7 @@ import org.ghostcloak.messaging.*
 import org.ghostcloak.transport.TransportFailure
 
 data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? = null,
-    val contacts: List<ContactStatus> = emptyList(), val previews: Map<String, Message> = emptyMap(), val messages: List<Message> = emptyList(),
+    val unreadCount: Int = 0, val contacts: List<ContactStatus> = emptyList(), val previews: Map<String, Message> = emptyMap(), val messages: List<Message> = emptyList(),
     val error: String? = null, val card: String = "", val fingerprint: String = "",
     val demo: Boolean = false, val protection: String = "", val ready: Boolean = false,
     val networkRequiresConnect:Boolean=true, val networkConfigured:Boolean=false,val networkStatus:NetworkStatus=NetworkStatus.DISABLED) {
@@ -27,7 +27,7 @@ class GhostViewModel internal constructor(application: Application, private val 
     private val mutable = MutableStateFlow(AppState(networkConfigured = runtime.networkConfigured, networkStatus = runtime.networkStatus))
     val state = mutable.asStateFlow()
     val developerAvailable get() = runtime.developerAvailable
-    private var selected: String? = null
+    @Volatile private var selected: String? = null
     private var workCount = 0
     init { refresh() }
     private fun run(quiet: Boolean = false, activity: NetworkStatus? = null, block: suspend (ConversationService) -> String? = { null }): kotlinx.coroutines.Job {
@@ -47,7 +47,8 @@ class GhostViewModel internal constructor(application: Application, private val 
                     val active = runtime.currentService()
                     val identity = runtime.open(active)
                     val contacts = if (identity != null) active.contacts() else emptyList()
-                    mutable.value = mutable.value.copy(identity = identity, contacts = contacts,
+                    selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.markRead(it) }
+                    mutable.value = mutable.value.copy(identity = identity, contacts = contacts, unreadCount = if (identity != null) active.unreadCount() else 0,
                         previews = contacts.mapNotNull { c -> active.messages(c.contact.remoteDeviceId).lastOrNull()?.let { c.contact.remoteDeviceId to it } }.toMap(),
                         messages = selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.messages(it) } ?: emptyList(),
                         demo = runtime.inDemo, protection = runtime.protection, ready = true,
@@ -100,6 +101,7 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun create(username: String) = run(activity = NetworkStatus.CONNECTING) { runtime.create(it, username); null }
     fun rename(username: String) = run { it.rename(username); null }
     fun select(id: String) { selected = id; mutable.value = mutable.value.copy(messages = emptyList(), fingerprint = ""); refresh() }
+    fun leaveConversation(id: String) { if (selected == id) selected = null }
     fun exportCard() = run { mutable.value = mutable.value.copy(card = it.exportCard(fresh = true)); null }
     fun importCard(text: String, success: () -> Unit) = run { it.importCard(text); withContext(Dispatchers.Main) { success() }; null }
     fun loadFingerprint(id: String, pending: Boolean) = run { mutable.value = mutable.value.copy(fingerprint = it.fingerprint(id, pending)); null }

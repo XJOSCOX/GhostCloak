@@ -4,7 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.application.NetworkStatus
 
@@ -18,7 +18,7 @@ import org.ghostcloak.app.application.NetworkStatus
         }
         return
     }
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(GhostDimensions.tiny)) {
         Text(when (state.networkStatus) {
             NetworkStatus.CONNECTED -> "Connected"
             NetworkStatus.CONNECTING -> "Connecting…"
@@ -28,7 +28,7 @@ import org.ghostcloak.app.application.NetworkStatus
             NetworkStatus.ERROR -> "Needs attention · Try Sync"
             else -> "Connect to start messaging"
         }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(GhostDimensions.compact)) {
             if (state.networkRequiresConnect) TextButton(onClick = connect, enabled = !state.loading, modifier = Modifier.weight(1f, fill = false)) { Text("Connect to Ghost Cloak") }
             OutlinedButton(onClick = sync, enabled = !state.loading) { Text("Sync") }
         }

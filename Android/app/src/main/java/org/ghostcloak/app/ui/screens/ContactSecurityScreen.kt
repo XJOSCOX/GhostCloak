@@ -8,7 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import org.ghostcloak.app.ui.theme.SafetyNumberStyle
-import androidx.compose.ui.unit.dp
+import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.identity.*
@@ -21,11 +21,10 @@ import org.ghostcloak.messaging.ContactStatus
     val previouslyVerified = contact.identity?.previousTrustState == IdentityTrustState.VERIFIED
     var confirmation by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(contact.contact.remoteDeviceId, changed) { load(changed) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        ScreenHeader("Contact security", "Verify the person behind the name.", back)
-        Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.spacedBy(16.dp),verticalAlignment=Alignment.CenterVertically) {
+    PageContent("Contact security", "Verify the person behind the name.", back) {
+        Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.spacedBy(GhostDimensions.regular),verticalAlignment=Alignment.CenterVertically) {
             Avatar(contact.contact.displayName)
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(GhostDimensions.small)) {
                 Text(contact.contact.displayName, style = MaterialTheme.typography.titleLarge)
                 TrustBadge(contact.identity?.trustState)
             }
@@ -37,7 +36,7 @@ import org.ghostcloak.messaging.ContactStatus
         SectionLabel(if (changed) "NEW SAFETY NUMBER" else "SAFETY NUMBER")
         Surface(shape = MaterialTheme.shapes.large, color=MaterialTheme.colorScheme.primaryContainer) {
             Text(if (state.fingerprint.isEmpty()) "Loading safety number…" else state.fingerprint.split(" ").chunked(3).joinToString("\n") { it.joinToString("  ") },
-                Modifier.fillMaxWidth().padding(24.dp), style = SafetyNumberStyle, color=MaterialTheme.colorScheme.onPrimaryContainer)
+                Modifier.fillMaxWidth().padding(GhostDimensions.spacious), style = SafetyNumberStyle, color=MaterialTheme.colorScheme.onPrimaryContainer)
         }
         Text("Both people should see exactly the same number. Compare every group.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         FullButton(if (changed) "Review new identity" else "Mark verified", !state.loading && state.fingerprint.isNotEmpty()) { confirmation = state.fingerprint }
@@ -46,7 +45,7 @@ import org.ghostcloak.messaging.ContactStatus
         HorizontalDivider()
         SectionLabel("LOCAL CONTROLS")
         Text("Blocking stops local conversation delivery. It keeps the contact and cryptographic identity.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedButton(onClick = { block(!contact.contact.blocked) }, enabled = !state.loading, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+        OutlinedButton(onClick = { block(!contact.contact.blocked) }, enabled = !state.loading, modifier = Modifier.fillMaxWidth().heightIn(min = GhostDimensions.avatar)) {
             Text(if (contact.contact.blocked) "Unblock contact" else "Block on this device")
         }
     }

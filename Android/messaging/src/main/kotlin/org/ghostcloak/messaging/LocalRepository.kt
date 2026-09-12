@@ -31,6 +31,14 @@ class LocalRepository(private val records: EndpointRecords) {
     fun messages(id: String): List<Message> = records.transaction {
         records.keys("app/message/$id/").map { read<Message>(it) ?: throw EndpointStorageFailure() }.sortedBy { it.timestamp }
     }
+    fun unreadCount(id: String): Int = records.transaction {
+        val seen = read<List<String>>("app/read/$id").orEmpty().toSet()
+        messages(id).count { it.direction == Direction.INCOMING && it.localId !in seen }
+    }
+    fun markRead(id: String) = records.transaction {
+        val seen = messages(id).filter { it.direction == Direction.INCOMING }.map { it.localId }
+        if (read<List<String>>("app/read/$id") != seen) put("app/read/$id", seen)
+    }
     fun save(message: Message) = records.transaction {
         val key = "app/message/${message.conversationId}/${message.localId}"
         val existing = records.keys("app/message/")

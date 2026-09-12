@@ -5,7 +5,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import org.ghostcloak.app.ui.theme.GhostDimensions
 import androidx.navigation.compose.*
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -25,7 +25,7 @@ import org.ghostcloak.app.ui.components.*
     val route = entry?.destination?.route
     Scaffold(containerColor = MaterialTheme.colorScheme.background, bottomBar = {
         if (state.identity != null && route in listOf("contacts", "people", "profiles", "settings")) {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = GhostDimensions.none) {
                 listOf(Triple("contacts", "Chat", Glyph.CHAT), Triple("people", "Contact", Glyph.CONTACTS), Triple("profiles", "Profiles", Glyph.PERSON), Triple("settings", "Settings", Glyph.SETTINGS)).forEach { (destination, label, glyph) ->
                     NavigationBarItem(selected = route == destination,
                         onClick = { nav.navigate(destination) { popUpTo("contacts"); launchSingleTop = true } },
@@ -41,7 +41,7 @@ import org.ghostcloak.app.ui.components.*
         }
     }) { padding ->
         Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
-            Box(Modifier.widthIn(max = 680.dp).fillMaxSize()) {
+            Box(Modifier.widthIn(max = org.ghostcloak.app.ui.theme.GhostLayout.maxPageWidth).fillMaxSize()) {
                 if (state.identity == null) FirstLaunchScreen(state, model::create)
                 else NavHost(nav, startDestination = "contacts") {
                     composable("contacts") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork) }
@@ -52,7 +52,15 @@ import org.ghostcloak.app.ui.components.*
                     composable("conversation/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable
                         val contact = state.contacts.firstOrNull { it.contact.remoteDeviceId == id } ?: return@composable
-                        LaunchedEffect(id) { model.select(id) }
+                        DisposableEffect(id, lifecycle) {
+                            val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                                if (event == Lifecycle.Event.ON_START) model.select(id)
+                                if (event == Lifecycle.Event.ON_STOP) model.leaveConversation(id)
+                            }
+                            lifecycle.addObserver(observer)
+                            if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) model.select(id)
+                            onDispose { lifecycle.removeObserver(observer); model.leaveConversation(id) }
+                        }
                         ConversationScreen(state, contact, { nav.popBackStack() }, { nav.navigate("security/$id") },
                             { text, success -> model.send(id, text, success) }, { model.delete(id, it) }, model::connectNetwork, model::syncNetwork,
                             { model.acceptRequest(id) }, { model.deleteRequest(id); nav.popBackStack() })

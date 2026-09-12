@@ -13,13 +13,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.dp
+import org.ghostcloak.app.ui.theme.GhostDimensions
 
 enum class Glyph { CHAT, SEARCH, SETTINGS, BACK, SEND, PLUS, SHIELD, CLOSE, MORE, PERSON, CONTACTS, COMPOSE }
 
 /** Small local vector set; no icon font, downloaded assets or additional dependencies. */
 @Composable fun AppIcon(glyph: Glyph, description: String? = null, modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) {
-    Canvas(modifier.size(24.dp).then(if (description != null) Modifier.semantics { contentDescription = description } else Modifier)) {
+    Canvas(modifier.size(GhostDimensions.spacious).then(if (description != null) Modifier.semantics { contentDescription = description } else Modifier)) {
         scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
             val stroke = Stroke(1.8f, cap = StrokeCap.Round)
             fun line(a: Float, b: Float, c: Float, d: Float) = drawLine(tint, Offset(a,b), Offset(c,d), 1.8f, StrokeCap.Round)

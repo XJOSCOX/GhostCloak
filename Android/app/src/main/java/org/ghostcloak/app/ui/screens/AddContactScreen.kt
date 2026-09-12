@@ -27,7 +27,7 @@ import org.ghostcloak.messaging.ContactCardCodec
             FullButton("Find and add contact",!state.loading && username.isNotBlank()) {lookup(username)}
             Text("Your first message arrives as a request. Safety-number verification is optional; use it to confirm who you are talking to.",style=MaterialTheme.typography.bodyMedium)
         }
-        ErrorNotice(state.error)
+        ErrorNotice(state.error, important = state.errorImportant)
         if (!state.networkConfigured || state.demo) {
             InfoPanel("Exchange public material", "Cards contain public identity and prekeys only. Share through a trusted channel, then compare your safety number.")
             SectionLabel("IMPORT THEIR CARD")

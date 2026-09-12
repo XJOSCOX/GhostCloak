@@ -78,7 +78,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
             }
         }
         Surface(color=MaterialTheme.colorScheme.surface) { Column(Modifier.padding(horizontal = GhostLayout.pageInset, vertical=GhostDimensions.controlGap), verticalArrangement = Arrangement.spacedBy(GhostDimensions.compact)) {
-            ErrorNotice(state.error)
+            ErrorNotice(state.error, important = state.errorImportant)
             if (size > EnvelopeCodec.MAX_BODY || rejectedPaste) Text("Too large. Maximum 16,384 UTF-8 bytes; text was not sent.", color = MaterialTheme.colorScheme.error)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(GhostDimensions.controlGap)) {
                 OutlinedTextField(draft, onValueChange = { rejectedPaste = it.length > 65536; if (!rejectedPaste) draft = it },

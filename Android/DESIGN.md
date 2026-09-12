@@ -43,3 +43,7 @@ The unchanged font asset is copied from the user's GoXEV project (`app/src/main/
 The top-center count is the number of incoming messages not yet viewed on this device, excluding blocked contacts. Read message IDs are stored in the existing encrypted endpoint repository, separately from Message and delivery receipt data. Opening a STARTED conversation marks its currently stored messages read; incoming messages while it remains open are marked read during refresh. Leaving the route or backgrounding stops that behavior. A deleted message no longer contributes to the count. Existing incoming history without local read markers appears unread until opened.
 
 This never sends read receipts or changes recipient ACK/Delivered behavior. New counts survive process restart. `UnreadMessagesTest` verifies persistence, new arrivals, duplicate polling, deletion and independence from server ACK. `MessengerDesignTest` verifies shared header bounds/back actions, search, new-message labeling and light/dark layouts.
+
+## Error presentation
+
+Routine action errors use a compact neutral notice with Dismiss. A successful foreground sync clears prior temporary HTTP 429/503 action errors. Background polling does not repeatedly publish ordinary notices. Cryptographic, invalid-response argument and encrypted-storage failures use a persistent red Action needed panel; dedicated changed-identity warnings and send gates remain unchanged. Presentation does not alter retry, rate-limit or session-renewal behavior.

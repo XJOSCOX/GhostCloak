@@ -41,7 +41,7 @@ import org.ghostcloak.messaging.ContactStatus
         Text("Both people should see exactly the same number. Compare every group.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         FullButton(if (changed) "Review new identity" else "Mark verified", !state.loading && state.fingerprint.isNotEmpty()) { confirmation = state.fingerprint }
         if (changed && importUpdatedCard != null) TextButton(onClick = importUpdatedCard) { Text("Import updated contact card") }
-        ErrorNotice(state.error)
+        ErrorNotice(state.error, important = state.errorImportant)
         HorizontalDivider()
         SectionLabel("LOCAL CONTROLS")
         Text("Blocking stops local conversation delivery. It keeps the contact and cryptographic identity.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -4,7 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import org.ghostcloak.app.ui.theme.GhostDimensions
@@ -41,6 +41,18 @@ import org.ghostcloak.app.ui.theme.avatarColors
 @Composable fun FullButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
     Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = GhostDimensions.buttonHeight)) { Text(text) }
 }
-@Composable fun ErrorNotice(message: String?) {
-    if (message != null) InfoPanel("Unable to continue", message, true)
+@Composable fun ErrorNotice(message: String?, important: Boolean = false) {
+    var dismissed by remember(message, important) { mutableStateOf(false) }
+    if (message == null) return
+    if (important) {
+        InfoPanel("Action needed", message, warning = true)
+    } else if (!dismissed) {
+        Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceVariant) {
+            Row(Modifier.fillMaxWidth().padding(start = GhostDimensions.regular), verticalAlignment = Alignment.CenterVertically) {
+                Text(message, Modifier.weight(1f).padding(vertical = GhostDimensions.compact),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                HeaderAction(Glyph.CLOSE, "Dismiss notice") { dismissed = true }
+            }
+        }
+    }
 }

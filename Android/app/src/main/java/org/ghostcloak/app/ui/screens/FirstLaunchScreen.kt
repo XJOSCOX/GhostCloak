@@ -24,7 +24,7 @@ import org.ghostcloak.app.ui.components.*
         OutlinedTextField(value = username, onValueChange = { if (it.length <= if (state.networkConfigured) 24 else 32) username = it }, label = { Text("Username") },
             singleLine = true, modifier = Modifier.fillMaxWidth(), supportingText = { Text(if (state.networkConfigured) "3–24 letters, numbers or underscores; start with a letter or number" else "1–32 letters, numbers or underscores") })
         FullButton(if (state.networkConfigured) "Create identity" else "Create local identity", !state.loading && state.ready && username.isNotBlank()) { create(username) }
-        ErrorNotice(state.error)
+        ErrorNotice(state.error, important = state.errorImportant)
         DetailRow(Glyph.SHIELD,"Your keys stay with you", "Created and encrypted on this device. Keep your identity if a connection fails; you can retry.")
         Text(if (state.networkConfigured) "Encrypted messaging via Ghost Cloak staging\nExperimental. Not independently audited." else "Local prototype · No network messaging\nExperimental. Not independently audited.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

@@ -15,7 +15,7 @@ import org.ghostcloak.transport.TransportFailure
 
 data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? = null,
     val unreadCount: Int = 0, val unreadByConversation: Map<String, Int> = emptyMap(), val contacts: List<ContactStatus> = emptyList(), val previews: Map<String, Message> = emptyMap(), val messages: List<Message> = emptyList(),
-    val error: String? = null, val card: String = "", val fingerprint: String = "",
+    val error: String? = null, val errorImportant: Boolean = false, val errorTransient: Boolean = false, val card: String = "", val fingerprint: String = "",
     val demo: Boolean = false, val protection: String = "", val ready: Boolean = false,
     val networkRequiresConnect:Boolean=true, val networkConfigured:Boolean=false,val networkStatus:NetworkStatus=NetworkStatus.DISABLED) {
     val networkConnected get() = networkStatus == NetworkStatus.CONNECTED
@@ -32,18 +32,22 @@ class GhostViewModel internal constructor(application: Application, private val 
     init { refresh() }
     private fun run(quiet: Boolean = false, activity: NetworkStatus? = null, block: suspend (ConversationService) -> String? = { null }): kotlinx.coroutines.Job {
         if (!quiet) workCount++
-        if (!quiet) mutable.value = mutable.value.copy(loading = true, error = null,
+        if (!quiet) mutable.value = mutable.value.copy(loading = true, error = null, errorImportant = false, errorTransient = false,
             networkStatus = activity?.takeIf { runtime.networkConfigured && !runtime.inDemo } ?: mutable.value.networkStatus)
         return viewModelScope.launch {
             var failure: String? = null
+            var important = false
+            var transient = false
+            var networkRecovered = false
             try {
                 runtime.use { service ->
                     try { failure = block(service) }
                     catch (e: AppFailure) { failure = appError(e.error) }
-                    catch (e: CryptoFailure) { failure = cryptoError(e.error) }
+                    catch (e: CryptoFailure) { failure = cryptoError(e.error); important = true }
                     catch (e: TransportFailure) { failure = if (runtime.networkConfigured && !runtime.inDemo) "Message could not be sent. Try Sync and retry." else "Recipient is not connected to this local simulator. Nothing was delivered." }
-                    catch (e: org.ghostcloak.protocol.ApiFailure) { failure = networkError(e) }
-                    catch (e: IllegalArgumentException) {failure="The network response or account settings were rejected."}
+                    catch (e: org.ghostcloak.protocol.ApiFailure) { failure = networkError(e); transient = e.status == 429 || e.status == 503 }
+                    catch (e: IllegalArgumentException) {important = true; failure="The network response or account settings were rejected."}
+                    networkRecovered = quiet && failure == null && runtime.canAutoSync && runtime.networkStatus == NetworkStatus.CONNECTED
                     val active = runtime.currentService()
                     val identity = runtime.open(active)
                     val contacts = if (identity != null) active.contacts() else emptyList()
@@ -55,9 +59,19 @@ class GhostViewModel internal constructor(application: Application, private val 
                         demo = runtime.inDemo, protection = runtime.protection, ready = true,
                         networkRequiresConnect=runtime.networkRequiresConnect,networkConfigured=runtime.networkConfigured,networkStatus=runtime.networkStatus)
                 }
-            } catch (e: EndpointStorageFailure) { failure = "Encrypted storage is unavailable. Your identity was not reset. Close the app and investigate before continuing." }
-            catch (e: CryptoFailure) { failure = cryptoError(e.error) }
-            finally { if (!quiet) workCount--; mutable.value = mutable.value.copy(loading = workCount > 0, error = if (quiet) mutable.value.error else failure) }
+            } catch (e: EndpointStorageFailure) { important = true; failure = "Encrypted storage is unavailable. Your identity was not reset. Close the app and investigate before continuing." }
+            catch (e: CryptoFailure) { failure = cryptoError(e.error); important = true }
+            finally {
+                if (!quiet) workCount--
+                val previous = mutable.value
+                val recovered = networkRecovered && previous.errorTransient
+                // Routine polling stays quiet; critical failures remain visible until acted on.
+                val publish = !quiet || (important && failure != null)
+                mutable.value = previous.copy(loading = workCount > 0,
+                    error = if (publish) failure else if (recovered) null else previous.error,
+                    errorImportant = if (publish) important else if (recovered) false else previous.errorImportant,
+                    errorTransient = if (publish) transient else if (recovered) false else previous.errorTransient)
+            }
         }
     }
     private var foregroundCycle = 0L

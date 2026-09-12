@@ -39,7 +39,7 @@ import org.ghostcloak.app.ui.components.*
                     unfocusedContainerColor=MaterialTheme.colorScheme.surface,focusedContainerColor=MaterialTheme.colorScheme.surface))
             Spacer(Modifier.height(GhostLayout.dividerGap))
             if(state.networkConfigured && !state.demo && !state.networkConnected) NetworkActions(state,connect,sync)
-            if(state.error!=null) ErrorNotice(state.error)
+            if(state.error!=null) ErrorNotice(state.error, important = state.errorImportant)
             if(chats.isEmpty()) {
                 Column(Modifier.weight(1f).fillMaxWidth().padding(GhostDimensions.roomy),verticalArrangement=Arrangement.Center,horizontalAlignment=Alignment.CenterHorizontally) {
                     Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer) {

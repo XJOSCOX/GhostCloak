@@ -23,7 +23,7 @@ import org.ghostcloak.app.ui.components.*
             }
             TextButton(onClick={editing=true}) {Text("Edit")}
         }
-        ErrorNotice(state.error)
+        ErrorNotice(state.error, important = state.errorImportant)
         SettingsGroup("Your profile") {
             DetailRow(Glyph.PERSON,"Display name",state.identity?.username.orEmpty())
             DetailRow(Glyph.SHIELD,"Device identity","Your profile belongs to this device. Editing your name keeps your keys and conversations.")

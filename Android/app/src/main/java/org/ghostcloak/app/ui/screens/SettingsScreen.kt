@@ -15,7 +15,7 @@ import org.ghostcloak.app.ui.components.*
     demo: () -> Unit, leave: () -> Unit, connect:()->Unit={}, sync:()->Unit={}, publish:()->Unit={}, logout:()->Unit={}) {
     var advanced by remember { mutableStateOf(false) }
     PageContent("Settings") {
-        ErrorNotice(state.error)
+        ErrorNotice(state.error, important = state.errorImportant)
         SettingsGroup("Appearance") { AppearanceSelector() }
         SettingsGroup("Privacy") {
             DetailRow(Glyph.SHIELD,"Encrypted on this device","Your conversations and keys are kept in encrypted local storage.")

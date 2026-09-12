@@ -149,6 +149,54 @@ Background decryption extends plaintext memory exposure when the app is not bein
 
 Persist minimal scheduler state encrypted, no extra notification body copies. Preserve backup exclusions, TLS validation, Signal/identity/storage protections and existing network trust boundaries. Mailbox retention still bounds recovery after a long absence; background scheduling cannot guarantee indefinite retention.
 
+### App lock / secure unlock roadmap
+
+Design only. Recommend **optional UI lock (A) initially**, accurately labeled as protection against someone using the app on an otherwise unlocked phone. Reserve **Keystore-gated lock (B)** for a separately reviewed maximum-security mode that sacrifices unattended decryption/background delivery. Neither mode changes network identity, logout semantics or Signal cryptography.
+
+| Threat / behavior | A: UI lock | B: cryptographic/Keystore-gated lock |
+| --- | --- | --- |
+| Casual access to an unlocked phone | Gate every sensitive UI route/action | Gate UI and access to local decryption capability |
+| Background sync while app locked | Existing encrypted store and engine remain available; fetch/decrypt/store/ACK continues | Defer sensitive sync until authorized unlock; current monolithic encrypted store cannot be opened unattended |
+| App-process compromise | UI checks can be bypassed; plaintext/keys may already be in memory | Stronger protection while key is unavailable, but bypass possible after authorized unwrap if secrets remain in process memory |
+| Copied local data | Existing SQLCipher/Keystore protection; app PIN is not additional database encryption | Auth-bound wrapping adds a key-use boundary; no claim of protection against all hardware/OS attacks |
+| Process death | Restart locked even if grace period had not elapsed; runtime can reopen for background work | Restart locked; no cached decryption grant or unwrapped secret restored |
+| Reboot / before first unlock | No access to current credential-encrypted files | Same constraint, plus explicit app-authorized key use after first unlock |
+| Device relock after first unlock | UI lock timing applies; background remains possible | Proposed mode immediately closes access on device lock as well as app-lock expiry; lifecycle/OS enforcement must be tested |
+
+Both modes remain vulnerable to malicious accessibility interaction, input capture or a compromised OS to differing degrees. Fully compromised device software can expose plaintext after local decryption. UI lock must never be marketed as cryptographic gating.
+
+#### Unlock methods and local PIN
+
+Offer optional Android BiometricPrompt using a supported strong biometric and an independently optional **app-local PIN** fallback. Check availability/enrollment and handle cancellation, lockout and enrollment changes without unlocking. No custom biometric collection. Biometric-only enrollment must explain loss-of-access risk if no fallback is enabled. Require a successful configured unlock to change/disable app lock or enroll/reset its PIN; creating the first lock requires confirmation of the chosen method. See [BiometricPrompt guidance](https://developer.android.com/identity/sign-in/biometric-auth).
+
+For A, the system prompt authorizes a short-lived in-memory UI grant. For B, a successful UI callback alone is insufficient: bind authorization to an actual Keystore operation with CryptoObject and a strong biometric or explicitly configured **Android device credential**. The OS device PIN/password/pattern is not the app-local PIN. Local PIN verification cannot authorize an Android authentication-bound key. Therefore B must not offer a weaker app-PIN wrapper as a transparent fallback; that would reduce the protection to the weaker path. Users wanting local-PIN fallback should use A initially. See [CryptoObject key authorization](https://developer.android.com/reference/android/hardware/biometrics/BiometricPrompt.CryptoObject) and [Keystore authentication](https://developer.android.com/privacy-and-security/keystore).
+
+If app PIN is implemented, use a vetted Argon2id implementation, a fresh random salt of at least 16 bytes, a versioned parameter record and constant-time verification of a 32-byte derived verifier. Starting benchmark profile: 64 MiB, three passes, four lanes; evaluate on minimum supported devices and do not silently downgrade under memory pressure. Parameters must be approved with local unlock latency/resource measurements. This profile follows [RFC 9106's memory-constrained recommendation](https://www.rfc-editor.org/rfc/rfc9106.html). A short numeric PIN still has low entropy: a strong KDF slows guessing but cannot turn it into a strong password. Propose at least eight digits and permit a longer passphrase.
+
+Store only salt, parameters and verifier inside existing encrypted local records for A, never plaintext PIN or reversible PIN encoding. Never send it to the server or put it in logs, saved UI state, backups, analytics or clipboard. Minimize transient input lifetime; managed-runtime zeroization is best effort. Add persisted failure counters and progressively longer bounded cooldowns, surviving restart/reboot; never sleep holding the runtime lock. Local throttling can be bypassed by a compromised app/rollback and is not hardware anti-brute-force. Do not automatically wipe identity/history after failed attempts.
+
+No email/SMS recovery, server-side PIN storage or third-party identity provider. A successful alternative already-configured unlock may authorize changing a forgotten PIN. Without one, remain locked and explain that recovery is unavailable; any future destructive reset must explicitly disclose loss and require separate confirmation. Forgetting a PIN must never invoke account creation, device registration, key regeneration or implicit logout. B key invalidation likewise fails closed without replacing identity or keeping an unprotected recovery wrapper.
+
+#### Timing, entry points and presentation
+
+Expose exactly **immediate, 30 seconds, 1 minute and 5 minutes**, measured from the application leaving foreground. Recommend immediate by default when lock is enabled. Use a process-owned lock state machine: Disabled, Locked, Unlocking, Unlocked and background grace deadline. Backgrounding starts a monotonic deadline; returning before expiry preserves the grant, returning after expiry locks before rendering. A background timer is not guaranteed to execute: always re-evaluate on resume before any sensitive composition/action. Process restart always starts Locked regardless of stored timing. Do not persist an unlocked flag or restore plaintext screens/drafts through saved-state mechanisms while locked.
+
+Track application-wide activity visibility, distinguishing configuration changes, multi-window and prompt callbacks from genuinely leaving the app. Do not depend solely on delayed process-lifecycle callbacks for immediate locking. Invalidate stale biometric/PIN callbacks with an unlock-attempt generation: success from an earlier attempt cannot unlock after background expiry, logout or cancellation. Backgrounding during a prompt cancels that attempt; explicit unlock is required again if the deadline elapsed.
+
+Notification/deep-link entry goes through the same root gate before resolving sensitive UI. An opaque pending destination may be retained, but it grants no access. No conversation text, avatar, search results, export, copy/share or accessibility semantics behind the lock screen. Authentication UI must not merely overlay a live sensitive screen. Explicit logout remains separate: lock neither revokes the access session nor permits reconnect after logout, and network login never unlocks the UI.
+
+When enabled, keep FLAG_SECURE on sensitive app windows from their first frame, including during grace and biometric prompts, and render a neutral background snapshot cover immediately on backgrounding. Do not wait for the lock timer before protecting recents. Test rotation, task switching, dialogs and notification launch for one-frame leaks. FLAG_SECURE blocks supported screenshots/nonsecure displays but is not a defense against external cameras or compromised/OEM behavior; see [secure activities](https://developer.android.com/security/fraud-prevention/activities). Do not claim deletion of screenshots taken before enabling the feature.
+
+While locked, force every notification to **Ghost Cloak / New message**, overriding sender/count opt-ins. On locking, replace or remove already-visible richer notifications; prior notification history/listener copies cannot be recalled. Apply a lock-generation check at publication to prevent a sender-bearing notification racing with lock. In B, no new-message notification is created from unprocessed ciphertext.
+
+#### Maximum-security storage boundary
+
+Current AppRuntime opens a database and Signal engine that can retain usable decrypted material. Merely changing the AES wrapping key to require biometrics would protect a future open, not an already-open database. B therefore needs a reviewed storage-access redesign: quiesce/cancel network and UI operations safely, finish or roll back transactions, close the store/engine, release cached secrets/plaintext and require a new authenticated unwrap. Managed/native memory remnants remain a limitation. Never keep the current unrestricted wrapper alongside the auth-bound wrapper as a silent bypass.
+
+An auth-per-use CryptoObject unwrap can establish a bounded app session; it does not magically revoke unwrapped material when the UI locks. Time-based Keystore grants may also be enabled by device unlock, not specifically app unlock. Keep the root UI gate independent and choose a supported authentication policy per API rather than mapping the four UI timers directly onto hardware guarantees.
+
+With the current monolithic encrypted records, network tokens, identity/ratchet state and messages are unavailable while B is locked. Defer FETCH, SEND retry and ACK until authorized unlock. Do not ACK ciphertext merely fetched without decrypt/commit. A later ciphertext-only staging store would need separate threat modeling, bounded storage, credential separation and crash semantics; it is not part of the initial B recommendation. Longer deferral increases mailbox-retention risk. Enabling/disabling B requires an authenticated, crash-safe rewrap/migration of existing database secrets, with no Signal/account key replacement and no unprotected residual wrapper after completion.
+
 ## 13. Implementation phases
 
 1. Approve architecture/privacy/latency defaults; recheck API-37 rules and existing mailbox retention/batch limits.
@@ -156,6 +204,8 @@ Persist minimal scheduler state encrypted, no extra notification body copies. Pr
 3. Separately approve ordinary WorkManager dependency/unique scheduling. Review strict verification and merged manifest, including possible library boot/wake-lock/network-state permissions; do not assume INTERNET-only manifest remains sufficient.
 4. Separately add local channel/permission flow and generic notifications with privacy controls. No remote provider or message preview.
 5. Run regression/physical matrix and limited opt-in staging rollout with truthful delayed-delivery guidance and disable control.
+6. Separately implement optional A: root navigation/action gate, process-owned timing, BiometricPrompt, vetted local PIN verifier/throttling, generic locked notifications and snapshot protection. State clearly that background decryption continues. Review dependencies/permissions and run the lock matrix below before release.
+7. Treat B as a later maximum-security project: review supported auth-bound key policy, store/engine teardown, crash-safe migration, recovery limitations and background suspension before implementation. Do not enable it as a transparent upgrade to A.
 
 None of these implementation steps occurs in this commit.
 
@@ -173,6 +223,15 @@ Use two consenting staging phones with synthetic accounts/messages, API-30/API-3
 - Check generic content only after authenticated durable acceptance; rejected crypto/blocked contacts never notify. Test permission/channel denial, lock screen/history/badges/listeners/screenshots and optional levels.
 - Audit packet destinations, dependencies, merged manifest, logs and scheduler database: no added broker, analytics, remote crash reporting, identifiers, content or tokens. Application delivery requests target the configured origin.
 - Run existing renewal, rate-budget, lifecycle, storage reopen, outbox/dedup, identity and request suites plus new coordinator/crash/privacy tests under strict dependency verification. Report measured physical outcomes, never universal guarantees.
+
+App-lock test matrix (future implementation):
+
+- Exercise all four deadlines just before/at/after expiry with wall-clock changes, screen lock, Home, rotation, split screen, process kill and reboot. Restart must be locked even inside a prior grace period.
+- Launch through notifications/deep links and restored tasks; no sensitive frame, accessibility node or action before unlock. Capture recents, screenshots and screen recordings around every transition on API 30/37 and OEM phones.
+- Test biometric cancel/lockout, enrollment/key invalidation, unsupported authenticators, stale callbacks and optional PIN fallback. No cancellation/failure may grant access. Verify KDF vectors, unique salts, parameter validation, constant-time comparison and persisted throttling across restart without exposing PINs.
+- Race lock with richer notification publication, foreground send/sync and logout. Locked notifications stay generic; A continues scheduled storage/ACK without changing identity, B defers it with no ACK of uncommitted content.
+- For B, kill during migration, unwrap, transaction and teardown; verify no unrestricted wrapper remains, no identity/Signal key regeneration, no access after lock/process restart, and recoverability or explicit fail-closed behavior after key invalidation.
+- Verify forgotten PIN has no server/email/SMS recovery or implicit reset; a configured alternate unlock can authorize PIN change. Verify lock is independent of logout and network session renewal.
 
 This design-only commit does not claim future physical tests have run.
 

@@ -31,7 +31,10 @@ enum class Glyph { CHAT, SEARCH, SETTINGS, BACK, SEND, PLUS, SHIELD, CLOSE, MORE
                 }
                 Glyph.PLUS -> { line(12f,5f,12f,19f); line(5f,12f,19f,12f) }
                 Glyph.CLOSE -> { line(6f,6f,18f,18f); line(18f,6f,6f,18f) }
-                Glyph.BACK -> { line(19f,12f,5f,12f); line(5f,12f,11f,6f); line(5f,12f,11f,18f) }
+                Glyph.BACK -> {
+                    drawPath(Path().apply { moveTo(15f,5f); lineTo(8f,12f); lineTo(15f,19f) },
+                        tint, style = Stroke(1.8f, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                }
                 Glyph.SEARCH -> { drawCircle(tint,6.5f,Offset(10.5f,10.5f),style=stroke); line(16f,16f,21f,21f) }
                 Glyph.MORE -> listOf(5f,12f,19f).forEach { drawCircle(tint,1.5f,Offset(12f,it)) }
                 Glyph.SEND -> { drawPath(Path().apply { moveTo(4f,4f); lineTo(21f,12f); lineTo(4f,20f); lineTo(7f,12f); close() },tint,style=stroke); line(7f,12f,15f,12f) }

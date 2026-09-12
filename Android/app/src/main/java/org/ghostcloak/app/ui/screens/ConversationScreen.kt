@@ -38,7 +38,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
             status.contact.request -> "Message request - Unverified"
             !active -> "Session unavailable"
             else -> null
-        }, back = back) {
+        }, back = back, avatarName = status.contact.displayName) {
             HeaderAction(Glyph.SHIELD, "Security", security)
             if (state.networkConfigured && !state.demo) Box {
                 HeaderAction(Glyph.MORE, "Conversation options") { actions = true }

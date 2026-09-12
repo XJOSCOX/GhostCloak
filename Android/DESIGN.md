@@ -8,7 +8,7 @@ Layout references: [Inbox Chat App](https://dribbble.com/shots/24369393-Inbox-Ch
 
 - Chats: With no unread messages, a compact “Chats” title and search/compose icons on the right. When unread messages exist, Search moves left, the centered count replaces “Chats”, and Compose stays right. Only unread incoming messages contribute to the count. Search toggles a local conversation-name field; closing it clears the query. The header has no brand icon or second title. Existing avatars stay in conversation rows.
 - Contacts: the same header and insets, alphabetical contacts, local search and a header Add contact action. Pending requests remain in Chats.
-- Conversation: the same header with Back, the contact name/security status, Security and existing connection options; no header avatar. Date separators and incoming/outgoing bubbles remain. Request acceptance and changed-key gates still control the composer.
+- Conversation: the same header with Back, the contact name/security status, Security and existing connection options; a compact 32 dp avatar beside the name. Back uses a rounded chevron throughout shared headers. Date separators and incoming/outgoing bubbles remain. Request acceptance and changed-key gates still control the composer.
 - New chat: exact-username lookup, with contact-card tools retained in local/demo mode.
 - Onboarding: one username and one deliberate create action, with concise device-key information.
 - Profiles: the current device profile and name editor, kept in its own screen file.

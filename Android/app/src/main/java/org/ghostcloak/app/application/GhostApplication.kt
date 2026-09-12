@@ -5,6 +5,14 @@ import kotlinx.coroutines.launch
 
 /** A single store/engine owner per process; activity recreation never opens a second engine. */
 class GhostApplication : Application(), androidx.work.Configuration.Provider {
+    val appLock by lazy {
+        org.ghostcloak.app.access.AppLockController(object : org.ghostcloak.app.access.LockPersistence {
+            override suspend fun read() = runtime.readAppLock()
+            override suspend fun write(bytes: ByteArray) = runtime.writeAppLock(bytes)
+        }, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate),
+            android.os.SystemClock::elapsedRealtime,
+            { android.provider.Settings.Global.getInt(contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0) })
+    }
     val runtime by lazy { AppRuntime(this, backgroundEligibility = { BackgroundSyncSchedule.reconcile(this, it) },
         notifications = AndroidLocalNotifications(this)) }
     override val workManagerConfiguration get() = androidx.work.Configuration.Builder()

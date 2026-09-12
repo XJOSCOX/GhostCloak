@@ -1,7 +1,10 @@
 package org.ghostcloak.app
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import org.ghostcloak.app.access.AppLockGate
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
@@ -14,11 +17,12 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.core.view.WindowCompat
 import org.ghostcloak.app.ui.privacy.SensitiveClipboardProvider
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private var chatsRequest by mutableIntStateOf(0)
     private val runtime get() = (application as org.ghostcloak.app.application.GhostApplication).runtime
-    override fun onStart() { super.onStart(); runtime.notificationActivityVisible(true) }
-    override fun onStop() { runtime.notificationActivityVisible(false); super.onStop() }
+    private val appLock get() = (application as org.ghostcloak.app.application.GhostApplication).appLock
+    override fun onStart() { appLock.start(); super.onStart(); runtime.notificationActivityVisible(true) }
+    override fun onStop() { appLock.stop(isChangingConfigurations); runtime.notificationActivityVisible(false); super.onStop() }
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -26,10 +30,12 @@ class MainActivity : ComponentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Global policy: protects the first frame, PIN enrollment, grace periods and locked screens.
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        lifecycleScope.launch { appLock.initialize() }
         if (savedInstanceState == null && intent.action == org.ghostcloak.app.application.AndroidLocalNotifications.OPEN_CHATS) chatsRequest++
         enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
-        val model = ViewModelProvider(this)[GhostViewModel::class.java]
         val appearance = AppearanceStore(applicationContext)
         setContent {
             val mode by appearance.mode.collectAsState()
@@ -41,7 +47,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
             CompositionLocalProvider(LocalAppearance provides AppearanceControl(mode, appearance::select)) {
-                GhostCloakTheme(darkTheme = dark) { SensitiveClipboardProvider { GhostApp(model, chatsRequest) } }
+                GhostCloakTheme(darkTheme = dark) {
+                    AppLockGate(appLock) {
+                        val model = remember { ViewModelProvider(this@MainActivity)[GhostViewModel::class.java] }
+                        SensitiveClipboardProvider { GhostApp(model, chatsRequest) }
+                    }
+                }
             }
         }
     }

@@ -12,14 +12,15 @@ import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 
 @Composable fun SettingsScreen(state: AppState, developerAvailable: Boolean,
-    demo: () -> Unit, leave: () -> Unit, connect:()->Unit={}, sync:()->Unit={}, publish:()->Unit={}, logout:()->Unit={}) {
+    demo: () -> Unit, leave: () -> Unit, connect:()->Unit={}, sync:()->Unit={}, publish:()->Unit={}, logout:()->Unit={}, appLock:()->Unit={}) {
     var advanced by remember { mutableStateOf(false) }
     PageContent("Settings") {
         ErrorNotice(state.error, important = state.errorImportant)
         SettingsGroup("Appearance") { AppearanceSelector() }
         SettingsGroup("Privacy") {
             DetailRow(Glyph.SHIELD,"Encrypted on this device","Your conversations and keys are kept in encrypted local storage.")
-            Text("App lock and screenshot protection are not enabled. An unlocked device can still expose messages.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Screenshots and task previews are protected. Optional app lock controls access to your screens; background delivery continues.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            if (org.ghostcloak.app.access.LocalAppLock.current != null) OutlinedButton(onClick = appLock) { Text("App lock") }
         }
         if (!state.demo && state.networkConfigured) NotificationSettings()
         if(!state.demo) SettingsGroup("Connection") {

@@ -71,6 +71,7 @@ tasks.withType<Test>().configureEach {
 }
 
 dependencies {
+    implementation(libs.androidx.biometric)
     implementation(libs.androidx.work.runtime)
     androidTestImplementation(libs.androidx.work.testing)
     implementation(project(":messaging"))

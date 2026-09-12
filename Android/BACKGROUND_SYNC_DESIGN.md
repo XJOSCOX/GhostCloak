@@ -1,6 +1,6 @@
 # Phase 1F: private background delivery design
 
-Status: Phase 1F.1 implements the first background FETCH/STORE/ACK slice (2026-09-12). The original architecture audit was against `d939b6e`; Phase 1F.2 adds maximum-privacy local notifications. App lock remains future work. Proposed options below are not delivery guarantees.
+Status: Phase 1F.1 implements the first background FETCH/STORE/ACK slice (2026-09-12). The original architecture audit was against `d939b6e`; Phase 1F.2 adds maximum-privacy local notifications. Phase 1G.1 now implements the UI/app-access lock (A); auth-bound storage mode remains future work. Proposed options below are not delivery guarantees.
 
 ### Implemented in Phase 1F.1
 
@@ -20,9 +20,9 @@ Status: Phase 1F.1 implements the first background FETCH/STORE/ACK slice (2026-0
 - Eligibility progresses PENDING → POSTING → ANNOUNCED. POSTING commits before OS publication. A crash after ACK leaves eligibility; a crash during publication recovers with a silent stable-ID update. Database and OS publication cannot be atomic: this deliberately favors a missed sound over a repeated sound. New arrivals quietly update an existing aggregate. ANNOUNCED entries never re-alert on duplicate delivery. Swipe dismissal removes published eligibility without changing read markers; unpublished arrivals remain eligible.
 - While any app screen is foregrounded, cancel the system aggregate and consume eligibility in favor of existing in-app unread indicators. Read state changes only through existing conversation behavior. A visibility check immediately before publication prevents posting behind a newly resumed screen. Logout suppresses eligibility and cancels the aggregate; it cannot reconnect.
 - Android 13+ permission is an optional, user-initiated **Settings → Notifications → Enable notifications** action. Only one request is offered; later changes open Android settings. Denial/channel disablement cannot block decrypt/store/ACK and pending eligibility remains until presentation or foreground suppression. No Worker requests permission.
-- Immutable app-local intents contain no extras or identifiers. Tap enters MainActivity through the normal root and selects Chats, including an existing task. Future app lock can intercept at that root; no app lock is implemented. No notification diagnostics or logging were added in debug or release.
+- Immutable app-local intents contain no extras or identifiers. Tap enters MainActivity through the normal root and selects Chats, including an existing task. Phase 1G.1 intercepts at that root with the UI lock before content display. No notification diagnostics or logging were added in debug or release.
 
-**Still proposed:** randomized 20–40-minute eligibility, optional background enable controls, richer notification levels, app lock, biometric/PIN unlock and maximum-security mode. Physical overnight/OEM latency measurements remain future validation.
+**Still proposed:** randomized 20–40-minute eligibility, optional background enable controls, richer notification levels and maximum-security auth-bound storage mode. Physical overnight/OEM latency measurements remain future validation.
 
 ## 1. Executive summary
 
@@ -175,7 +175,7 @@ Persist minimal scheduler state encrypted, no extra notification body copies. Pr
 
 ### App lock / secure unlock roadmap
 
-Design only. Recommend **optional UI lock (A) initially**, accurately labeled as protection against someone using the app on an otherwise unlocked phone. Reserve **Keystore-gated lock (B)** for a separately reviewed maximum-security mode that sacrifices unattended decryption/background delivery. Neither mode changes network identity, logout semantics or Signal cryptography.
+Original roadmap, now implemented as mode A in Phase 1G.1 (see the implemented delta below). Recommend **optional UI lock (A) initially**, accurately labeled as protection against someone using the app on an otherwise unlocked phone. Reserve **Keystore-gated lock (B)** for a separately reviewed maximum-security mode that sacrifices unattended decryption/background delivery. Neither mode changes network identity, logout semantics or Signal cryptography.
 
 | Threat / behavior | A: UI lock | B: cryptographic/Keystore-gated lock |
 | --- | --- | --- |
@@ -231,7 +231,7 @@ With the current monolithic encrypted records, network tokens, identity/ratchet 
 6. Separately implement optional A: root navigation/action gate, process-owned timing, BiometricPrompt, vetted local PIN verifier/throttling, generic locked notifications and snapshot protection. State clearly that background decryption continues. Review dependencies/permissions and run the lock matrix below before release.
 7. Treat B as a later maximum-security project: review supported auth-bound key policy, store/engine teardown, crash-safe migration, recovery limitations and background suspension before implementation. Do not enable it as a transparent upgrade to A.
 
-Phase 1F.1 implements the scheduling/coordinator/cooldown subset of steps 2–3. Phase 1F.2 implements the eligibility ledger and generic local notification/permission slice of step 4. Background settings controls, jitter, richer notifications and both app-lock modes remain unimplemented. See the implemented deltas above.
+Phase 1F.1 implements the scheduling/coordinator/cooldown subset of steps 2–3. Phase 1F.2 implements the eligibility ledger and generic local notification/permission slice of step 4. Phase 1G.1 implements UI-lock mode A with strong biometrics/local PIN. Background settings controls, jitter, richer notifications and auth-bound mode B remain unimplemented. See the implemented deltas above.
 
 ## 14. Physical-device test plan
 
@@ -261,4 +261,15 @@ Automated JVM/emulator coverage is part of Phase 1F.1; this document does not cl
 
 ## 15. Explicit non-goals
 
-Phase 1F.1 adds only the ordinary WorkManager scheduling dependency/components described above. Phase 1F.2 adds the local channel, optional POST_NOTIFICATIONS permission and generic publication described above. App lock remains a non-goal. No FCM, Google push APIs, OneSignal, Pusher, AWS SNS, Apple/third-party relay or external push broker. No permanent socket, exact alarms, battery-exemption prompts, analytics, remote crash reporting or cover traffic. No backend, Cloudflare/VPS, protocol, crypto, identity, delivery/request semantics, polling cadence or rate-limit changes. No instant-delivery SLA, plaintext server/notification transport, content/token logging or weakened local protections.
+Phase 1F.1 adds only the ordinary WorkManager scheduling dependency/components described above. Phase 1F.2 adds the local channel, optional POST_NOTIFICATIONS permission and generic publication described above. Phase 1G.1 implements only the separate UI-access gate; auth-bound storage remains a non-goal. No FCM, Google push APIs, OneSignal, Pusher, AWS SNS, Apple/third-party relay or external push broker. No permanent socket, exact alarms, battery-exemption prompts, analytics, remote crash reporting or cover traffic. No backend, Cloudflare/VPS, protocol, crypto, identity, delivery/request semantics, polling cadence or rate-limit changes. No instant-delivery SLA, plaintext server/notification transport, content/token logging or weakened local protections.
+
+
+## Phase 1G.1 implemented delta: UI lock, independent background access
+
+Mode A is implemented with default Off, strong biometric/PIN/combined choices and the four configured timings. The root removes all private screens while gated; notification taps enter this gate and continue to Chats after unlock. Global FLAG_SECURE applies even with lock Off. The process-owned grant is never persisted. Configuration-change handling, monotonic resume checks and attempt-generation fences prevent stale callbacks from granting access.
+
+The final PIN policy is 6–64 digits with platform PBKDF2-HMAC-SHA256 (600,000 iterations, 16-byte random salt, 32-byte constant-time-compared verifier). This deliberately supersedes the earlier proposed eight-digit/Argon2 benchmark profile for this slice; no custom KDF or new native crypto engine is introduced. Persisted attempt reservation and capped retry delays survive restart/reboot. See DESIGN.md for parameters, recovery limits, management reauthentication and the UI-only threat boundary.
+
+The encrypted database key is NOT biometric-bound. Existing background FETCH/decrypt/STORE/ACK and generic local notifications continue while locked, after first device unlock. No second runtime, scheduler, network identity, key replacement or credentials in device-protected storage were added. Logout keeps lock configuration; UI unlock never logs into the network. While the lock screen is foregrounded, existing in-app foreground notification suppression still applies; once backgrounded, generic notifications work normally.
+
+A future Phase 1G.2 Maximum Security Mode may implement B, with an explicitly reviewed storage migration and reduced background availability. The earlier B analysis and physical threat matrix remain proposals, not present capabilities.

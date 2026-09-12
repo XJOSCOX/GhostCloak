@@ -23,7 +23,7 @@ import org.ghostcloak.app.ui.components.*
     val entry by nav.currentBackStackEntryAsState()
     var handledChatsRequest by remember { mutableIntStateOf(0) }
     LaunchedEffect(chatsRequest, state.identity != null, entry != null) {
-        // The normal root must first install its graph (and, in future, pass the app-lock gate).
+        // MainActivity's app-lock gate must allow this subtree before its graph is installed.
         if (chatsRequest > handledChatsRequest && state.identity != null && entry != null) {
             nav.navigate("contacts") {
                 popUpTo("contacts") { inclusive = true }
@@ -48,7 +48,12 @@ import org.ghostcloak.app.ui.components.*
                     composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
                     composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard, {name->model.addNetwork(name) {nav.popBackStack()}}) { text -> model.importCard(text) { nav.popBackStack() } } }
                     composable("profiles") { ProfilesScreen(state, model::rename) }
-                    composable("settings") { SettingsScreen(state, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork) }
+                    composable("settings") { SettingsScreen(state, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork, { nav.navigate("app-lock") }) }
+                    composable("app-lock") {
+                        org.ghostcloak.app.access.LocalAppLock.current?.let { controller ->
+                            org.ghostcloak.app.access.AppLockSettingsScreen(controller) { nav.popBackStack() }
+                        }
+                    }
                     composable("conversation/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable
                         val contact = state.contacts.firstOrNull { it.contact.remoteDeviceId == id } ?: return@composable

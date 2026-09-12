@@ -84,6 +84,16 @@ class AppRuntime internal constructor(
     private fun canOpenExisting() = context.getSystemService(android.os.UserManager::class.java).isUserUnlocked &&
         java.io.File(context.noBackupFilesDir, "$endpointName.db").exists() &&
         java.io.File(context.noBackupFilesDir, "$endpointName.wrapped").exists()
+    internal suspend fun readAppLock(): ByteArray? {
+        val db = java.io.File(context.noBackupFilesDir, "$endpointName.db")
+        val wrapped = java.io.File(context.noBackupFilesDir, "$endpointName.wrapped")
+        if (!db.exists() && !wrapped.exists()) return null
+        check(canOpenExisting())
+        return use { store!!.transaction { store!!.read("app/access-lock") } }
+    }
+    internal suspend fun writeAppLock(bytes: ByteArray) = use {
+        store!!.transaction { store!!.write("app/access-lock", bytes) }
+    }
     suspend fun initializeBackground() = withContext(Dispatchers.IO) {
         val existing = mutex.withLock {
             if (!networkConfigured || !canOpenExisting()) {

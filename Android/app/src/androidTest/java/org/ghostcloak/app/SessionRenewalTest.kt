@@ -26,10 +26,15 @@ class SessionRenewalTest {
         NetworkDiagnostics.sink = { diagnostics.add(it); Unit }
         val observed = mutableListOf<NetworkStatus>()
         val sends = mutableListOf<ByteArray>()
+        val sendEntered = CompletableDeferred<Unit>()
+        val releaseSend = CompletableDeferred<Unit>()
         val connection = object : GhostCloakTransport {
             override suspend fun execute(request: TransportRequest): TransportResponse {
                 observed.add(a.networkStatus)
-                if (NetworkCodec.decode<ApiRequest>(request.body) is ApiRequest.Send) sends.add(request.body.copyOf())
+                if (NetworkCodec.decode<ApiRequest>(request.body) is ApiRequest.Send) {
+                    sends.add(request.body.copyOf())
+                    if (sends.size == 1) { sendEntered.complete(Unit); releaseSend.await() }
+                }
                 return api.execute(request)
             }
         }
@@ -45,7 +50,11 @@ class SessionRenewalTest {
             api.expireSessions(); observed.clear()
             // Same process endpoint owner serializes user work and foreground work.
             val send = async { a.use { a.send(it, bid, "Expiry send") } }
-            val sync = async { a.use { a.syncNetwork(it) } }
+            // Ensure SEND owns the expired request; otherwise FETCH may legitimately renew first
+            // and the successful SEND needs no retry, making the exact-byte assertion flaky.
+            withTimeout(5000) { sendEntered.await() }
+            val sync = async(start = CoroutineStart.UNDISPATCHED) { a.use { a.syncNetwork(it) } }
+            releaseSend.complete(Unit)
             assertEquals(MessageState.SERVER_ACCEPTED, send.await().state); sync.await()
             assertEquals(logins + 1, api.logins)
             assertFalse(observed.contains(NetworkStatus.NEEDS_CONNECT))
@@ -61,7 +70,7 @@ class SessionRenewalTest {
             assertEquals(1, a.use { it.messages(bid).size })
             assertTrue(diagnostics.any { "RENEWAL_SUCCEEDED" in it })
             assertTrue(diagnostics.none { identity.deviceId in it || "Expiry send" in it || "alice" in it || "bob" in it })
-        } finally { NetworkDiagnostics.sink = previousSink; a.close(); b.close() }
+        } finally { releaseSend.complete(Unit); NetworkDiagnostics.sink = previousSink; a.close(); b.close() }
     }
 
     @Test fun repeatedUnauthorizedStopsAfterOneRenewalAndLogoutPersistsAcrossReopen() = runBlocking {

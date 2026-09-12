@@ -1,6 +1,6 @@
 # Android Studio development
 
-For the proposed background-delivery architecture, platform limitations and future physical-device test matrix, see [BACKGROUND_SYNC_DESIGN.md](BACKGROUND_SYNC_DESIGN.md). Phase 1F.1 implements background FETCH/STORE/ACK; Phase 1F.2 adds optional generic local notifications. App lock remains proposed.
+For the proposed background-delivery architecture, platform limitations and future physical-device test matrix, see [BACKGROUND_SYNC_DESIGN.md](BACKGROUND_SYNC_DESIGN.md). Phase 1F.1 implements background FETCH/STORE/ACK; Phase 1F.2 adds optional generic local notifications. Phase 1G.1 adds an optional local UI lock; auth-bound storage remains proposed.
 
 ## Run staging on a phone
 
@@ -96,7 +96,7 @@ Background checks reuse the application runtime, existing identity and encrypted
 
 Debug Logcat filter: `tag:GhostCloakBg`. Events are only WORK_START, WORK_SKIP, WORK_SUCCESS, WORK_RETRY and WORK_STOP. They contain no reason strings, IDs, URLs, bodies or credentials. Release emits none. `GhostCloakNet` remains the existing sanitized debug network trace. Do not enable general WorkManager verbose logging.
 
-A worker uses a cooperative 30-second cycle budget and four FETCH-attempt budget. Retry starts at 15 minutes and respects the encrypted rate-limit checkpoint. Same-boot cooldowns use elapsed time; reboot conservatively restarts the last saved remaining duration. No wall-clock jump bypasses it. The proposed extra jitter, background enable controls and app lock are deferred.
+A worker uses a cooperative 30-second cycle budget and four FETCH-attempt budget. Retry starts at 15 minutes and respects the encrypted rate-limit checkpoint. Same-boot cooldowns use elapsed time; reboot conservatively restarts the last saved remaining duration. No wall-clock jump bypasses it. The proposed extra jitter, background enable controls and auth-bound storage are deferred.
 
 Tests: run JVM `test`, plus `:app:connectedDebugAndroidTest :storage:connectedDebugAndroidTest` on an explicitly selected test emulator, all with `--dependency-verification strict`. BackgroundSyncTest exercises real encrypted endpoints over an isolated synthetic transport, unique scheduling policy, foreground coalescing, logout/reopen, renewal, cooldown, ACK/deduplication, cancellation, budgets and operation with notification publication disabled. These deterministic tests do not establish OEM scheduling latency; see the physical test plan in BACKGROUND_SYNC_DESIGN.md.
 
@@ -107,7 +107,7 @@ Use Android Studio → select the physical device → Run app as usual. In Ghost
 
 Only successfully accepted, decrypted and encrypted-store-committed incoming messages become eligible. One aggregate shows **Ghost Cloak / New message**, never a sender, preview, count or identifier. SECRET lock-screen visibility and disabled channel badges are defaults; Android/OEM/user settings can override presentation. OS history/listeners can observe generic content and timing. There is no external push provider. WorkManager remains best effort (30-minute interval, 15-minute flex), so notifications are not instant.
 
-All foreground screens rely on in-app unread indicators; they suppress system alerts. Dismissal does not mark messages read. A tap opens the ordinary app root/Chats, with no conversation identifier. App lock is not implemented yet. An encrypted ledger survives process death after ACK; an uncertain publication recovers silently to avoid another sound. Notification failures do not change delivery or ACK state. Explicit logout cancels alerts and automatic reconnection eligibility.
+All foreground screens rely on in-app unread indicators; they suppress system alerts. Dismissal does not mark messages read. A tap opens the ordinary app root/Chats, with no conversation identifier. With Phase 1G.1 app lock enabled, the root requires unlock before showing Chats. An encrypted ledger survives process death after ACK; an uncertain publication recovers silently to avoid another sound. Notification failures do not change delivery or ACK state. Explicit logout cancels alerts and automatic reconnection eligibility.
 
 ### Two-phone validation
 
@@ -123,3 +123,27 @@ All foreground screens rely on in-app unread indicators; they suppress system al
 Automated coverage: NotificationLedgerTest checks real decrypt/commit rollback, deduplication and read/block/delete pruning; LocalNotificationTest checks runtime publication, denied permission, crash recovery, dismissal, foreground suppression, immutable root intent and generic platform payload. Existing lifecycle, renewal, cooldown and background delivery suites must also pass. Automated emulator tests do not establish two-phone/OEM timing; run the physical checklist separately.
 
 Phase 1F.2 automated validation (2026-09-12): 81 JVM tests across test-support and debug/release app variants, 10 isolated PostgreSQL tests, and 72 Android emulator tests (62 app, 10 storage) passed. Debug/release assemblies and IDE source/Javadoc/sample resolution passed with strict dependency verification. The dedicated API-37 test emulator was used; the two-phone checklist above still needs physical-device validation.
+
+
+## App lock (Phase 1G.1)
+
+Pull and use Android Studio → select device → Run. Open Settings → Privacy → App lock. The default is Off. Choose PIN (6–64 digits, entered twice), strong Biometric, or Biometric + PIN fallback, and Immediately / 30 seconds / 1 minute / 5 minutes. Biometric modes require a successful system prompt before saving. Only strong enrolled biometrics are accepted; Android device PIN/password is not a fallback. If unavailable, enroll a supported biometric in Android settings or choose the local PIN mode.
+
+Changing/disabling lock requires confirming the currently configured method. A successful configured biometric permits replacement of a forgotten PIN. There is no email/SMS/server recovery. Without a working configured method, remain locked; Android Clear storage/uninstall destroys local data and may lose account/device identity and history. The app never silently resets keys or identity. Logging out retains app-lock configuration and unlocking never reconnects a logged-out account.
+
+This is **UI/app-access lock**, not biometric-bound storage: background WorkManager still decrypts/stores/ACKs using the unchanged encrypted database and Keystore. Notifications remain Ghost Cloak / New message with no sender/body/count. Background scheduling and foreground cadence are unchanged. The private foreground loop is absent while the root is locked; normal foreground synchronization resumes after unlock. Phase 1G.2 Maximum Security Mode is a future storage-gating project.
+
+Global FLAG_SECURE protects Ghost Cloak content even with lock Off; screenshots/recordings and recent-app previews should be blank/protected on supported Android implementations. This changes developer screenshot workflows: use synthetic Compose test rendering, not disabling the production flag. External cameras and compromised/OEM systems remain outside this guarantee.
+
+### Physical validation checklist
+
+- Confirm an existing install stays Off. Enroll each mode on a supported physical phone. Verify biometric success, cancellation, non-match, temporary lockout, hardware unavailability and PIN fallback. No cancellation should unlock or spam errors.
+- Verify wrong PINs are rejected and delays increase after repeated failures. Kill/relaunch during a cooldown; it must remain enforced. Restart/reboot never restores an unlocked grant. Use synthetic test PINs, never put a real PIN or verifier in logs/reports.
+- Test immediate, 30-second, one-minute and five-minute modes on each side of the deadline. Rotate while unlocked and during authentication. Background during PIN verification/system prompt, then return; stale success must not unlock. No private frame should appear before unlock on cold start or resume.
+- With B locked and backgrounded, send from A. Wait for WorkManager. B should receive only the generic notification, and A should eventually show Delivered. Tap B's notification: lock screen first, then Chats after unlock. Verify the message exists; no new identity or login should result from unlocking. Repeat with notification permission denied.
+- Inspect Recents and attempt screenshots/screen recording with lock Off, enabled/unlocked, grace period, locked, and during enrollment. Check OEM behavior and accessibility semantics. No sender, profile, network details or unread count belongs on the lock screen.
+- Log out, then lock/unlock/restart: app access can unlock but network must remain logged out. Verify biometric-authenticated PIN replacement and that no recovery/reset is offered when all methods are unavailable.
+
+Automated tests cover verifier/KDF configuration, rollback-safe persisted throttling, lifecycle deadlines and stale callbacks, encrypted runtime recreation, background acceptance/ACK/notifications while locked, identity/session preservation, absent private composition and MainActivity FLAG_SECURE across recreation. Biometric callbacks are simulated in state-machine tests; real sensor quality, prompt behavior, OEM screenshots/Recents and physical KDF latency still require the checklist above. No biometric-bound SQLCipher key or app-provided destructive reset is implemented.
+
+Phase 1G.1 automated validation (2026-09-12): 99 JVM tests (65 test-support, 17 per debug/release app variant), 10 isolated PostgreSQL tests and 76 API-37 emulator tests (66 app, 10 storage) passed. Strict dependency verification covered assemblies and IDE sources/Javadocs/samples; all 37 added artifacts were compared with fresh publisher downloads. Debug and release builds passed. The existing concurrent session-renewal test now explicitly orders the expired SEND before competing FETCH so its retry-byte assertion is deterministic. Physical biometric sensors, OEM privacy behavior and timing remain manual validation items.

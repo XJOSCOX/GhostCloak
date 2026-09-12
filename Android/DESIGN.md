@@ -25,7 +25,7 @@ Unread counts come from encrypted local state. No presence, calls, attachments o
 - `Shapes.kt` and `Effects.kt`: shared corner shapes and decorative opacity values.
 - `Layout.kt`: common 16 dp page inset, 56 dp minimum header row, 20 dp header icons, 48 dp touch targets with compensated outer insets so visible glyphs align with the 16 dp title/content edges, 4 dp divider spacing and maximum page width.
 - `Dimensions.kt`: reusable dimensions for controls and internal content. Screens/components contain no raw dp, font-size or color literals.
-- `components/PageHeader.kt`: shared title/back/actions/divider and scrollable PageContent used by onboarding, settings, profiles, new chat and security. Chats and conversation use the same header with lazy-list content; system insets remain owned by the root Scaffold.
+- `components/PageHeader.kt`: shared title/back/actions/divider and scrollable PageContent used by onboarding, settings, profiles, new chat and security. Chats and conversation use the same header with lazy-list content; system insets are applied and consumed once at the root Scaffold boundary, so screen-level IME padding excludes navigation-bar space already handled by the root.
 - `AvatarColors.kt`: semantic avatar color selection; `Appearance.kt`: persisted Light/Dark/Automatic preference.
 - Screens and components consume MaterialTheme roles; appearance previews use the same light/dark schemes. Do not add color hex values, font resources or text-style overrides to screens.
 

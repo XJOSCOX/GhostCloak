@@ -40,7 +40,7 @@ import org.ghostcloak.app.ui.components.*
             }
         }
     }) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
+        Box(Modifier.fillMaxSize().scaffoldContentInsets(padding), contentAlignment = Alignment.TopCenter) {
             Box(Modifier.widthIn(max = org.ghostcloak.app.ui.theme.GhostLayout.maxPageWidth).fillMaxSize()) {
                 if (state.identity == null) FirstLaunchScreen(state, model::create)
                 else NavHost(nav, startDestination = "contacts") {

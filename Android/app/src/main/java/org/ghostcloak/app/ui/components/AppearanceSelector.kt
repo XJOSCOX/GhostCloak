@@ -8,7 +8,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import org.ghostcloak.app.ui.theme.*
@@ -26,10 +25,10 @@ import org.ghostcloak.app.ui.theme.*
                     Column(Modifier.padding(10.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
                         Canvas(Modifier.fillMaxWidth().height(58.dp)) {
                             val dark = mode == AppearanceMode.DARK
-                            drawRoundRect(if(dark) Color(0xFF242830) else Color(0xFFF0F2F6),cornerRadius=CornerRadius(8f))
-                            if(mode==AppearanceMode.AUTOMATIC) drawRect(Color(0xFF242830),Offset(size.width/2,0f),Size(size.width/2,size.height))
-                            drawRoundRect(Color(0xFFB8C2D2),Offset(size.width*.12f,size.height*.22f),Size(size.width*.55f,size.height*.17f),CornerRadius(4f))
-                            drawRoundRect(Color(0xFF668BDD),Offset(size.width*.4f,size.height*.56f),Size(size.width*.48f,size.height*.2f),CornerRadius(4f))
+                            drawRoundRect(if(dark) DarkColors.background else LightColors.background,cornerRadius=CornerRadius(8f))
+                            if(mode==AppearanceMode.AUTOMATIC) drawRect(DarkColors.background,Offset(size.width/2,0f),Size(size.width/2,size.height))
+                            drawRoundRect(LightColors.outline,Offset(size.width*.12f,size.height*.22f),Size(size.width*.55f,size.height*.17f),CornerRadius(4f))
+                            drawRoundRect(DarkColors.primary,Offset(size.width*.4f,size.height*.56f),Size(size.width*.48f,size.height*.2f),CornerRadius(4f))
                         }
                         Text(mode.label,style=MaterialTheme.typography.labelMedium)
                     }

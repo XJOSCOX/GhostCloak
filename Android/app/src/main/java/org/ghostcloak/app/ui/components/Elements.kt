@@ -18,7 +18,7 @@ import org.ghostcloak.app.ui.theme.avatarColors
 }
 @Composable fun SectionLabel(text: String) { Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 @Composable fun Avatar(name: String, modifier: Modifier = Modifier) {
-    val (background, foreground) = avatarColors(name)
+    val (background, foreground) = avatarColors()
     Surface(modifier.size(52.dp), shape = CircleShape, color = background) {
         Box(contentAlignment = Alignment.Center) { Text(name.take(1).uppercase(), color = foreground, style = MaterialTheme.typography.titleLarge) }
     }

@@ -7,7 +7,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.text.font.FontFamily
+import org.ghostcloak.app.ui.theme.SafetyNumberStyle
 import androidx.compose.ui.unit.dp
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
@@ -37,7 +37,7 @@ import org.ghostcloak.messaging.ContactStatus
         SectionLabel(if (changed) "NEW SAFETY NUMBER" else "SAFETY NUMBER")
         Surface(shape = MaterialTheme.shapes.large, color=MaterialTheme.colorScheme.primaryContainer) {
             Text(if (state.fingerprint.isEmpty()) "Loading safety number…" else state.fingerprint.split(" ").chunked(3).joinToString("\n") { it.joinToString("  ") },
-                Modifier.fillMaxWidth().padding(24.dp), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.titleMedium, color=MaterialTheme.colorScheme.onPrimaryContainer)
+                Modifier.fillMaxWidth().padding(24.dp), style = SafetyNumberStyle, color=MaterialTheme.colorScheme.onPrimaryContainer)
         }
         Text("Both people should see exactly the same number. Compare every group.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         FullButton(if (changed) "Review new identity" else "Mark verified", !state.loading && state.fingerprint.isNotEmpty()) { confirmation = state.fingerprint }

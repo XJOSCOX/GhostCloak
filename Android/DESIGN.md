@@ -1,6 +1,6 @@
 # Messenger design
 
-The September 2026 redesign uses an off-white canvas, white conversation rows, blue compose/navigation accents, a semibold wordmark and a matching graphite dark appearance. Soft blue, lilac, teal and amber initials give contacts distinct decorative colors; these never indicate online presence or security state. Chat, Contact, Profiles and Settings have separate bottom-navigation destinations. Settings offers persistent Light, Dark and Automatic choices; Automatic is the default and follows Android's system appearance. System-bar icons also follow the selected appearance. The app uses local vector icons and initials; reference photos, artwork and unavailable feature controls are not copied into the product.
+The theme follows the local GoXEV reference: Space Grotesk typography, muted green accents and neutral charcoal surfaces. Dark primary is exactly `#94B86F`, with background `#1A1A1A` and surface `#222222`. Light mode uses a darker green for text/button contrast. Avatars use the semantic brand container, without unrelated color palettes. Chat, Contact, Profiles and Settings have separate bottom-navigation destinations. Settings offers persistent Light, Dark and Automatic choices; Automatic is the default and follows Android's system appearance. System-bar icons also follow the selected appearance. The app uses local vector icons and initials; reference photos, artwork and unavailable feature controls are not copied into the product.
 
 Layout references: [Inbox Chat App](https://dribbble.com/shots/24369393-Inbox-Chat-App) for inbox hierarchy and [Material canonical layouts](https://m3.material.io/foundations/layout/canonical-examples/overview) for list/detail organization.
 
@@ -19,6 +19,18 @@ No unread counters, presence, calls, attachments or typing indicators are invent
 
 ## File boundaries
 
-`ui/theme/Theme.kt` owns light/dark color schemes and shapes; `Color.kt` holds shared dark palette tokens and `Type.kt` typography. `AvatarColors.kt` owns decorative avatar palettes. A faint blue wash behind the inbox header adds depth without extra controls. `Appearance.kt` owns the appearance preference and system-theme selection. Only the nonsensitive mode name is stored in its SharedPreferences file. `ui/components/` contains vector icons, avatars, rows, panels and shared controls, including `AppearanceSelector.kt`. Each screen remains in `ui/screens/`, with app navigation in `ui/navigation/`. Application/network logic remains outside UI files.
+- `ui/theme/Color.kt`: the only raw color palette.
+- `Theme.kt`: semantic light/dark Material color roles and theme composition.
+- `Type.kt`: Space Grotesk for every Material typography role, with variable font weights 300–700. Safety numbers retain a centrally defined monospaced style for comparisons.
+- `Shapes.kt` and `Effects.kt`: shared corner shapes, header tint and decorative opacity values.
+- `AvatarColors.kt`: semantic avatar color selection; `Appearance.kt`: persisted Light/Dark/Automatic preference.
+- Screens and components consume MaterialTheme roles; appearance previews use the same light/dark schemes. Do not add color hex values, font resources or text-style overrides to screens.
+
+The unchanged font asset is copied from the user's GoXEV project (`app/src/main/res/font/space_grotesk.ttf`). Its embedded copyright identifies the Space Grotesk Project Authors. The SIL Open Font License is bundled in `app/src/main/assets/licenses/space_grotesk_OFL.txt`, sourced from [Google Fonts](https://github.com/google/fonts/blob/main/ofl/spacegrotesk/OFL.txt). No runtime font download is needed. GoXEV itself is not modified.
+
+`ui/components/` owns shared controls, `ui/screens/` each screen, and `ui/navigation/` app navigation. Application/network logic remains outside the theme and UI.
 
 `MessengerDesignTest` checks the chat header, request visibility and reply gating and captures light/dark synthetic previews. `AppearanceTest` checks immediate selection, persistence across preference-store recreation and system-theme policy. Existing emulator tests continue exercising actual navigation, message sending and verification confirmation. Developer screenshots contain synthetic content only.
+
+
+`ThemeTest` checks the exact dark primary/background, primary-content contrast, and font coverage across every Material typography role in debug and release.

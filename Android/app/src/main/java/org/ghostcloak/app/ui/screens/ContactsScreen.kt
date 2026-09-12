@@ -13,7 +13,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.text.font.FontWeight
+import org.ghostcloak.app.ui.theme.GhostEffects
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 
@@ -24,13 +24,13 @@ import org.ghostcloak.app.ui.components.*
     val chats = if(directory) matching.sortedBy {it.contact.displayName.lowercase()} else matching.sortedByDescending {state.previews[it.contact.remoteDeviceId]?.timestamp ?: 0}
     val accent = MaterialTheme.colorScheme.primary
     Box(Modifier.fillMaxSize().drawWithCache {
-        val wash = Brush.verticalGradient(listOf(accent.copy(alpha=0.06f), Color.Transparent),endY=220.dp.toPx())
+        val wash = Brush.verticalGradient(listOf(accent.copy(alpha=GhostEffects.HeaderWashAlpha), Color.Transparent),endY=GhostEffects.HeaderWashHeight.toPx())
         onDrawBehind { if(!directory) drawRect(wash) }
     }) {
         Column(Modifier.fillMaxSize().padding(horizontal=if(directory) 16.dp else 12.dp)) {
             Row(Modifier.fillMaxWidth().padding(horizontal=if(directory) 4.dp else 0.dp,vertical=if(directory) 20.dp else 6.dp),verticalAlignment=Alignment.CenterVertically) {
                 Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)) {
-                    Text(if(directory) "Contacts" else "Ghost Cloak",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.SemiBold)
+                    Text(if(directory) "Contacts" else "Ghost Cloak",style=MaterialTheme.typography.headlineMedium)
                     if(directory) Text("People you know",
                         style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.primary)
                 }
@@ -44,7 +44,7 @@ import org.ghostcloak.app.ui.components.*
             }
             if(!directory) {
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Brush.horizontalGradient(
-                    listOf(accent.copy(alpha=0.22f),accent.copy(alpha=0.08f),Color.Transparent))))
+                    listOf(accent.copy(alpha=GhostEffects.DividerStartAlpha),accent.copy(alpha=GhostEffects.DividerEndAlpha),Color.Transparent))))
                 Text("Chats",Modifier.padding(top=10.dp),style=MaterialTheme.typography.labelLarge,color=accent)
             }
             if(directory) OutlinedTextField(query,{if(it.length<=64) query=it},singleLine=true,placeholder={Text(if(directory) "Search contacts" else "Search chats")},

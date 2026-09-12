@@ -1,5 +1,7 @@
 # Android Studio development
 
+For the Phase 1I.1 design-only attachment/voice-note proposal, current limits, implementation gates and future two-phone test matrix, see [ATTACHMENTS_DESIGN.md](ATTACHMENTS_DESIGN.md). Upload, download and recording are not implemented by this documentation phase.
+
 For the proposed background-delivery architecture, platform limitations and future physical-device test matrix, see [BACKGROUND_SYNC_DESIGN.md](BACKGROUND_SYNC_DESIGN.md). Phase 1F.1 implements background FETCH/STORE/ACK; Phase 1F.2 adds optional generic local notifications. Phase 1G.1 adds an optional local UI lock; auth-bound storage remains proposed.
 
 ## Run staging on a phone

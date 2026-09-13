@@ -1,5 +1,97 @@
 # Phone A local-state regression — diagnostics only
 
+## Follow-up: existing-store content inventory (2026-09-12)
+
+### New physical evidence and what is still unknown
+
+Phone A now reports the expected package, debug/staging/default slot, both files present, and `STORE_OPEN_RESULT=existing`. Its existing account diagnostic reports identity, registration, session and device credential all false. Phone B remains working. This rules out a missing selected file **at that observed open**; it does not prove that this database is the same historical logical state or that its identity records are intact.
+
+**Phone A's new per-record/count inventory has not yet been captured.** No contact, message, partial-identity or corruption finding can yet be asserted. In particular, `IDENTITY_PRESENT=false` is a conjunction failing: it does not establish that both constituent records are absent. The earlier source-comparison findings below remain historical context, not a diagnosis of deletion.
+
+### Read-only inventory contract
+
+The debug runtime takes a record-name snapshot immediately after successful store open, before constructing the Signal engine, NetworkController, repository or attachment store and before normal reconciliation. `LocalStateDiagnostics.inventory` only calls `keys`, reads the current namespace's stored auth-alias if present, and checks that exact alias with Android Keystore `containsAlias`. It never invokes engine/service getters, registration, recovery, key generation, signing, record writes/removes or SQL updates. No alternative alias is derived, and no unrelated Keystore entries are enumerated. The temporary alias byte-array copy is cleared; no persisted value is changed.
+
+The output uses `GhostCloakStore` and only the following fixed mappings. No record key, suffix, hostname digest or value is printed. A read transaction keeps the snapshot coherent. Normal runtime behavior remains unchanged after this observation; ordinary expiry/synchronization can still run later. The guarantee is that the **diagnostic itself** leaves all logical records unchanged, not that an otherwise running application or SQLite WAL never writes physical bytes.
+
+| Diagnostic | Exact record or counted prefix |
+| --- | --- |
+| LOCAL_IDENTITY_KEY_PRESENT | `local/key` |
+| LOCAL_DEVICE_PRESENT | `local/device` |
+| LOCAL_USER_PRESENT | `local/user` |
+| LOCAL_USERNAME_PRESENT | `local/username` |
+| LOCAL_SIGNAL_REGISTRATION_PRESENT | `local/registration` |
+| NETWORK_ACCOUNT_PRESENT | current network prefix + `account` |
+| NETWORK_ROUTING_PRESENT | current network prefix + `routing` |
+| NETWORK_REGISTERED_MARKER_PRESENT | current network prefix + `registered` |
+| NETWORK_TOKEN_PRESENT | current network prefix + `token` |
+| NETWORK_AUTH_ALIAS_RECORD_PRESENT | current network prefix + `auth-alias` |
+| NETWORK_AUTH_PUBLIC_RECORD_PRESENT | current network prefix + `auth-public` |
+| NETWORK_LEGACY_AUTH_PRIVATE_PRESENT | current network prefix + `auth-private` |
+| CONTACT_RECORD_COUNT | `app/contact/` |
+| MESSAGE_RECORD_COUNT | `app/message/` |
+| VERIFICATION_RECORD_COUNT | `trust-state/` (all stored trust states, **not** a count of verified contacts) |
+| OUTBOX_RECORD_COUNT | `outbox/` |
+| DISAPPEARING_POLICY_COUNT | `app/disappearing/` |
+| ATTACHMENT_RECORD_COUNT | sum of `app/attachment/`, `attachment/transfer/`, `attachment/delete/` records; not a distinct-media count |
+| APP_LOCK_CONFIG_PRESENT | `app/access-lock` |
+| TOTAL_RECORD_COUNT | all record names, including categories not separately counted |
+| REFERENCED_AUTH_KEYSTORE_ENTRY_PRESENT | presence of the current namespace's stored alias; false if no alias record exists |
+
+Network fields refer to the configured API hostname namespace only. Other namespaces contribute to total records but are not opened, validated or reported individually. Zero contact/history/outbox counts can be legitimate for a healthy new account. The inventory cannot distinguish missing records from invalid values solely by presence. It deliberately does not parse message/identity blobs or call APIs that might write migrations.
+
+If record enumeration, alias decoding or Keystore access throws, the entire inventory block is omitted rather than fabricating false/zero fields. `DATABASE_INTEGRITY=NOT_CHECKED` is still emitted. An incomplete/missing block must not be interpreted as an empty database.
+
+`DATABASE_INTEGRITY=NOT_CHECKED` is intentional: successful SQLCipher open/query is not an authenticated whole-database integrity assessment. The existing `EndpointRecords` read abstraction exposes no SQL integrity operation; this patch does not add raw SQL/PRAGMA access or claim that a particular check is safe and sufficient without validation. No database rows are dumped. Release has a no-op inventory implementation: no record reads, Keystore queries or logs.
+
+### Exact local identity recognition path
+
+There is no `SignalProtocolEngine.open()` method. `ConversationService.open()` calls `LocalRepository.hasIdentity()`, which tests only whether `local/device` has a non-null value. If absent, it returns null and the UI can show first-launch onboarding, even if other records survive.
+
+If `local/device` exists, that method calls `engine.createIdentity("Local")`. Despite its name, the engine's existing-device branch does not generate keys: it reads the identity. Its `identity()` requires `local/user`, `local/username`, `local/device`, and a decodable Signal `IdentityKeyPair` in `local/key`. Missing required records or malformed key material raise a corrupt/storage failure rather than yielding a valid identity. Text retrieval uses UTF-8 decoding, not comprehensive identifier validation. `local/registration` is required and parsed as an integer by `SignalStore.getLocalRegistrationId()` for subsequent protocol operations; the initial identity-return path alone does not read it.
+
+Only the explicit engine creation branch, with absent `local/device` **and an entirely empty record store**, generates a new identity. A nonempty store without a device record raises `CorruptEndpointState` on that branch. This diagnostic never invokes that method or any creation branch.
+
+The older account log tests the presence of **both** `local/device` and `local/key`, without deserializing either. Thus malformed values can still yield true. The new five independent booleans distinguish absent/partial record sets; they cannot establish that present bytes are valid. No synthetic repair or malformed-key reconstruction is attempted.
+
+### Health interpretation once Phone A's block arrives
+
+- `TOTAL_RECORD_COUNT=0`: logically empty at inventory time. Does not explain when or why it became empty.
+- Low total with all five local flags false: no records of the five known identity components; report the actual remaining category counts, not an assumed wipe.
+- Contacts/messages positive with missing local components: evidence that those record categories remain; not proof they deserialize or that original cryptographic operation can resume.
+- Some local flags true, others false: partial local identity. Do not use the presence of history to invent missing private keys or device identifiers.
+- All local flags true with startup failures: invalid/deserialization state remains a candidate requiring separate evidence; these presence-only diagnostics do not establish category D (malformed records).
+- Different historical state (category E) cannot be established with these non-identifying counts alone. No correlating hashes, Phone B database export or cross-phone key copy is proposed.
+
+At present **there is no evidence establishing that Phone A's contact/history state is still recoverable**. Capture the new block after a cold-open using `tag:GhostCloakStore`, alongside `tag:GhostCloakAccount`. Do not select Create identity, recovery, logout or reset for this diagnostic.
+
+### Healthy fixture / Phone B semantics
+
+A registered modern fixture has all five local components; network account/routing/registered/token/auth-alias/auth-public; and the referenced Keystore entry. Legacy auth-private is absent. A logged-out/expired session can legitimately lack a token. Contacts, messages, verification, outbox, policy and attachment counts depend on use; app-lock config depends on setup. No fixed expected total is asserted because Signal prekey/session/replay and application bookkeeping add records. The instrumentation fixture creates test-only state in a random isolated endpoint, closes and reopens it, captures the inventory, and compares every logical record byte before/after. It never opens either physical phone's store or the normal `local` endpoint.
+
+### Deletion/history audit
+
+Current production/debug sources and Git history searches for local/network broad-prefix removal and endpoint table clearing found no path selectively deleting the local identity set. This is a bounded source audit, not forensic proof of what ran on Phone A.
+
+- Logout sets a durable block/logged-out marker and removes the current token; it preserves identity, account/routing and device credentials. Renewal/recovery removes only explicit pending/recovery/logged-out/renewal marker keys after successful operations, not a whole network prefix.
+- Initial onboarding writes identity only via explicit creation. Startup and exception handling do not clear the records table or recreate unreadable state. The DAO's delete statement has an exact `WHERE name = :name`; no destructive Room migration was found.
+- Conversation clear/local delete/expiry operate on `app/message/<conversation>/`, `app/attachment/<conversation>/`, read/unread and notification records. Notification clearing uses its own fixed prefix. The broad empty-prefix reads found are enumeration/creation guards, not deletes.
+- Attachment cleanup targets `attachment/transfer/`, `attachment/delete/` and attachment-owned files. It does not select endpoint database files or local/network records.
+- Signal session reset deletes session records; prekey consumption/retention removes prekey records. Trust replacement removes candidate/previous remote-trust records. The lazy legacy trust/lifecycle migrations can write remote trust/lifecycle records, which is why this inventory never calls those getters. None removes local identity components.
+- Debug simulator creation uses separate fixed endpoints and explicit entry. Test helpers live in test source sets; no production path was found that invokes test cleanup or a full-record reset. History matches include the original exact-key DAO delete, initial network implementation and `7776d2b` recovery marker operations; none supplies evidence of the observed Phone A identity loss.
+
+### Recovery boundary
+
+The V004 Recover account flow restores server account/routing/session bindings after proving possession of the existing registered device authentication key. It requires the original `local/device`, stored auth-alias/auth-public, a matching accessible Keystore key, and a matching server binding; it is not a Signal identity-restoration mechanism. The current composite false flags do not show these prerequisites are available. If the new inventory confirms missing `local/device` or the original auth credential, this flow cannot be used as currently implemented. Even successful binding recovery would not reconstruct a missing Signal private identity key.
+
+Preserved exact original key material might support a separately designed, explicitly authorized restoration investigation. Missing private keys cannot be reconstructed from a username, public key, account row, contact history or Phone B's identity. Generating replacement keys would change identity, not recover it, and must not be attempted here. No recovery or restoration implementation is included.
+
+### Follow-up validation
+
+The existing storage emulator suite also passed: 10 tests, zero failures.
+
+Passed with strict dependency verification: 142 JVM tests (`:test-support:test`, both app unit-test variants), debug and release builds, the new reopened-store inventory emulator test (1), and existing network persistence emulator tests (2). New tests include empty/partial stores, category mappings, current-host isolation, absent/missing/inaccessible referenced keys, byte preservation, release no-read behavior and a reopened encrypted healthy fixture. The first inventory emulator invocation reported zero tests; it was not counted as validation, and the rerun's XML confirms one test executed with zero failures. No live recovery or registration request is sent by the diagnostic.
+
 ## Finding and limits (2026-09-12)
 
 Source comparison: `f08fcf2` -> `7776d2b` (one commit). There is **no change to package, API-origin defaults, endpoint selection, database naming, wrapping-key naming, storage schema, or normal Application construction** in that interval. The earlier report of identity present is not accompanied by a verified APK/build fingerprint, so `f08fcf2` is a comparison baseline, not proof of the exact installed earlier binary. No physical Phone A data or Keystore has been inspected. Phone B being healthy argues for investigating per-install state and build/environment differences; it does not prove Phone A corruption.

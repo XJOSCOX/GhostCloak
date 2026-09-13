@@ -140,6 +140,7 @@ class AppRuntime internal constructor(
                     EncryptedEndpointStore.open(context, endpointName)
                 }
                 try {
+                LocalStateDiagnostics.inventory(records, apiOrigin)
                 val engine=SignalProtocolEngine(records)
                 val cooldown = if (networkConfigured) storedFetchCooldown(records, java.net.URI(apiOrigin).host,
                     android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0))

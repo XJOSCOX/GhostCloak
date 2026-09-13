@@ -33,6 +33,22 @@ internal class SyntheticNetwork : GhostCloakTransport {
         val r = NetworkCodec.decode<ApiRequest>(request.body)
         check(request.endpoint.path == ApiRoutes.path(r))
         val response = when (r) {
+            is ApiRequest.RecoveryIssue -> {
+                DeviceAuth.publicKey(r.authPublicKey)
+                val c=Challenge(RandomIdentifiers.create(),random.generateSeed(32),System.currentTimeMillis()+60000,
+                    "fixture.invalid",RandomIdentifiers.create(),r.deviceId,"recover",DeviceAuth.digest(r.authPublicKey))
+                challenges[c.id]=c;ApiResponse(challenge=c)
+            }
+            is ApiRequest.RecoveryVerify -> {
+                val c=challenges.remove(r.challengeId) ?: throw ApiFailure(401,"recovery_failed")
+                val existing=accounts.values.singleOrNull {it.authPublicKey.contentEquals(r.authPublicKey)}
+                requireApi(existing!=null && existing.deviceId==r.deviceId && c.deviceId==r.deviceId && c.purpose=="recover" &&
+                    c.expiresAt>System.currentTimeMillis() && c.registrationHash.contentEquals(DeviceAuth.digest(r.authPublicKey)) &&
+                    DeviceAuth.verify(existing.authPublicKey,c,r.signature),"recovery_failed",401)
+                val token=java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(random.generateSeed(32))
+                sessions.entries.removeAll {it.value.deviceId==r.deviceId};sessions[token]=existing!!
+                ApiResponse(recovered=RecoveredBinding(existing.accountId,existing.deviceId,existing.routingId,SessionGrant(token,System.currentTimeMillis()+300000)))
+            }
             is ApiRequest.Issue -> {
                 if (r.purpose == "login") requireApi(accounts[r.accountId]?.deviceId == r.deviceId, "unauthorized", 401)
                 val c = Challenge(RandomIdentifiers.create(), random.generateSeed(32), System.currentTimeMillis() + 60000,

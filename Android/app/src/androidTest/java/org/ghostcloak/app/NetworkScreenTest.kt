@@ -20,6 +20,17 @@ import org.junit.Test
 
 class NetworkScreenTest {
     @get:Rule val compose = createComposeRule()
+    @Test fun recoveryRequiresExplicitActionWithoutRenameAdviceOrSyncFallback() {
+        var recovered=0;var synced=0
+        compose.setContent {GhostCloakTheme {
+            NetworkActions(AppState(loading=false,networkConfigured=true,networkStatus=NetworkStatus.RECOVERY_REQUIRED),
+                {recovered++},{synced++})
+        }}
+        compose.onNodeWithText("Recover account").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Sync").assertDoesNotExist()
+        compose.onNodeWithText("choose another username",substring=true).assertDoesNotExist()
+        assertEquals(1,recovered);assertEquals(0,synced)
+    }
     @Test fun networkFirstLaunchModelPreservesIdentityOnFailureAndConnectsOnRetry() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext

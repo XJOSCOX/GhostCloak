@@ -10,6 +10,16 @@ import org.ghostcloak.app.application.NetworkStatus
 
 @Composable fun NetworkActions(state: AppState, connect: () -> Unit, sync: () -> Unit) {
     if (!state.networkConfigured || state.demo) return
+    if (state.networkStatus in setOf(NetworkStatus.RECOVERY_REQUIRED,NetworkStatus.RECOVERING)) {
+        Column(verticalArrangement=Arrangement.spacedBy(GhostDimensions.compact)) {
+            Text("Ghost Cloak found an existing device identity but its account connection needs to be restored.",
+                style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            TextButton(onClick=connect,enabled=!state.loading && state.networkStatus!=NetworkStatus.RECOVERING) {
+                Text(if(state.networkStatus==NetworkStatus.RECOVERING) "Restoring account…" else "Recover account")
+            }
+        }
+        return
+    }
     if (state.networkConnected) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Text("Connected", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,

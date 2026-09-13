@@ -53,6 +53,10 @@ class Challenge(val id: String, val random: ByteArray, val expiresAt: Long, val 
 @Serializable
 class SessionGrant(val token: String, val expiresAt: Long) { override fun toString() = "SessionGrant(<redacted>)" }
 @Serializable
+class RecoveredBinding(val accountId:String, val deviceId:String, val routingId:String, val session:SessionGrant) {
+    override fun toString()="RecoveredBinding(<redacted>)"
+}
+@Serializable
 class DirectoryEntry(val accountId: String, val deviceId: String, val routingId: String, val username: String, val bundle: PublicBundle)
 @Serializable
 class SenderProfile(val accountId: String, val deviceId: String, val routingId: String, val username: String)
@@ -66,6 +70,8 @@ class Delivery(val serverMessageId: String, val encryptedEnvelope: ByteArray, va
 sealed class ApiRequest {
     abstract val version: Int
     final override fun toString() = "ApiRequest(<redacted>)"
+    @Serializable @SerialName("recovery_challenge") class RecoveryIssue(val authPublicKey:ByteArray, val deviceId:String, override val version:Int=1):ApiRequest()
+    @Serializable @SerialName("recovery_verify") class RecoveryVerify(val authPublicKey:ByteArray, val deviceId:String, val challengeId:String, val signature:ByteArray, override val version:Int=1):ApiRequest()
     @Serializable @SerialName("challenge") class Issue(val accountId: String, val deviceId: String, val purpose: String, val registrationHash: ByteArray = byteArrayOf(), override val version: Int = 1) : ApiRequest()
     @Serializable @SerialName("register") class Register(val registration: Registration, val challengeId: String, val signature: ByteArray, override val version: Int = 1) : ApiRequest()
     @Serializable @SerialName("verify") class Verify(val accountId: String, val deviceId: String, val challengeId: String, val signature: ByteArray, override val version: Int = 1) : ApiRequest()
@@ -82,7 +88,8 @@ sealed class ApiRequest {
 @Serializable
 class ApiResponse(val version: Int = 1, val challenge: Challenge? = null, val session: SessionGrant? = null,
     val directory: DirectoryEntry? = null, val deliveries: List<Delivery> = emptyList(), val serverMessageId: String? = null,
-    val error: String? = null, @EncodeDefault(EncodeDefault.Mode.NEVER) val statuses: List<DeliveryStatus> = emptyList()) { override fun toString() = "ApiResponse(<redacted>)" }
+    val error: String? = null, @EncodeDefault(EncodeDefault.Mode.NEVER) val statuses: List<DeliveryStatus> = emptyList(),
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val recovered:RecoveredBinding?=null) { override fun toString() = "ApiResponse(<redacted>)" }
 
 object NetworkCodec {
     @PublishedApi internal val format = Cbor {
@@ -127,6 +134,8 @@ object DeviceAuth {
 
 object ApiRoutes {
     fun path(r: ApiRequest): String = when(r) {
+        is ApiRequest.RecoveryIssue -> "/v1/auth/recovery/challenge"
+        is ApiRequest.RecoveryVerify -> "/v1/auth/recovery/verify"
         is ApiRequest.Issue -> "/v1/auth/challenge"; is ApiRequest.Register -> "/v1/accounts"
         is ApiRequest.Verify -> "/v1/auth/verify"; is ApiRequest.Revoke -> "/v1/auth/revoke"
         is ApiRequest.Rename -> "/v1/accounts/username"; is ApiRequest.Lookup -> "/v1/directory/lookup"

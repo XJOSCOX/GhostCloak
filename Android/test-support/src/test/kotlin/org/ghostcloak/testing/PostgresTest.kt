@@ -16,6 +16,21 @@ import java.util.concurrent.Executors
 import java.time.*
 
 class PostgresTest {
+    @Test fun recoveryMigrationAndOriginalBindingProofAreDurable()=runBlocking {
+        Fixture().use { f ->
+            f.source.connection.use {c->c.createStatement().use {
+                it.execute("ALTER TABLE auth_challenges DROP CONSTRAINT auth_challenges_purpose_check")
+                it.execute("ALTER TABLE auth_challenges ADD CONSTRAINT auth_challenges_purpose_check CHECK(purpose IN ('register','login'))")
+                it.execute("DELETE FROM schema_history WHERE version=4")
+            }}
+            try {PostgresDatabase(f.source);fail()}catch(_:IllegalStateException){}
+            val upgraded=PostgresDatabase(f.source,true);PostgresDatabase(f.source,true)
+            RecoveryProbe.exercise(upgraded)
+            val now=System.currentTimeMillis()
+            repeat(10) {assertTrue(PostgresRateLimiter(upgraded).allow(ServerOperation.RECOVER_VERIFY,"anonymous",now))}
+            assertFalse(PostgresRateLimiter(PostgresDatabase(f.source)).allow(ServerOperation.RECOVER_VERIFY,"anonymous",now))
+        }
+    }
     @Test fun blobMigrationOwnershipCapabilityQuotaAndRetention()=runBlocking {
         Fixture().use { f ->
             val service=f.service(); val a=register(service,"alice"); val b=register(service,"bob")

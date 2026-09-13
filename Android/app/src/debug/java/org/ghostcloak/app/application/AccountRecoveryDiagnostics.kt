@@ -10,9 +10,12 @@ import java.security.KeyStore
 internal object AccountRecoveryDiagnostics {
     internal var sink: (String) -> Unit = { Log.d("GhostCloakAccount", it); Unit }
     private fun write(line: String) { try { sink(line) } catch (_: Exception) { } }
+    fun recovery(event:String) {
+        if(event in setOf("RECOVERY_START","RECOVERY_CHALLENGE_OK","RECOVERY_PROOF_OK","RECOVERY_COMMIT_OK","RECOVERY_FAILED=UNVERIFIED")) write(event)
+    }
     fun path(category: String) {
         if (category in setOf("OPEN", "CONNECT_REGISTERED_LOGIN", "CONNECT_UNMARKED_LOGIN_FIRST",
-                "CONNECT_REGISTER_AFTER_401", "SILENT_RENEWAL", "LOGOUT", "STATE_UNAVAILABLE",
+                "SILENT_RENEWAL", "LOGOUT", "STATE_UNAVAILABLE",
                 "CURRENT_NAMESPACE_ABSENT_OTHER_PRESENT", "OTHER_NAMESPACE_PRESENT", "REGISTRATION_METADATA_INCOMPLETE",
                 "RENEWAL_BLOCKED", "LEGACY_CREDENTIAL_PRESENT"))
             write("STARTUP_PATH=$category")
@@ -42,6 +45,8 @@ internal object AccountRecoveryDiagnostics {
     }
     fun wrap(delegate: GhostCloakTransport): GhostCloakTransport = GhostCloakTransport { request ->
         val category=when(request.endpoint.path) {
+            "/v1/auth/recovery/challenge" -> "RECOVERY_CHALLENGE"
+            "/v1/auth/recovery/verify" -> "RECOVERY_VERIFY"
             "/v1/auth/challenge" -> "AUTH_CHALLENGE"
             "/v1/auth/verify" -> "AUTH_VERIFY"
             "/v1/accounts" -> "ACCOUNT_REGISTER"

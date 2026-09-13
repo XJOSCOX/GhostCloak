@@ -116,7 +116,13 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun acceptRequest(id: String) = run { it.acceptRequest(id); null }
     fun deleteRequest(id: String) = run { it.deleteRequest(id); null }
     fun refresh() = run()
-    fun connectNetwork() = run(activity = NetworkStatus.CONNECTING) { runtime.connectNetwork(it); null }
+    fun connectNetwork(): kotlinx.coroutines.Job {
+        val recovery=state.value.networkStatus==NetworkStatus.RECOVERY_REQUIRED
+        return run(activity=if(recovery) NetworkStatus.RECOVERING else NetworkStatus.CONNECTING) {
+            if(recovery) runtime.recoverNetwork() else runtime.connectNetwork(it)
+            null
+        }
+    }
     fun syncNetwork(): kotlinx.coroutines.Job {
         val requested = runtime.syncGeneration
         return run(activity = NetworkStatus.SYNCING) { runtime.syncNetwork(it, requested); null }
@@ -160,10 +166,12 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun startDemo() = run { runtime.startDemo(); selected = null; mutable.value = mutable.value.copy(card = "", fingerprint = ""); null }
     fun leaveDemo() = run { runtime.leaveDemo(); selected = null; mutable.value = mutable.value.copy(card = "", fingerprint = ""); null }
     private fun networkError(error: org.ghostcloak.protocol.ApiFailure) = when {
+        error.code == "recovery_required" -> "Ghost Cloak found an existing device identity but its account connection needs to be restored."
+        error.code == "recovery_failed" -> "Account recovery could not be verified."
         error.code == "legacy_auth_requires_reset" -> "This identity uses an older account credential. Your keys were preserved; follow the documented development migration."
         error.code == "invalid_network_username" -> "Choose a valid network username in Settings, then connect again. Your identity was preserved."
         error.status == 401 -> "Connect again to renew your session. Your identity is preserved."
-        error.status == 409 -> "The request conflicted with existing account information. If creating an account, choose another username in Settings and reconnect. Your identity was preserved."
+        error.status == 409 -> "The request conflicted with existing information. Your account and history were preserved."
         error.status == 404 -> "That username could not be found. Check the spelling and try again."
         error.status == 429 -> "Please wait before trying again. Pending messages remain on this device."
         error.status == 503 -> "Could not reach Ghost Cloak. Check your connection and try Sync. Your identity and pending messages are preserved."

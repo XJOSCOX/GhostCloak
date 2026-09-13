@@ -8,6 +8,7 @@ import java.security.*
 import java.security.spec.*
 
 /** EndpointRecords implementations must encrypt at rest (SQLCipher/Keystore on Android). */
+enum class AccountConnectionState { NEW_ACCOUNT, REGISTERED, RECOVERY_REQUIRED, RECOVERING, RECOVERED, LOGGED_OUT }
 class EndpointNetworkState(private val records: EndpointRecords, private val audience: String,
     private val credential: DeviceAuthCredential? = null) : AccessTokenStore, RoutingDirectory {
     private val prefix = "network/${DeviceAuth.digest(audience.toByteArray()).joinToString("") { "%02x".format(it) }}/"
@@ -76,8 +77,55 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
         } finally { secret.fill(0) }
     }
     fun registered():Boolean=records.transaction {records.read(prefix+"registered")!=null}
-    fun markRegistered()=records.transaction {records.write(prefix+"registered",byteArrayOf(1))}
+    fun markRegistered()=records.transaction {
+        records.write(prefix+"registered",byteArrayOf(1))
+        records.remove("app/new-network-account"); records.remove(prefix+"pending-registration")
+        records.remove(prefix+"recovery-required"); records.remove(prefix+"logged-out")
+    }
     fun accountId():String=records.transaction {records.read(prefix+"account")?.decodeToString() ?: throw ApiFailure(401,"credential_missing")}
+    fun connectionState():AccountConnectionState=records.transaction {
+        when {
+            records.read(prefix+"logged-out")!=null -> AccountConnectionState.LOGGED_OUT
+            records.read(prefix+"recovery-required")!=null -> AccountConnectionState.RECOVERY_REQUIRED
+            registered() -> AccountConnectionState.REGISTERED
+            records.read("app/new-network-account")!=null && records.keys("network/").all {it.startsWith(prefix)} -> AccountConnectionState.NEW_ACCOUNT
+            else -> AccountConnectionState.RECOVERY_REQUIRED
+        }
+    }
+    fun requireRecovery()=records.transaction {records.write(prefix+"recovery-required",byteArrayOf(1))}
+    fun markLoggedOut()=records.transaction {records.write(prefix+"logged-out",byteArrayOf(1))}
+    fun pendingRegistration():Registration?=records.transaction {records.read(prefix+"pending-registration")?.let {NetworkCodec.decode<Registration>(it)}}
+    fun prepareNew(username:String,bundles:List<PublicBundle>):Registration=records.transaction {
+        requireApi(connectionState()==AccountConnectionState.NEW_ACCOUNT,"recovery_required",401)
+        pendingRegistration() ?: registration(username,bundles).also {records.write(prefix+"pending-registration",NetworkCodec.encode(it))}
+    }
+    /** Never creates or replaces a key, even with missing candidate account/routing records. */
+    fun recoveryPublicKey():ByteArray=records.transaction {
+        requireApi(records.read(prefix+"auth-private")==null && credential!=null,"recovery_failed",401)
+        val alias=records.read(prefix+"auth-alias")?.decodeToString() ?: throw ApiFailure(401,"recovery_failed")
+        val public=records.read(prefix+"auth-public") ?: throw ApiFailure(401,"recovery_failed")
+        requireApi(MessageDigest.isEqual(public,credential!!.publicKey(alias,false)),"recovery_failed",401)
+        DeviceAuth.publicKey(public); public
+    }
+    fun signRecovery(c:Challenge,public:ByteArray):ByteArray=records.transaction {
+        requireApi(c.purpose=="recover" && c.audience==audience && c.deviceId==records.read("local/device")?.decodeToString() &&
+            c.random.size==32 && c.expiresAt>System.currentTimeMillis() && c.expiresAt<=System.currentTimeMillis()+120000 &&
+            RandomIdentifiers.valid(c.id) && RandomIdentifiers.valid(c.accountId) &&
+            MessageDigest.isEqual(c.registrationHash,DeviceAuth.digest(public)) &&
+            MessageDigest.isEqual(public,recoveryPublicKey()),"recovery_failed",401)
+        credential!!.sign(records.read(prefix+"auth-alias")!!.decodeToString(),DeviceAuth.statement(c))
+    }
+    fun commitRecovery(binding:RecoveredBinding,public:ByteArray)=records.transaction {
+        requireApi(binding.deviceId==records.read("local/device")?.decodeToString() &&
+            listOf(binding.accountId,binding.deviceId,binding.routingId).all(RandomIdentifiers::valid) &&
+            setOf(binding.accountId,binding.deviceId,binding.routingId).size==3 &&
+            binding.session.token.matches(Regex("[A-Za-z0-9_-]{43}")) && binding.session.expiresAt>System.currentTimeMillis() &&
+            MessageDigest.isEqual(public,recoveryPublicKey()),"recovery_failed",401)
+        records.write(prefix+"account",binding.accountId.toByteArray())
+        records.write(prefix+"routing",binding.routingId.toByteArray())
+        save(binding.session.token);markRegistered()
+        records.remove("app/renewal-blocked/$audience")
+    }
 }
 class NetworkAccount(private val client: HttpGhostClient, private val state: EndpointNetworkState) {
     suspend fun register(registration: Registration) {

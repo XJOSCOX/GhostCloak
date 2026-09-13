@@ -7,7 +7,7 @@ import java.security.MessageDigest
 import java.time.Clock
 import java.util.Base64
 
-enum class ServerOperation { REGISTER, CHALLENGE, VERIFY, REVOKE, RENAME, LOOKUP, PREKEYS, SEND, FETCH, ACK }
+enum class ServerOperation { REGISTER, CHALLENGE, VERIFY, REVOKE, RENAME, LOOKUP, PREKEYS, SEND, FETCH, ACK, RECOVER_ISSUE, RECOVER_VERIFY }
 fun interface RateLimiter { fun allow(operation: ServerOperation, principal: String, now: Long): Boolean }
 /** Fixed-window prototype control. No IP or device fingerprint collection. */
 class DevelopmentRateLimiter(private val limit: Int = 60) : RateLimiter {
@@ -17,7 +17,8 @@ class DevelopmentRateLimiter(private val limit: Int = 60) : RateLimiter {
         counters.entries.removeIf { it.value.first != window }
         val key = operation to principal
         val count = counters[key]?.second ?: 0
-        if (count >= limit || (key !in counters && counters.size >= 2048)) return false
+        val maximum=if(operation in setOf(ServerOperation.RECOVER_ISSUE,ServerOperation.RECOVER_VERIFY)) minOf(limit,10) else limit
+        if (count >= maximum || (key !in counters && counters.size >= 2048)) return false
         counters[key] = window to count + 1
         return true
     }
@@ -37,6 +38,8 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
     private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
     private fun tokenHash(token: String): String { requireApi(token.matches(Regex("[A-Za-z0-9_-]{43}")), "unauthorized", 401); return hex(DeviceAuth.digest(token.toByteArray())) }
     fun operation(r: ApiRequest): ServerOperation = when(r) {
+        is ApiRequest.RecoveryIssue -> ServerOperation.RECOVER_ISSUE
+        is ApiRequest.RecoveryVerify -> ServerOperation.RECOVER_VERIFY
         is ApiRequest.Issue -> ServerOperation.CHALLENGE; is ApiRequest.Register -> ServerOperation.REGISTER
         is ApiRequest.Verify -> ServerOperation.VERIFY; is ApiRequest.Revoke -> ServerOperation.REVOKE
         is ApiRequest.Rename -> ServerOperation.RENAME; is ApiRequest.Lookup -> ServerOperation.LOOKUP
@@ -49,18 +52,21 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         val op = operation(r)
         try {
             requireApi(r.version == 1, "unsupported_version")
-            val principal = if (token == null) "anonymous" else db.transaction { db.sessions.get(tokenHash(token))?.deviceId ?: "anonymous" }
+            val principal = if (token == null || r is ApiRequest.RecoveryIssue || r is ApiRequest.RecoveryVerify) "anonymous" else db.transaction { db.sessions.get(tokenHash(token))?.deviceId ?: "anonymous" }
             requireApi(rate.allow(op, principal, now()), "rate_limited", 429)
             cleanup()
             // Claim a challenge in its own committed transaction. Every verification attempt burns it,
             // including failed registration or a bad signature. No error can restore it.
             val claimed = when(r) {
+                is ApiRequest.RecoveryVerify -> try { consume(r.challengeId) } catch (_:ApiFailure) { throw ApiFailure(401,"recovery_failed") }
                 is ApiRequest.Register -> consume(r.challengeId)
                 is ApiRequest.Verify -> consume(r.challengeId)
                 else -> null
             }
             val result = db.transaction {
                 when(r) {
+                    is ApiRequest.RecoveryIssue -> recoveryIssue(r)
+                    is ApiRequest.RecoveryVerify -> recover(r,claimed!!)
                     is ApiRequest.Issue -> issue(r)
                     is ApiRequest.Register -> register(r, claimed!!)
                     is ApiRequest.Verify -> login(r, claimed!!)
@@ -145,6 +151,35 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         val session = db.sessions.get(tokenHash(token)) ?: throw ApiFailure(401, "unauthorized")
         requireApi(session.expiresAt > now(), "unauthorized", 401)
         db.devices.get(session.deviceId) ?: throw ApiFailure(401, "unauthorized")
+    }
+    private fun recoveryIssue(r:ApiRequest.RecoveryIssue):ApiResponse {
+        DeviceAuth.publicKey(r.authPublicKey)
+        requireApi(RandomIdentifiers.valid(r.deviceId))
+        requireApi(db.challenges.size()<1000,"capacity",429)
+        // No device lookup: identical issuance for known and unknown credentials.
+        // accountId is an unrelated random transcript field, never the account binding.
+        val c=Challenge(RandomIdentifiers.create(),freshBytes(),now()+minOf(policy.challengeTtl,60000),
+            policy.audience,RandomIdentifiers.create(),r.deviceId,"recover",DeviceAuth.digest(r.authPublicKey))
+        db.challenges.put(c.id,ChallengeRow(c))
+        return ApiResponse(challenge=c)
+    }
+    private fun recover(r:ApiRequest.RecoveryVerify,c:Challenge):ApiResponse {
+        try { DeviceAuth.publicKey(r.authPublicKey) } catch (_:Exception) { throw ApiFailure(401,"recovery_failed") }
+        // Scan the bounded device set without an existence-dependent early return.
+        val matches=db.devices.all().filter { MessageDigest.isEqual(it.authPublicKey,r.authPublicKey) }
+        val device=matches.singleOrNull()
+        val validSignature=DeviceAuth.verify(device?.authPublicKey ?: r.authPublicKey,c,r.signature)
+        requireApi(validSignature && device!=null && device.id==r.deviceId && c.deviceId==r.deviceId &&
+            c.purpose=="recover" && c.audience==policy.audience && c.expiresAt>now() &&
+            MessageDigest.isEqual(c.registrationHash,DeviceAuth.digest(r.authPublicKey)),"recovery_failed",401)
+        val existing=device!!
+        requireApi(db.accounts.get(existing.accountId)?.deviceId==existing.id,"recovery_failed",401)
+        // Same single-session semantics as login; no account/device/key mutation.
+        db.sessions.all().filter { it.deviceId==existing.id }.forEach { db.sessions.remove(it.hash) }
+        val token=Base64.getUrlEncoder().withoutPadding().encodeToString(freshBytes())
+        val expiry=now()+policy.sessionTtl
+        db.sessions.put(tokenHash(token),SessionRow(tokenHash(token),existing.id,expiry))
+        return ApiResponse(recovered=RecoveredBinding(existing.accountId,existing.id,existing.routingId,SessionGrant(token,expiry)))
     }
     private fun authenticated(r: ApiRequest, token: String): ApiResponse {
         val hash = tokenHash(token)

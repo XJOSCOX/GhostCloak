@@ -39,7 +39,14 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
                 execute("INSERT INTO schema_history VALUES (3,?)", blobChecksum)
             }
             check(query("SELECT checksum FROM schema_history WHERE version=3") { it.getString(1) }.singleOrNull() == blobChecksum) { "Migration validation failed" }
-            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 3) { "Unknown schema version" }
+            val recoveryMigration=javaClass.getResourceAsStream("/db/V004__device_binding_recovery.sql")!!.use {it.readBytes()}
+            val recoveryChecksum=DeviceAuth.digest(recoveryMigration).joinToString("") {"%02x".format(it)}
+            if(migrate && query("SELECT version FROM schema_history WHERE version=4") {it.getInt(1)}.isEmpty()) {
+                recoveryMigration.toString(Charsets.UTF_8).split(';').filter {it.isNotBlank()}.forEach {execute(it)}
+                execute("INSERT INTO schema_history VALUES (4,?)",recoveryChecksum)
+            }
+            check(query("SELECT checksum FROM schema_history WHERE version=4") {it.getString(1)}.singleOrNull()==recoveryChecksum) {"Migration validation failed"}
+            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 4) { "Unknown schema version" }
         }
     }
     override fun <T> transaction(block: () -> T): T {
@@ -137,7 +144,8 @@ class PostgresRateLimiter(private val db:PostgresDatabase, private val limit:Int
         db.execute("DELETE FROM rate_limits WHERE window_start < ?",now/60000)
         val row=db.query("SELECT count FROM rate_limits WHERE operation=? AND principal=?",operation.name,bucket) {it.getInt(1)}.singleOrNull() ?: 0
         if(row==0 && db.query("SELECT count(*) FROM rate_limits") {it.getInt(1)}.single()>=2048) return@transaction false
-        if(row>=limit) false else {
+        val maximum=if(operation in setOf(ServerOperation.RECOVER_ISSUE,ServerOperation.RECOVER_VERIFY)) minOf(limit,10) else limit
+        if(row>=maximum) false else {
             db.execute("INSERT INTO rate_limits VALUES (?,?,?,1) ON CONFLICT(operation,principal) DO UPDATE SET count=rate_limits.count+1",operation.name,bucket,now/60000); true
         }
     }

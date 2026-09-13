@@ -1,5 +1,21 @@
 # Android Studio development
 
+## Existing-device account recovery
+
+Deploy the reviewed backend and V004 first using [ACCOUNT_RECOVERY_DEPLOYMENT.md](../infrastructure/ACCOUNT_RECOVERY_DEPLOYMENT.md). The live attachment/V003 configuration must remain intact. No deployment was performed by this change.
+
+1. Update Phone A in place with the same application ID, signing identity and API host. For staging, use Android Studio debug Run with the existing signing setup. Never uninstall or clear data to work around an update error. A release update must use its existing valid signing/origin configuration; the default release has no origin and must not inherit staging.
+2. Do not change the username or reset identity/keys. Unlock the app normally. The affected unmarked state shows an account-connection restoration explanation and **Recover account**.
+3. Tap Recover account. Keep the app visible and unlocked until completion. Its existing Keystore credential signs a challenge; no credential is created or replaced. Background work cannot initiate recovery.
+4. On success, confirm the original contacts, conversation history and previously verified identity remain. Send and receive with healthy Phone B, then restart Phone A and repeat normal sync. Recovery does not change Phone B's account/session.
+5. If recovery cannot be verified, stop and retain data. Check backend rollout, matching original auth key and local device binding. Never choose another username, replace a server key or recreate the account as a workaround. Key-entry presence alone is not proof of recoverability.
+
+DEBUG Logcat filter: `tag:GhostCloakAccount`. Recovery emits only `RECOVERY_START`, `RECOVERY_CHALLENGE_OK`, `RECOVERY_PROOF_OK`, `RECOVERY_COMMIT_OK`, or `RECOVERY_FAILED=UNVERIFIED`, alongside the existing sanitized endpoint/state categories. No identifiers, public/private keys, signatures, challenges, tokens or message data. Release diagnostics remain off.
+
+Missing token only uses ordinary explicit login. An unmarked existing account whose original tuple still logs in can self-heal through the login path; contaminated candidates require proof-based recovery. Explicit logout persists independently and never starts automatic recovery. A cancelled/locked/backgrounded or crashed attempt before local commit can be retried explicitly with a fresh challenge; failed proof never overwrites local binding metadata.
+
+Recovery validation (2026-09-12): 135 JVM tests (4 attachment, 87 test-support, 22 per app variant), 12 isolated PostgreSQL tests, the full app/storage emulator regression suites, and the final three focused recovery emulator tests passed. Debug/release builds and backend distribution passed with strict dependency verification. Tests include real HTTP recovery endpoints, wrong/unknown/copied-key proof rejection, transcript bindings, replay/expiry, uniform failure shape, rate limits, V004 migration/checksums, transaction rollback, contaminated SQLCipher metadata, preserved real conversation history and continued messaging with a healthy second client. Physical Phone A recovery and live ingress deployment have not been performed.
+
 For the attachment/voice-note architecture, implemented Phase 1I.2 foundation, future view-once compatibility and later two-phone matrix, see [ATTACHMENTS_DESIGN.md](ATTACHMENTS_DESIGN.md). Internal synthetic upload/download APIs exist; media picking, recording, rendering and user controls do not.
 
 ## Phase 1I.2 foundation validation

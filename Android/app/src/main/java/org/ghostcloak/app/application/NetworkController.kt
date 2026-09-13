@@ -33,29 +33,40 @@ class NetworkController(
     private val outbox by lazy { DurableOutbox(records, engine, transport) }
     private val renewalMutex = Mutex()
     private val renewalBlockKey = "app/renewal-blocked/${URI(origin).host}"
-    @Volatile private var renewalBlocked = records.transaction { records.read(renewalBlockKey) != null }
+    @Volatile private var renewalBlockCache = records.transaction { records.read(renewalBlockKey) != null }
+    private var renewalBlocked:Boolean
+        get()=renewalBlockCache
         set(value) {
             records.transaction {
                 if (value) records.write(renewalBlockKey, byteArrayOf(1)) else records.remove(renewalBlockKey)
             }
-            field = value
+            renewalBlockCache = value
         }
     @Volatile private var loggingOut = false
+    private var authGeneration = 0L
+    var accountConnectionState:AccountConnectionState = AccountConnectionState.RECOVERY_REQUIRED
+        private set
     private var receiptOffset = 0
     var syncActive = false
         private set
     val fetchRetryDelayMillis get() = if (configured) client.fetchRetryDelayMillis else 0L
-    val canAutoSync get() = configured && !renewalBlocked && !loggingOut && state.registered() && state.read() != null
+    val canAutoSync get() = configured && !renewalBlocked && !loggingOut && state.connectionState()==AccountConnectionState.REGISTERED && state.read() != null
     var status = if (configured) NetworkStatus.NEEDS_CONNECT else NetworkStatus.DISABLED
         private set(value) { NetworkDiagnostics.status(field, value); field = value }
     private fun device() = records.transaction { records.read("local/device")?.decodeToString() ?: throw ApiFailure(401, "credential_missing") }
     init {
         AccountRecoveryDiagnostics.path("OPEN")
         AccountRecoveryDiagnostics.snapshot(records, URI(origin).host)
+        if(configured) {
+            accountConnectionState=state.connectionState()
+            if(accountConnectionState==AccountConnectionState.RECOVERY_REQUIRED && records.transaction {records.read("local/device")!=null})
+                status=NetworkStatus.RECOVERY_REQUIRED
+        }
     }
     private fun networkFailure(e: ApiFailure) {
         if (e.status == 401) renewalBlocked = true
-        status = when (e.status) { 401 -> NetworkStatus.NEEDS_CONNECT; 429 -> NetworkStatus.RATE_LIMITED; 503 -> NetworkStatus.OFFLINE; else -> NetworkStatus.ERROR }
+        status = if(e.code in setOf("recovery_required","recovery_failed") || (configured && state.connectionState()==AccountConnectionState.RECOVERY_REQUIRED))
+            NetworkStatus.RECOVERY_REQUIRED else when (e.status) { 401 -> NetworkStatus.NEEDS_CONNECT; 429 -> NetworkStatus.RATE_LIMITED; 503 -> NetworkStatus.OFFLINE; else -> NetworkStatus.ERROR }
     }
     private suspend fun renewSession(rejectedToken: String) = renewalMutex.withLock {
         AccountRecoveryDiagnostics.path("SILENT_RENEWAL")
@@ -86,22 +97,62 @@ class NetworkController(
         requireApi(configured, "server_not_configured")
         status = NetworkStatus.CONNECTING
         AccountRecoveryDiagnostics.snapshot(records, URI(origin).host)
-        if (!state.registered()) {
-            AccountRecoveryDiagnostics.path("CONNECT_UNMARKED_LOGIN_FIRST")
-            // Retry login first: registration may have committed before its response was lost.
-            val name = try { Usernames.normalize(username) } catch (_: ApiFailure) { throw ApiFailure(400, "invalid_network_username") }
-            val registration = state.registration(name, listOf(engine.publicBundle().publicData()))
-            try { account.login(registration.accountId, registration.deviceId); state.markRegistered() }
-            catch (e: ApiFailure) {
-                if (e.status != 401) throw e
-                AccountRecoveryDiagnostics.path("CONNECT_REGISTER_AFTER_401")
-                account.register(registration); account.login(registration.accountId, registration.deviceId)
+        try {
+            if(state.connectionState()==AccountConnectionState.NEW_ACCOUNT) {
+                val pending=state.pendingRegistration()
+                val registration=pending ?: state.prepareNew(username,listOf(engine.publicBundle().publicData()))
+                // Only a durable intent made at actual local identity creation allows registration.
+                // A retry of that intent first handles a previously lost Register response.
+                var loggedIn=false
+                if(pending!=null) try {account.login(registration.accountId,registration.deviceId); loggedIn=true}
+                    catch(e:ApiFailure) {if(e.status!=401) throw e}
+                if(!loggedIn) {account.register(registration);account.login(registration.accountId,registration.deviceId)}
+                state.markRegistered()
+            } else {
+                AccountRecoveryDiagnostics.path(if(state.registered()) "CONNECT_REGISTERED_LOGIN" else "CONNECT_UNMARKED_LOGIN_FIRST")
+                // Existing or ambiguous state: no credential preparation and no registration fallback.
+                account.login(state.accountId(),device());state.markRegistered()
             }
-        } else {
-            AccountRecoveryDiagnostics.path("CONNECT_REGISTERED_LOGIN")
-            account.login(state.accountId(), device())
+        } catch(e:ApiFailure) {
+            if(e.status in setOf(401,409)) {
+                state.requireRecovery();accountConnectionState=AccountConnectionState.RECOVERY_REQUIRED
+                throw ApiFailure(401,"recovery_required")
+            }
+            throw e
         }
+        accountConnectionState=AccountConnectionState.REGISTERED
         renewalBlocked = false; status = NetworkStatus.CONNECTED
+    }
+    suspend fun recover(allowed:()->Boolean)=renewalMutex.withLock {
+        requireApi(configured && allowed() && !loggingOut,"recovery_failed",401)
+        val generation=authGeneration
+        accountConnectionState=AccountConnectionState.RECOVERING;status=NetworkStatus.RECOVERING
+        AccountRecoveryDiagnostics.recovery("RECOVERY_START")
+        try {
+            val public=state.recoveryPublicKey()
+            val localDevice=device()
+            val challenge=client.unauthenticated(ApiRequest.RecoveryIssue(public,localDevice)).challenge ?: throw ApiFailure(401,"recovery_failed")
+            AccountRecoveryDiagnostics.recovery("RECOVERY_CHALLENGE_OK")
+            requireApi(allowed() && !loggingOut && generation==authGeneration,"recovery_failed",401)
+            val signature=state.signRecovery(challenge,public)
+            val binding=try {client.unauthenticated(ApiRequest.RecoveryVerify(public,localDevice,challenge.id,signature)).recovered}
+                finally {signature.fill(0)}
+            requireApi(binding!=null && allowed() && !loggingOut && generation==authGeneration,"recovery_failed",401)
+            AccountRecoveryDiagnostics.recovery("RECOVERY_PROOF_OK")
+            records.transaction {
+                requireApi(allowed() && !loggingOut && generation==authGeneration,"recovery_failed",401)
+                state.commitRecovery(binding!!,public)
+            }
+            renewalBlockCache=false // Only after the SQLCipher transaction actually committed.
+            accountConnectionState=AccountConnectionState.RECOVERED;status=NetworkStatus.CONNECTED
+            AccountRecoveryDiagnostics.recovery("RECOVERY_COMMIT_OK")
+        } catch(e:Exception) {
+            accountConnectionState=state.connectionState()
+            status=if(accountConnectionState==AccountConnectionState.LOGGED_OUT) NetworkStatus.NEEDS_CONNECT else NetworkStatus.RECOVERY_REQUIRED
+            AccountRecoveryDiagnostics.recovery("RECOVERY_FAILED=UNVERIFIED")
+            if(e is kotlinx.coroutines.CancellationException) throw e
+            throw ApiFailure(401,"recovery_failed")
+        }
     }
     suspend fun add(username: String, service: ConversationService) = operation(NetworkOperation.LOOKUP) {
         val normalized = Usernames.normalize(username)
@@ -193,6 +244,9 @@ class NetworkController(
     suspend fun logout() {
         AccountRecoveryDiagnostics.path("LOGOUT")
         loggingOut = true
+        authGeneration++
+        state.markLoggedOut()
+        accountConnectionState=AccountConnectionState.LOGGED_OUT
         try { operation(NetworkOperation.AUTH) { account.logout() } }
         finally {
             state.save(null)

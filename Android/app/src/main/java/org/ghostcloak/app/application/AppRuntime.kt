@@ -176,6 +176,12 @@ class AppRuntime internal constructor(
                 catch (_: org.ghostcloak.protocol.ApiFailure) { throw AppFailure(AppError.INVALID_USERNAME) }
             } else username
             service.create(name)
+            // Only this explicit creation of a brand-new local identity authorizes initial registration.
+            // Existing installs without this durable intent are never guessed to be new accounts.
+            if (!inDemo) store!!.transaction {
+                check(store!!.keys("network/").isEmpty())
+                store!!.write("app/new-network-account",byteArrayOf(1))
+            }
         }
         if (networkConfigured && !inDemo) connectNetwork(service)
     }
@@ -186,6 +192,10 @@ class AppRuntime internal constructor(
         return message
     }
     suspend fun connectNetwork(service: ConversationService) { network!!.connect(service.open()!!.username) }
+    suspend fun recoverNetwork() {
+        org.ghostcloak.protocol.requireApi(foreground && activityVisible && attachmentAccess(),"recovery_failed",401)
+        network!!.recover { foreground && activityVisible && attachmentAccess() }
+    }
     suspend fun setDisappearing(service: ConversationService, id: String, seconds: Int): Message {
         check(networkConfigured && !inDemo)
         return network!!.setDisappearing(service, id, seconds)

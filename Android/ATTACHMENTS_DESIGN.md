@@ -98,9 +98,9 @@ Photo/document UI now uses the Phase 1I.2 foundation. The owner reports that fou
 
 The composer selects one Photo through AndroidX `PickVisualMedia(ImageOnly)` (system Photo Picker with system/SAF fallback) or one Document through `OpenDocument` / `ACTION_OPEN_DOCUMENT`. No broad media/storage permissions, persistent URI grants, scanner, camera, video or microphone are added. Actual stream bytes, not provider-reported sizes, are capped while copying into random private files under credential-encrypted `noBackupFilesDir/media-presentation`.
 
-Actual caps preserve the foundation: **20 MiB document**, **20 MiB photo source**, **10 MiB normalized photo**, **32,000,000 source pixels**, **4096-pixel normalized long edge**, preserved aspect ratio, no upscale. A 20 MiB document encrypts to 20 MiB + 360 bytes; a 10 MiB photo to 10 MiB + 200 bytes, below the deployed 26 MiB cap. The suggested 25 MiB document cap is intentionally not adopted.
+Actual caps preserve the foundation: **20 MiB document**, **50 MiB photo source**, **10 MiB normalized photo**, **256,000,000 source pixels**, **4096-pixel normalized long edge**, preserved aspect ratio, no upscale. A 20 MiB document encrypts to 20 MiB + 360 bytes; a 10 MiB photo to 10 MiB + 200 bytes, below the deployed 26 MiB cap. The suggested 25 MiB document cap is intentionally not adopted.
 
-Initial images are standard JPEG and 8-bit non-paletted PNG. Bounded container inspection rejects animation, high-bit-depth/profile/HDR PNG chunks, unsupported signatures and multi-picture/gain-map JPEG markers. Framework ImageDecoder checks dimensions before full decode, rejects animated/wide-gamut/gain-map images and partial decode, applies EXIF orientation, and downscales. Re-encoding pixels produces JPEG quality 85 or PNG for alpha, without copying GPS, make/model, timestamps, EXIF or XMP. Unsupported inputs are rejected, never sent unchanged. Not every JPEG/PNG variant is supported.
+Photo compatibility correction: JPEG/progressive/Ultra HDR, still PNG and platform-supported HEIF input normalize to fresh opaque SDR JPEG quality 85. Header-first downsampling, 32,768-axis/256 MP sanity limits, animation/partial-image rejection and bounded staging/output remain. See [photo preparation findings, resource limits and physical retest](PHOTO_PREPARATION_DIAGNOSTIC.md).
 
 Documents retain exact bytes and embedded metadata; they are never internally decompressed or parsed. Display filenames are sanitized by the existing 128-UTF-8-byte rules (no path separators, controls or bidi overrides; generic fallback). Names stay in the encrypted descriptor/journal, never local paths or HTTP metadata. MIME/extensions/provider size claims are not trusted.
 
@@ -239,7 +239,7 @@ Delete/expiry removes presentation files, derivatives and unneeded keys. A hidde
 
 Use single-item Photo Picker contracts with SAF fallback. API 30 does not guarantee picker availability; no Google Play dependency or broad media/storage permission is required. Bounded copy into private staging, narrow URI grants, release when unnecessary. A selected system provider may fetch its own cloud content; Ghost Cloak adds no cloud service. [Picker availability/fallback](https://developer.android.com/training/data-storage/shared/photo-picker).
 
-Normalize supported still images into new JPEG/PNG, bake orientation, bound dimensions; reject unsupported animation/HDR rather than preserving unknown metadata silently. Source decoders also process untrusted input: bounds-first/sample decoding and resource limits apply before encryption. Video normalization to a tested MP4 profile belongs to 1I.5. If sanitization fails, do not silently send original media.
+Normalize supported still images into fresh SDR JPEG, bake orientation and bound dimensions; reject animation, flatten HDR to SDR and never preserve source metadata. Source decoders also process untrusted input: bounds-first/sample decoding and resource limits apply before encryption. Video normalization to a tested MP4 profile belongs to 1I.5. If sanitization fails, do not silently send original media.
 
 ## 10. Document handling
 
@@ -287,7 +287,7 @@ Authenticated small descriptors may enter the existing request path under existi
 
 ## 18. Parser/malicious-file defenses
 
-Enforce byte caps and overflow-safe arithmetic before disk/allocation exhaustion. After authentication sniff allowlisted formats, never trust extension/MIME. Proposed image input bounds: 32 megapixels and 8,192 pixels per edge, sampled decode; output at most 4,096 per edge. Bound decoder memory/time and handle failure. Video decoder/transcoder budgets need device measurement before 1I.5.
+Enforce byte caps and overflow-safe arithmetic before disk/allocation exhaustion. After authentication sniff allowlisted formats, never trust extension/MIME. Current photo input bounds: 256 million pixels and 32,768 per edge, downscaled header-first decode; output at most 4,096 per edge. Bound decoder memory/time and handle failure. Video decoder/transcoder budgets need device measurement before 1I.5.
 
 Never unpack archives or recursively inspect ZIPs; no automatic document preview. Authenticated PDFs/docs may remain malicious and require explicit external viewing. Prefer maintained Android decoders over plugins/privileged WebViews; no invulnerability claim. Test authenticated malicious files separately from corrupted ciphertext. Apply import-side parser budgets too.
 
@@ -308,7 +308,7 @@ Proposed binary MiB limits, not measured VPS capacity:
 | Voice note | 4 MiB | Five minutes, whichever first |
 | Video, 1I.5 only | 25 MiB | Initially two minutes/1080p, subject to device tests |
 
-Source import capped at 25 MiB before normalization; large camera originals are deliberately excluded initially. Common server ciphertext maximum 26 MiB including padding/AEAD; enforce exact computed format length too. Server cannot enforce private media types, only common byte cap. Defer 20 MiB images/50 MiB documents/100 MiB videos due to retries, scratch and abuse costs. Five minutes limits battery/storage and roughly halves ten-minute voice cost.
+Photo source import now permits 50 MiB with bounded downsampling; normalized photo output stays 10 MiB. Common server ciphertext maximum 26 MiB including padding/AEAD; enforce exact computed format length too. Server cannot enforce private media types, only common byte cap. Defer 20 MiB images/50 MiB documents/100 MiB videos due to retries, scratch and abuse costs. Five minutes limits battery/storage and roughly halves ten-minute voice cost.
 
 ## 21. Retention/orphan cleanup
 

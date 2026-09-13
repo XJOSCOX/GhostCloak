@@ -49,12 +49,12 @@ class PhotoPreparationTest {
         finally { decoded.recycle() }
         assertTrue(normalized.length()<=PhotoPreparation.OUTPUT_CAP)
     }
-    @Test fun longEdgeDownscalesWithoutUpscalingAndPngKeepsAlpha()=fixture { root ->
+    @Test fun longEdgeDownscalesWithoutUpscalingAndPngBecomesOpaqueJpeg()=fixture { root ->
         val source=File(root,"source"); picture(source,true,5000,8)
         val normalized=File(root,"normalized")
         PhotoPreparation.normalize(source,normalized)
         val decoded=PhotoPreparation.decode(normalized)
-        try { assertEquals(4096,decoded.width); assertTrue(decoded.hasAlpha()) } finally { decoded.recycle() }
+        try { assertEquals(4096,decoded.width); assertFalse(decoded.hasAlpha()); assertFalse(PhotoPreparation.inspect(normalized)) } finally { decoded.recycle() }
         picture(source,true,12,6);PhotoPreparation.normalize(source,normalized)
         val small=PhotoPreparation.decode(normalized)
         try { assertEquals(12,small.width);assertEquals(6,small.height) } finally { small.recycle() }
@@ -124,4 +124,109 @@ class PhotoPreparationTest {
         val fakeExtension=File(root,"document.exe").apply { writeText("%PDF-malformed body intentionally not parsed") }
         assertEquals("application/pdf",org.ghostcloak.app.attachments.DocumentType.sniff(fakeExtension))
     }
-}
+    @Test fun progressiveAndHighResolutionFixturesNormalizeWithBoundedOutput()=fixture { root ->
+        for(name in listOf("progressive.jpg","50mp.jpg","200mp.jpg")) {
+            val source=File(root,"source")
+            InstrumentationRegistry.getInstrumentation().context.assets.open("photo-fixtures/$name").use { input -> source.outputStream().use { input.copyTo(it) } }
+            val normalized=File(root,"normalized")
+            PhotoPreparation.normalize(source,normalized)
+            val decoded=PhotoPreparation.decode(normalized)
+            try {
+                assertTrue(maxOf(decoded.width,decoded.height)<=4096)
+                assertEquals(2,decoded.width/decoded.height)
+                assertTrue(decoded.allocationByteCount<=4096*4096*4)
+                assertFalse(decoded.hasAlpha())
+                assertTrue(normalized.length()<=PhotoPreparation.OUTPUT_CAP)
+            } finally { decoded.recycle() }
+        }
+    }
+    @Test fun gainMapIsRemovedAndSdrBaseSurvives()=fixture { root ->
+        org.junit.Assume.assumeTrue(android.os.Build.VERSION.SDK_INT>=34)
+        val source=File(root,"source")
+        val base=Bitmap.createBitmap(48,24,Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED);setHasAlpha(false) }
+        val map=Bitmap.createBitmap(12,6,Bitmap.Config.ARGB_8888).apply { eraseColor(Color.GRAY) }
+        try {
+            base.setGainmap(android.graphics.Gainmap(map))
+            source.outputStream().use { assertTrue(base.compress(Bitmap.CompressFormat.JPEG,90,it)) }
+            val original=android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(source))
+            try { assertTrue(original.hasGainmap()) } finally { original.recycle() }
+            val output=File(root,"output");PhotoPreparation.normalize(source,output)
+            val result=android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(output)) { decoder,_,_ -> decoder.allocator=android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE }
+            try { assertFalse(result.hasGainmap());assertTrue(Color.red(result.getPixel(10,10))>200) } finally { result.recycle() }
+        } finally { base.recycle();map.recycle() }
+    }
+    @Test fun hdrTaggedJpegIsNotRejectedByMetadataSubstring()=fixture { root ->
+        val source=File(root,"source");picture(source)
+        val original=source.readBytes()
+        val app="synthetic HDR hdrgm gainmap".toByteArray()
+        source.outputStream().use { raw ->
+            raw.write(original,0,2)
+            DataOutputStream(raw).apply { writeShort(0xffe1);writeShort(app.size+2);write(app) }
+            raw.write(original,2,original.size-2)
+        }
+        val output=File(root,"output");PhotoPreparation.normalize(source,output)
+        assertFalse(output.readBytes().toString(Charsets.ISO_8859_1).contains("synthetic HDR"))
+    }
+    @Test fun malformedPreparationDeletesOutputAndSourceCapUsesActualLength()=fixture { root ->
+        val source=File(root,"source").apply { writeBytes(ByteArray(128)) }
+        val output=File(root,"output").apply { writeText("old") }
+        assertThrows(Exception::class.java) { PhotoPreparation.normalize(source,output) }
+        assertFalse(output.exists())
+        RandomAccessFile(source,"rw").use { it.setLength(PhotoPreparation.SOURCE_CAP+1) }
+        val failure=assertThrows(org.ghostcloak.app.attachments.PhotoFailure::class.java) { PhotoPreparation.inspect(source) }
+        assertEquals(org.ghostcloak.app.attachments.PhotoFailureReason.SOURCE_LIMIT,failure.reason)
+    }    @Test fun heifInputNormalizesWhenPlatformDecoderSupportsIt()=fixture { root ->
+        val source=File(root,"source")
+        InstrumentationRegistry.getInstrumentation().context.assets.open("photo-fixtures/still.heic").use { input -> source.outputStream().use { input.copyTo(it) } }
+        val platform=try { android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(source)) } catch (_: Exception) { null }
+        if(platform==null) {
+            assertThrows(org.ghostcloak.app.attachments.PhotoFailure::class.java) { PhotoPreparation.normalize(source,File(root,"output")) }
+        } else {
+            platform.recycle()
+            val output=File(root,"output");PhotoPreparation.normalize(source,output)
+            assertFalse(PhotoPreparation.inspect(output))
+            val decoded=PhotoPreparation.decode(output)
+            try { assertEquals(96,decoded.width);assertEquals(48,decoded.height) } finally { decoded.recycle() }
+        }
+    }    @Test fun oneShotUnknownSizeSourceIsCopiedOnceAndActualSourceCapIsEnforced()=fixture { root ->
+        val source=File(root,"untrusted-name.not-an-image")
+        val input=object:FilterInputStream(InstrumentationRegistry.getInstrumentation().context.assets.open("photo-fixtures/progressive.jpg")) {
+            override fun available()=0
+            override fun markSupported()=false
+            override fun reset() { fail("Provider stream must not be reopened/reset") }
+        }
+        input.use { source.outputStream().use { output -> PhotoPreparation.boundedCopy(input,output,PhotoPreparation.SOURCE_CAP) } }
+        PhotoPreparation.normalize(source,File(root,"normalized"))
+        var remaining=PhotoPreparation.SOURCE_CAP+1
+        val oversized=object:InputStream() {
+            override fun read():Int { if(remaining==0L)return -1;remaining--;return 0 }
+            override fun read(bytes:ByteArray,offset:Int,length:Int):Int {
+                if(remaining==0L)return -1
+                val count=minOf(remaining,length.toLong()).toInt();remaining-=count;return count
+            }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PhotoPreparation.boundedCopy(oversized,object:OutputStream() {
+                override fun write(value:Int) {}
+                override fun write(bytes:ByteArray,offset:Int,length:Int) {}
+            },PhotoPreparation.SOURCE_CAP)
+        }
+    }    @Test fun oversizedEncodedOutputFailsClosedAndRemovesPartialFile()=fixture { root ->
+        val source=File(root,"source")
+        val noise=Bitmap.createBitmap(4096,4096,Bitmap.Config.ARGB_8888)
+        val random=java.util.Random(731)
+        val row=IntArray(4096)
+        try {
+            repeat(4096) { y ->
+                for(x in row.indices) row[x]=0xff000000.toInt() or random.nextInt(0x1000000)
+                noise.setPixels(row,0,4096,0,y,4096,1)
+            }
+            noise.setHasAlpha(false)
+            source.outputStream().use { assertTrue(noise.compress(Bitmap.CompressFormat.JPEG,100,it)) }
+        } finally { noise.recycle();row.fill(0) }
+        assertTrue(source.length()<=PhotoPreparation.SOURCE_CAP)
+        val output=File(root,"output")
+        val failure=assertThrows(org.ghostcloak.app.attachments.PhotoFailure::class.java) { PhotoPreparation.normalize(source,output) }
+        assertEquals(org.ghostcloak.app.attachments.PhotoFailureReason.OUTPUT_LIMIT,failure.reason)
+        assertFalse(output.exists())
+    }}

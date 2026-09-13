@@ -64,7 +64,9 @@ import org.ghostcloak.messaging.Message
             if(viewerError) Text("No document viewer is available, or access has expired.",color=MaterialTheme.colorScheme.error)
         } },
         confirmButton={
-            if(state.message==null) TextButton(onClick={owner.send(refresh)},enabled=!state.busy && (state.ready || state.bytes>0)) { Text(if(state.error==null) "Send" else "Retry upload") }
+            if(state.message==null) PreparationAction(state,enabled,
+                {owner.cancel();photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))},
+                {owner.send(refresh)})
             else if(state.ready && !state.photo) TextButton(onClick={external=true},enabled=enabled) { Text("Open document") }
             else if(state.error!=null) TextButton(onClick={owner.download(conversation,state.message!!,state.photo,state.filename,refresh)},enabled=enabled) { Text("Retry download") }
         },
@@ -75,6 +77,15 @@ import org.ghostcloak.messaging.Message
             try { context.startActivity(owner.documentIntent()); viewerError=false }
             catch (_: Exception) { viewerError=true }
         }}) { Text("Choose viewer") }},dismissButton={TextButton(onClick={external=false}) { Text("Cancel") }})
+}
+
+@Composable internal fun PreparationAction(state: org.ghostcloak.app.attachments.MediaUi, enabled: Boolean,
+    choosePhoto: () -> Unit, send: () -> Unit) {
+    if(state.photo && state.error!=null && !state.uploadPrepared)
+        TextButton(onClick=choosePhoto,enabled=enabled && !state.busy) { Text("Choose another photo") }
+    else TextButton(onClick=send,enabled=enabled && !state.busy && (state.ready || state.uploadPrepared)) {
+        Text(if(state.uploadPrepared) "Retry upload" else "Send")
+    }
 }
 
 @Composable fun AttachmentMessage(message: Message, enabled: Boolean, cached: Boolean, refresh: ()->Unit) {

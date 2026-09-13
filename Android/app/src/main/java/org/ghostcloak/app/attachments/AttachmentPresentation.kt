@@ -14,7 +14,7 @@ import java.io.File
 data class MediaUi(val conversation: String = "", val message: String? = null,
     val filename: String = "", val photo: Boolean = false, val bytes: Long = 0,
     val busy: Boolean = false, val error: String? = null, val ready: Boolean = false,
-    val preview: Bitmap? = null, val sending: Boolean = false) {
+    val preview: Bitmap? = null, val sending: Boolean = false, val uploadPrepared: Boolean = false) {
     override fun toString() = "MediaUi(redacted)"
 }
 
@@ -83,17 +83,31 @@ class AttachmentPresentation(private val app: GhostApplication) {
             try { check(expected); block(expected) }
             catch (failure: CancellationException) { throw failure }
             catch (_: OutOfMemoryError) {
-                if(expected==epoch) { file?.delete();file=null;mutable.value=mutable.value.copy(busy=false,ready=false,preview=null,error="Not enough memory to prepare this photo.") }
+                if(mutable.value.photo) PhotoDiagnostics.failed(PhotoFailureReason.MEMORY)
+                if(expected==epoch) { file?.delete();file=null;mutable.value=mutable.value.copy(busy=false,ready=false,preview=null,sending=mutable.value.uploadPrepared,error=PhotoFailureReason.MEMORY.userMessage) }
             }
             catch (failure: Exception) {
+                if (expected == epoch && mutable.value.photo && mutable.value.message==null && blob==null) {
+                    if(failure.message=="attachment_size") PhotoDiagnostics.emit(PhotoEvent.SIZE_OVER)
+                    PhotoDiagnostics.failed(when {
+                        failure is PhotoFailure -> failure.reason
+                        failure.message=="attachment_size" -> PhotoFailureReason.SOURCE_LIMIT
+                        failure is java.io.IOException || failure is SecurityException -> PhotoFailureReason.READ
+                        else -> PhotoFailureReason.NORMALIZE
+                    })
+                }
                 if (expected == epoch && blob == null && mutable.value.message == null) { file?.delete(); file=null }
                 if (expected == epoch) mutable.value=mutable.value.copy(busy=false,ready=false,
+                    sending=mutable.value.sending && blob!=null,
                     error=when {
                         failure is org.ghostcloak.protocol.ApiFailure && failure.status==404 -> "Attachment unavailable or expired."
                         mutable.value.message!=null -> "Download failed · Retry"
                         blob!=null -> "Upload failed · Retry"
-                        failure.message=="attachment_size" -> "File is too large. Maximum source/document size is 20 MiB; normalized photos must fit 10 MiB."
-                        mutable.value.photo -> "Couldn't prepare photo. Choose a standard JPEG or PNG (no animation or HDR), up to 20 MiB and 32 megapixels."
+                        failure is PhotoFailure -> failure.reason.userMessage
+                        mutable.value.photo && failure.message=="attachment_size" -> PhotoFailureReason.SOURCE_LIMIT.userMessage
+                        mutable.value.photo && (failure is java.io.IOException || failure is SecurityException) -> PhotoFailureReason.READ.userMessage
+                        failure.message=="attachment_size" -> "File is too large. Maximum document size is 20 MiB."
+                        mutable.value.photo -> PhotoFailureReason.NORMALIZE.userMessage
                         else -> "Couldn't prepare document. Choose a nonempty file up to 20 MiB."
                     })
             }
@@ -102,6 +116,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
     fun select(conversation: String, uri: Uri, photo: Boolean) {
         clear()
         mutable.value=MediaUi(conversation=conversation,photo=photo,busy=true)
+        if(photo) PhotoDiagnostics.emit(PhotoEvent.START)
         launch { expected ->
             if (!app.runtime.supportsAttachments(conversation)) {
                 mutable.value=mutable.value.copy(busy=false,error="This contact needs a newer Ghost Cloak version to receive attachments. Exchange a text message after updating.")
@@ -120,7 +135,8 @@ class AttachmentPresentation(private val app: GhostApplication) {
                     } catch (_: Exception) { "Attachment" }
                     val signal=android.os.CancellationSignal()
                     synchronized(inputGate) { check(expected);sourceSignal=signal }
-                    val descriptor=app.contentResolver.openFileDescriptor(uri,"r",signal) ?: error("attachment_missing")
+                    val descriptor=app.contentResolver.openFileDescriptor(uri,"r",signal)
+                        ?: if(photo) throw PhotoFailure(PhotoFailureReason.READ) else error("attachment_missing")
                     val input=android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)
                     try { input.use {
                         synchronized(inputGate) { check(expected);activeInput=input }
@@ -144,6 +160,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
                 val preview=if(photo) withContext(Dispatchers.IO) { PhotoPreparation.decode(prepared!!,512) } else null
                 check(expected)
                 mutable.value=mutable.value.copy(filename=name,bytes=prepared!!.length(),preview=preview,busy=false,ready=true)
+                if(photo) PhotoDiagnostics.emit(PhotoEvent.OK)
             } finally {
                 staged.takeIf { it != file }?.delete()
                 prepared?.takeIf { it != file }?.delete()
@@ -154,7 +171,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
     }
     fun send(refresh: ()->Unit) {
         val before=mutable.value
-        if (before.conversation.isEmpty() || before.message != null || before.busy) return
+        if (before.conversation.isEmpty() || before.message != null || before.busy || (!before.ready && !before.uploadPrepared)) return
         mutable.value=before.copy(busy=true,error=null,sending=before.photo)
         launch { expected ->
             if(!app.runtime.supportsAttachments(before.conversation)) {
@@ -168,6 +185,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
                     if(before.photo) AttachmentKind.IMAGE else AttachmentKind.DOCUMENT,duration,
                     if(before.photo) null else before.filename)
                 check(expected); blob=descriptor.id;file?.delete();file=null
+                mutable.value=mutable.value.copy(uploadPrepared=true)
             }
             val id=blob!!
             app.runtime.uploadAttachment(id); check(expected)

@@ -57,7 +57,7 @@ Before attaching, update **both phones** and have each send a short ordinary tex
 3. Keep B offline while A sends a short-lived attachment. A's queued copy must remain without a countdown. Reconnect B, receive/ACK the descriptor, and confirm A starts its delivery-based timer then. On each side, expiry removes local access/cache; no Download/Open action should resurrect it. The server's fixed blob TTL remains independent of the private timer.
 4. With a fresh **test** contact, send an attachment into message requests. Before acceptance, confirm only a generic attachment indication and no filename/body/preview. Accept, then explicitly Download. Repeat local Delete and Clear; recipient delivery is not recalled, and replay must not restore deleted content.
 5. During picker return, preparation, upload, download and photo viewing, background/lock the app. Ordinary transfer/presentation must stop, scratch must disappear, notifications/Recents must remain generic/protected, and no attachment may auto-send after restart. Retry a failed upload while remaining foreground; it reuses immutable ciphertext. Test text sending after an attachment failure.
-6. Try malformed/animated/HDR/oversized photos and a provider with inaccurate/unknown size. No original photo should be sent as a fallback. Documents are capped by streamed bytes, not claimed size; archive/PDF contents are not parsed internally. Unsupported future video/audio descriptors have no download/open action.
+6. Try malformed/animated/oversized photos and supported HDR-to-SDR conversion and a provider with inaccurate/unknown size. No original photo should be sent as a fallback. Documents are capped by streamed bytes, not claimed size; archive/PDF contents are not parsed internally. Unsupported future video/audio descriptors have no download/open action.
 7. For a controlled staging privacy check, inspect the test blobs and schema through the existing approved SSH/operator connection. Filenames must be opaque, files ciphertext, and database/logs must contain no plaintext filename, MIME, attachment key, contact, message, timer or EXIF. Do not decrypt on the server or dump real users' records. Local JVM fixtures validate these properties against their isolated backend; they cannot prove the live VPS state.
 
 Local validation: **154 JVM tests passed** (95 test-support, 4 attachment-format, 31 debug-app and 24 release-app tests). The full Android run passed **92 app tests and 10 storage tests**; the updated cache-reopening test and eight photo/document tests also passed in focused reruns. Debug/release assembly and these Gradle runs used strict dependency verification. No physical phones were connected during local validation.
@@ -317,3 +317,7 @@ Validation result: 146 JVM tests and all 13 isolated PostgreSQL tests passed; de
 
 See [PICKER_CRASH_FIX.md](PICKER_CRASH_FIX.md) for the Fragment/Activity dependency
 correction, regression coverage, and physical Photo/Document retest steps.
+
+## Photo preparation diagnostics
+
+See [photo preparation compatibility and physical retest](PHOTO_PREPARATION_DIAGNOSTIC.md). Debug Logcat filter: `tag:GhostCloakPhoto`. Only fixed categories are emitted; release diagnostics are disabled. Supported still inputs become fresh SDR JPEG, with 50 MiB source / 10 MiB output caps and bounded 4096-long-edge decoding.

@@ -141,7 +141,7 @@ class AppRuntime internal constructor(
                 }
                 try {
                 LocalStateDiagnostics.inventory(records, apiOrigin)
-                val engine=SignalProtocolEngine(records)
+                val engine=SignalProtocolEngine(records, preKeyPolicy = org.ghostcloak.crypto.PreKeyPolicy(maximumRetained = 10000))
                 val cooldown = if (networkConfigured) storedFetchCooldown(records, java.net.URI(apiOrigin).host,
                     android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0))
                     else org.ghostcloak.transport.FetchCooldown()

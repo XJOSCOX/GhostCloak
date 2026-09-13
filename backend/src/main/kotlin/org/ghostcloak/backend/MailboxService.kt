@@ -193,14 +193,26 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
             }
             is ApiRequest.Lookup -> {
                 val name = Usernames.normalize(r.username)
-                val account = db.accounts.all().firstOrNull { it.username == name } ?: throw ApiFailure(404, "not_found")
+                val account = db.accounts.all().firstOrNull { it.username == name } ?: throw ApiFailure(404, "contact_unavailable")
                 val target = db.devices.get(account.deviceId)!!
                 val keys = db.prekeys.get(target.id)!!
-                val bundle = keys.pool.firstOrNull() ?: throw ApiFailure(409, "prekeys_exhausted")
+                val bundle = keys.pool.firstOrNull() ?: throw ApiFailure(404, "contact_unavailable")
                 db.prekeys.put(target.id, PrekeyRow(target.id, keys.pool.drop(1), keys.usedEc, keys.usedPq, keys.signed))
                 ApiResponse(directory = DirectoryEntry(account.id, target.id, target.routingId, name, bundle))
             }
-            is ApiRequest.Prekeys -> { requireApi(r.deviceId == device.id, "forbidden", 403); upload(device.id, r.bundles); ApiResponse() }
+            is ApiRequest.Prekeys -> {
+                requireApi(r.deviceId == device.id, "forbidden", 403)
+                if (r.inspect) {
+                    requireApi(r.bundles.isEmpty() && r.probeIds.size <= NetworkLimits.BUNDLES &&
+                        r.probeIds.distinct().size == r.probeIds.size && r.probeIds.all { it > 0 })
+                    val keys = db.prekeys.get(device.id)
+                    ApiResponse(prekeyInventory = PrekeyPool(keys?.pool?.size ?: 0,
+                        r.probeIds.filter { it in (keys?.usedEc ?: emptySet()) }))
+                } else {
+                    requireApi(r.probeIds.isEmpty())
+                    upload(device.id, r.bundles); ApiResponse()
+                }
+            }
             is ApiRequest.Send -> send(device, r)
             is ApiRequest.Fetch -> {
                 requireApi(r.submissionIds.size <= NetworkLimits.BATCH && r.submissionIds.all(RandomIdentifiers::valid))

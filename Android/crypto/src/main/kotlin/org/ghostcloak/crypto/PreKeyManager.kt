@@ -20,7 +20,7 @@ interface PreKeyManager {
 /** Local prototype policy, not an upstream Signal recommendation or a production rotation service. */
 data class PreKeyPolicy(val targetUnused: Int = 1, val maximumRetained: Int = 32,
     val maximumRetention: Duration = Duration.ofDays(30)) {
-    init { require(targetUnused in 1..maximumRetained && maximumRetained <= 32); require(!maximumRetention.isNegative && !maximumRetention.isZero) }
+    init { require(targetUnused in 1..maximumRetained && maximumRetained <= 10000); require(!maximumRetention.isNegative && !maximumRetention.isZero) }
 }
 
 internal class SignalPreKeys(private val db: EndpointRecords, private val store: SignalStore,

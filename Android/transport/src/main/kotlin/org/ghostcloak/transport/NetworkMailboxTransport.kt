@@ -28,7 +28,7 @@ class HttpGhostClient(
     val fetchRetryDelayMillis get() = fetchCooldown.remainingMillis
     init { validateApiOrigin(base, allowLoopbackForTests) }
     override suspend fun unauthenticated(request: ApiRequest) = call(request, false)
-    suspend fun call(request: ApiRequest, authenticated: Boolean = true): ApiResponse = withContext(Dispatchers.IO) {
+    suspend fun call(request: ApiRequest, authenticated: Boolean = true, reportTransientFailure: Boolean = true): ApiResponse = withContext(Dispatchers.IO) {
         if (request is ApiRequest.Fetch && fetchCooldown.remainingMillis > 0)
             throw ApiFailure(429, "rate_limited", fetchCooldown.remainingMillis)
         val category = networkOperation(request)
@@ -57,7 +57,8 @@ class HttpGhostClient(
                 requireApi(result.body.size <= NetworkLimits.RESPONSE, "response_size", 502)
                 val response = NetworkCodec.decode<ApiResponse>(result.body, NetworkLimits.RESPONSE)
                 requireApi(response.version == 1, "invalid_response", 502)
-                if (result.status !in 200..299) throw ApiFailure(result.status, "server_rejected")
+                if (result.status !in 200..299) throw ApiFailure(result.status,
+                    if (request is ApiRequest.Lookup && result.status in setOf(404, 409)) "contact_unavailable" else "server_rejected")
                 requireApi(response.error == null, "invalid_response", 502)
                 if (request is ApiRequest.Fetch) fetchCooldown.succeeded()
                 return response
@@ -73,7 +74,7 @@ class HttpGhostClient(
             } finally { diagnostic(NetworkEvent.END, httpStatus, since = attemptStarted) }
         }
         if (!authenticated) return@withContext attempt(null)
-        authenticatedExchange({ event -> diagnostic(event) }) { attempt(it) }
+        authenticatedExchange({ event -> diagnostic(event) }, reportTransientFailure = reportTransientFailure) { attempt(it) }
     }
     /** The only authenticated one-retry boundary, shared with bulk streaming operations. */
     suspend fun <T> authenticatedExchange(

@@ -22,6 +22,7 @@ internal class SyntheticNetwork : GhostCloakTransport {
     val mailbox = linkedMapOf<String, Pair<String, Delivery>>()
     private val challenges = mutableMapOf<String, Challenge>()
     private val prekeys = mutableMapOf<String, MutableList<PublicBundle>>()
+    private val usedPrekeys = mutableMapOf<String, MutableSet<Int>>()
     private val submissions = mutableMapOf<String, String>()
     private val acknowledged = mutableSetOf<String>()
     private val random = SecureRandom()
@@ -113,7 +114,15 @@ internal class SyntheticNetwork : GhostCloakTransport {
                         requireApi(r.serverMessageIds.all { mailbox[it]?.first == me.deviceId }, "forbidden", 403)
                         r.serverMessageIds.forEach { acknowledged.add(it); mailbox.remove(it) }; ApiResponse()
                     }
-                    is ApiRequest.Prekeys -> { prekeys[me.deviceId]!!.addAll(r.bundles); ApiResponse() }
+                    is ApiRequest.Prekeys -> {
+                        requireApi(r.deviceId == me.deviceId, "forbidden", 403)
+                        val used=usedPrekeys.getOrPut(me.deviceId) { me.bundles.map {it.preKeyId}.toMutableSet() }
+                        if(r.inspect) ApiResponse(prekeyInventory=PrekeyPool(prekeys[me.deviceId]!!.size,r.probeIds.filter {it in used}))
+                        else {
+                            requireApi(r.bundles.none {it.preKeyId in used},"duplicate_prekey",409)
+                            used.addAll(r.bundles.map {it.preKeyId});prekeys[me.deviceId]!!.addAll(r.bundles);ApiResponse()
+                        }
+                    }
                     is ApiRequest.Revoke -> { sessions.entries.removeAll { it.value.deviceId == me.deviceId }; ApiResponse() }
                     else -> error("Unexpected fixture operation")
                 }

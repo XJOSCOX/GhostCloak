@@ -78,7 +78,9 @@ sealed class ApiRequest {
     @Serializable @SerialName("revoke") class Revoke(override val version: Int = 1) : ApiRequest()
     @Serializable @SerialName("rename") class Rename(val username: String, override val version: Int = 1) : ApiRequest()
     @Serializable @SerialName("lookup") class Lookup(val username: String, override val version: Int = 1) : ApiRequest()
-    @Serializable @SerialName("prekeys") class Prekeys(val deviceId: String, val bundles: List<PublicBundle>, override val version: Int = 1) : ApiRequest()
+    @Serializable @SerialName("prekeys") class Prekeys(val deviceId: String, val bundles: List<PublicBundle>, override val version: Int = 1,
+        @EncodeDefault(EncodeDefault.Mode.NEVER) val inspect: Boolean = false,
+        @EncodeDefault(EncodeDefault.Mode.NEVER) val probeIds: List<Int> = emptyList()) : ApiRequest()
     @Serializable @SerialName("send") class Send(val submissionId: String, val recipientRoutingId: String, val encryptedEnvelope: ByteArray, override val version: Int = 1) : ApiRequest()
     @Serializable @SerialName("fetch") class Fetch(override val version: Int = 1, @EncodeDefault(EncodeDefault.Mode.NEVER) val includeSenders: Boolean = false,
         @EncodeDefault(EncodeDefault.Mode.NEVER) val submissionIds: List<String> = emptyList(),
@@ -89,7 +91,10 @@ sealed class ApiRequest {
 class ApiResponse(val version: Int = 1, val challenge: Challenge? = null, val session: SessionGrant? = null,
     val directory: DirectoryEntry? = null, val deliveries: List<Delivery> = emptyList(), val serverMessageId: String? = null,
     val error: String? = null, @EncodeDefault(EncodeDefault.Mode.NEVER) val statuses: List<DeliveryStatus> = emptyList(),
-    @EncodeDefault(EncodeDefault.Mode.NEVER) val recovered:RecoveredBinding?=null) { override fun toString() = "ApiResponse(<redacted>)" }
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val recovered:RecoveredBinding?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val prekeyInventory:PrekeyPool?=null) { override fun toString() = "ApiResponse(<redacted>)" }
+
+@Serializable class PrekeyPool(val available: Int, val acceptedIds: List<Int> = emptyList())
 
 object NetworkCodec {
     @PublishedApi internal val format = Cbor {

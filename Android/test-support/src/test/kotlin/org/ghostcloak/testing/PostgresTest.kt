@@ -16,6 +16,9 @@ import java.util.concurrent.Executors
 import java.time.*
 
 class PostgresTest {
+    @Test fun exhaustedPrekeyPoolRefillsWithoutChangingIdentity()=runBlocking {
+        Fixture().use { f -> PrekeyProbe.exercise(PostgresDatabase(f.source)) }
+    }
     @Test fun recoveryMigrationAndOriginalBindingProofAreDurable()=runBlocking {
         Fixture().use { f ->
             f.source.connection.use {c->c.createStatement().use {

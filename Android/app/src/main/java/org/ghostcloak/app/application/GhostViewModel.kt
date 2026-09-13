@@ -171,6 +171,7 @@ class GhostViewModel internal constructor(application: Application, private val 
         error.code == "legacy_auth_requires_reset" -> "This identity uses an older account credential. Your keys were preserved; follow the documented development migration."
         error.code == "invalid_network_username" -> "Choose a valid network username in Settings, then connect again. Your identity was preserved."
         error.status == 401 -> "Connect again to renew your session. Your identity is preserved."
+        error.code == "contact_unavailable" -> "That contact is temporarily unavailable. Try again shortly."
         error.status == 409 -> "The request conflicted with existing information. Your account and history were preserved."
         error.status == 404 -> "That username could not be found. Check the spelling and try again."
         error.status == 429 -> "Please wait before trying again. Pending messages remain on this device."

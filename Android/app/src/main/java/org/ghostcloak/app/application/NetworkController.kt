@@ -31,6 +31,9 @@ class NetworkController(
     private val account: NetworkAccount by lazy { NetworkAccount(client, state) }
     private val transport by lazy { NetworkMailboxTransport(client, state) }
     private val outbox by lazy { DurableOutbox(records, engine, transport) }
+    private val prekeyRefill by lazy { PrekeyRefill(records, engine, URI(origin).host, ::device,
+        { client.call(it, reportTransientFailure=false) }, { canAutoSync && cooldown.remainingMillis == 0L },
+        diagnostic = PrekeyDiagnostics::emit) }
     private val renewalMutex = Mutex()
     private val renewalBlockKey = "app/renewal-blocked/${URI(origin).host}"
     @Volatile private var renewalBlockCache = records.transaction { records.read(renewalBlockKey) != null }
@@ -100,7 +103,7 @@ class NetworkController(
         try {
             if(state.connectionState()==AccountConnectionState.NEW_ACCOUNT) {
                 val pending=state.pendingRegistration()
-                val registration=pending ?: state.prepareNew(username,listOf(engine.publicBundle().publicData()))
+                val registration=pending ?: state.prepareNew(username,List(16) { engine.publicBundle().publicData() })
                 // Only a durable intent made at actual local identity creation allows registration.
                 // A retry of that intent first handles a previously lost Register response.
                 var loggedIn=false
@@ -122,6 +125,7 @@ class NetworkController(
         }
         accountConnectionState=AccountConnectionState.REGISTERED
         renewalBlocked = false; status = NetworkStatus.CONNECTED
+        prekeyRefill.maintain()
     }
     suspend fun recover(allowed:()->Boolean)=renewalMutex.withLock {
         requireApi(configured && allowed() && !loggingOut,"recovery_failed",401)
@@ -231,6 +235,7 @@ class NetworkController(
         }
         exchange()
         status = NetworkStatus.CONNECTED
+        prekeyRefill.maintain()
     }
     suspend fun syncBackground(service: ConversationService) {
         backgroundFetches = 0
@@ -238,8 +243,7 @@ class NetworkController(
     }
     suspend fun publish() = operation(NetworkOperation.PUBLISH) {
         requireApi(canAutoSync, "connect_required", 401)
-        client.publish(device(), listOf(engine.preKeys.createPublicationBundle().publicData()))
-        status = NetworkStatus.CONNECTED
+        prekeyRefill.maintain()
     }
     suspend fun logout() {
         AccountRecoveryDiagnostics.path("LOGOUT")

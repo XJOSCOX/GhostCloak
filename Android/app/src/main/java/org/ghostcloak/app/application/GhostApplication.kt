@@ -5,6 +5,8 @@ import kotlinx.coroutines.launch
 
 /** A single store/engine owner per process; activity recreation never opens a second engine. */
 class GhostApplication : Application(), androidx.work.Configuration.Provider {
+    private val mediaOwner = lazy { org.ghostcloak.app.attachments.AttachmentPresentation(this) }
+    val media get() = mediaOwner.value
     val appLock: org.ghostcloak.app.access.AppLockController by lazy {
         org.ghostcloak.app.access.AppLockController(object : org.ghostcloak.app.access.LockPersistence {
             override suspend fun read() = runtime.readAppLock()
@@ -22,7 +24,10 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+kotlinx.coroutines.Dispatchers.Main.immediate).launch {
-            appLock.state.collect { if (!it.canShowContent) runtime.revokeAttachmentAccess() }
+            appLock.state.collect { if (!it.canShowContent) {
+                runtime.revokeAttachmentAccess()
+                if (mediaOwner.isInitialized()) media.locked()
+            } }
         }
         // No Direct Boot access; WorkManager itself handles OS-approved persistence/reboot.
         if (getSystemService(android.os.UserManager::class.java).isUserUnlocked) {
@@ -30,7 +35,9 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider {
             // One local cleanup loop, no network/alarms/wake lock. Android may suspend it.
             backgroundScope.launch {
                 while (true) {
-                    try { runtime.reconcileLocalExpiry() }
+                    try { runtime.reconcileLocalExpiry()
+                        if (mediaOwner.isInitialized()) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { media.reconcileStored() }
+                    }
                     catch (e: kotlinx.coroutines.CancellationException) { throw e }
                     catch (_: Exception) { } // Storage failures never expose message metadata.
                     kotlinx.coroutines.delay(1000)

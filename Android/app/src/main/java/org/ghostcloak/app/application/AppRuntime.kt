@@ -218,19 +218,35 @@ class AppRuntime internal constructor(
     /** Process owner closes only after all foreground operations have finished (also used by reopen tests). */
     override fun close() { attachments?.invalidate(); attachments=null; store?.close(); store = null; local = null; network = null; notificationLedger = null; attached = false }
     /** Internal synthetic-file foundation only; no picker/recorder/UI entry point. */
-    internal suspend fun prepareAttachment(source:java.io.InputStream,length:Long,kind:org.ghostcloak.attachments.AttachmentKind,seconds:Int):org.ghostcloak.attachments.AttachmentDescriptor {
+    internal suspend fun prepareAttachment(source:java.io.InputStream,length:Long,kind:org.ghostcloak.attachments.AttachmentKind,seconds:Int,filename:String?=null):org.ghostcloak.attachments.AttachmentDescriptor {
         use { check(attachmentAllowed()) }
-        return attachments!!.prepare(source,length,kind,seconds,::attachmentAllowed)
+        return attachments!!.prepare(source,length,kind,seconds,filename,::attachmentAllowed)
     }
+    internal suspend fun supportsAttachments(conversation:String):Boolean=use { it.attachmentPeer(conversation) }
+    internal fun cachedAttachments(conversation:String?) = if(conversation==null) emptySet() else
+        attachments?.cachedReferences().orEmpty().filter { it.substringBefore('/')==conversation }.map { it.substringAfter('/') }.toSet()
+    internal fun attachmentAvailableNow(conversation:String,message:String):Boolean = try {
+        canAutoSync && conversation in attachmentContacts && store?.let { LocalRepository(it,expiryClock).attachmentAvailable(conversation,message) } == true
+    } catch (_: Exception) { false }
+    internal suspend fun attachmentStillAvailable(conversation:String,message:String):Boolean=use { attachmentAvailableNow(conversation,message) }
+    internal suspend fun attachmentDuration(conversation:String):Int=use { it.policies()[conversation] ?: 0 }
+    internal suspend fun discardAttachment(id:String) { use { attachments?.entry(id)?.takeIf { it.references.isEmpty() }?.let { attachments?.remove(id) } } }
     internal suspend fun uploadAttachment(id:String):org.ghostcloak.attachments.AttachmentDescriptor {
         use { check(attachmentAllowed()) }
         return attachments!!.upload(id,network!!.blobClient(::attachmentAllowed,{check(attachmentAllowed())}),::attachmentAllowed)
     }
-    internal suspend fun sendPreparedAttachment(conversation:String,blob:String,peerSupportsAttachments:Boolean):Message=use { service ->
+    internal suspend fun sendPreparedAttachment(conversation:String,blob:String,peerSupportsAttachments:Boolean,requireNegotiatedSupport:Boolean=false):Message=use { service ->
         check(attachmentAllowed())
         val entry=attachments!!.entry(blob) ?: error("attachment_missing")
+        if (entry.references.isNotEmpty()) {
+            val reference=entry.references.single()
+            check(reference.substringBefore('/')==conversation)
+            return@use service.messages(conversation).singleOrNull { it.localId==reference.substringAfter('/') }
+                ?: error("attachment_already_sent")
+        }
         check(entry.state==org.ghostcloak.attachments.TransferState.UPLOADED && entry.upload)
-        network!!.sendAttachment(service,conversation,entry.descriptor,peerSupportsAttachments) {
+        network!!.sendAttachment(service,conversation,entry.descriptor,
+            if(requireNegotiatedSupport) service.attachmentPeer(conversation) else peerSupportsAttachments) {
             attachments!!.bind(blob,"$conversation/${it.localId}")
         }
     }

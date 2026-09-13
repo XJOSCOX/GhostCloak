@@ -1,5 +1,42 @@
 # Android Studio development
 
+## Phase 1I.3 — photos and documents
+
+Open `Android/` in Android Studio, select each physical phone, and Run the debug app to update in place. Debug defaults to staging; release retains the separate explicit/fail-safe origin configuration. **No backend deployment or database migration is required** beyond the owner's already-deployed 1I.2 foundation. Do not clear data, recreate identities, or reinstall from scratch.
+
+Before attaching, update **both phones** and have each send a short ordinary text (for example `Hi`). Support is learned only from authenticated padding in received text/policy frames. Unknown/legacy support blocks attachment sending while text continues working. A subsequent legacy or long non-advertising frame can withdraw support; exchange a short text again. Details and limits are in [ATTACHMENTS_DESIGN.md](ATTACHMENTS_DESIGN.md#phase-1i3-implementation--2026-09-12).
+
+### Physical two-device acceptance
+
+1. On A, open the conversation with B, tap **+ → Photo**, select one standard JPEG containing test GPS/device/timestamp metadata, review the normalized preview, then **Send**. A should show Queued on server, later Delivered. On B, confirm a placeholder appears without a body fetch, tap **Download**, then view the image inside Ghost Cloak. Close/reopen it from cached ciphertext. Confirm orientation and image quality. Delivery does not mean viewed.
+2. On A, use **+ → Document**, select a synthetic PDF or arbitrary binary file below 20 MiB, check the sanitized name/size, and Send. On B, explicitly Download, then **Open document → Choose viewer**. The chooser receives one read-only URI; no file is copied into Downloads. A viewer can retain its own copy. Immediate app lock can prevent external viewing because the lease is revoked on lock; do not disable security implicitly.
+3. Keep B offline while A sends a short-lived attachment. A's queued copy must remain without a countdown. Reconnect B, receive/ACK the descriptor, and confirm A starts its delivery-based timer then. On each side, expiry removes local access/cache; no Download/Open action should resurrect it. The server's fixed blob TTL remains independent of the private timer.
+4. With a fresh **test** contact, send an attachment into message requests. Before acceptance, confirm only a generic attachment indication and no filename/body/preview. Accept, then explicitly Download. Repeat local Delete and Clear; recipient delivery is not recalled, and replay must not restore deleted content.
+5. During picker return, preparation, upload, download and photo viewing, background/lock the app. Ordinary transfer/presentation must stop, scratch must disappear, notifications/Recents must remain generic/protected, and no attachment may auto-send after restart. Retry a failed upload while remaining foreground; it reuses immutable ciphertext. Test text sending after an attachment failure.
+6. Try malformed/animated/HDR/oversized photos and a provider with inaccurate/unknown size. No original photo should be sent as a fallback. Documents are capped by streamed bytes, not claimed size; archive/PDF contents are not parsed internally. Unsupported future video/audio descriptors have no download/open action.
+7. For a controlled staging privacy check, inspect the test blobs and schema through the existing approved SSH/operator connection. Filenames must be opaque, files ciphertext, and database/logs must contain no plaintext filename, MIME, attachment key, contact, message, timer or EXIF. Do not decrypt on the server or dump real users' records. Local JVM fixtures validate these properties against their isolated backend; they cannot prove the live VPS state.
+
+Local validation: **154 JVM tests passed** (95 test-support, 4 attachment-format, 31 debug-app and 24 release-app tests). The full Android run passed **92 app tests and 10 storage tests**; the updated cache-reopening test and eight photo/document tests also passed in focused reruns. Debug/release assembly and these Gradle runs used strict dependency verification. No physical phones were connected during local validation.
+
+Live staging acceptance also passed through `StagingTestAttachments.photoAndDocumentOverDeployedHttps`: two disposable clients exchanged compatibility-bearing text, uploaded a synthetic JPEG/document, sent E2EE descriptors, explicitly downloaded/verified exact bytes, and observed delivery ACKs. A read-only SSH audit found the expected minimal blob/quota columns, private service-owned directory/files, opaque names plus the expected `.owner` lock, and two server ciphertext files/DB digests/lengths matching local encryption. A bounded recent-journal check found neither the synthetic filename/content marker nor bearer material. Nothing was decrypted on the server, and no backend configuration/schema/deployment changed. This is controlled fixture evidence, not an audit of every historical log or a physical-device picker/viewer test. Test sessions were revoked; two disposable account records remain and the two encrypted blobs follow existing server TTL cleanup.
+
+The opt-in live test creates those disposable records and is excluded from ordinary JVM runs:
+
+```powershell
+$env:GHOSTCLOAK_STAGING_CONFIRM = 'isolated-staging'
+$env:GHOSTCLOAK_STAGING_ORIGIN = 'https://api.ghostcloak.org'
+.\gradlew.bat :test-support:stagingTest --tests org.ghostcloak.testing.StagingTestAttachments --dependency-verification strict
+```
+
+An optional `GHOSTCLOAK_STAGING_BLOB_AUDIT` local file records only synthetic blob IDs, ciphertext digests and lengths for private comparison; it contains no attachment keys or account credentials and must not be committed. The test is explicitly restricted to this staging host.
+
+```powershell
+.\gradlew.bat :test-support:test :attachments:test :app:testDebugUnitTest :app:testReleaseUnitTest :app:assembleDebug :app:assembleRelease --dependency-verification strict
+.\gradlew.bat :app:connectedDebugAndroidTest :storage:connectedDebugAndroidTest --dependency-verification strict
+```
+
+Phase 1I.4 still needs direct microphone recording, contextual permission, stop/preview/delete/send, voice-format decisions, app-lock-aware playback, background cancellation and voice-specific privacy tests. No voice/video/camera/captions/view-once/forwarding/export feature is enabled in 1I.3.
+
 ## Existing-device account recovery
 
 Deploy the reviewed backend and V004 first using [ACCOUNT_RECOVERY_DEPLOYMENT.md](../infrastructure/ACCOUNT_RECOVERY_DEPLOYMENT.md). The live attachment/V003 configuration must remain intact. No deployment was performed by this change.

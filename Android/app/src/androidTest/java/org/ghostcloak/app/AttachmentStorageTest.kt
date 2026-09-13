@@ -23,10 +23,12 @@ class AttachmentStorageTest {
             records.close(); records=EncryptedEndpointStore.open(context,name)
             store=AttachmentStore(records,root)
             assertEquals(TransferState.ENCRYPTED,store.entry(descriptor.id)!!.state)
+            var downloads=0
             val client=object:BlobTransferClient {
                 override suspend fun reserve(descriptor:AttachmentDescriptor)=BlobResult(complete=false,expiresAt=Long.MAX_VALUE)
                 override suspend fun upload(descriptor:AttachmentDescriptor,ciphertext:File)=BlobResult(complete=true,expiresAt=Long.MAX_VALUE)
                 override suspend fun download(descriptor:AttachmentDescriptor,ciphertext:File) {
+                    downloads++
                     File(root,"upload/${descriptor.id}").inputStream().use {input->ciphertext.outputStream().use {input.copyTo(it)}}
                 }
             }
@@ -37,6 +39,11 @@ class AttachmentStorageTest {
             try {verified.copyTo(ByteArrayOutputStream());fail()}catch(_:IllegalStateException){}
             verified.close()
             assertTrue(File(root,"scratch").listFiles().orEmpty().isEmpty())
+            assertEquals(1,downloads)
+            store.download(descriptor,"synthetic",client){true}.use { reopened ->
+                val copy=ByteArrayOutputStream();reopened.copyTo(copy);assertArrayEquals(fixture,copy.toByteArray())
+            }
+            assertEquals(1,downloads) // Cache reopening authenticates locally, without another GET.
             store.remove(descriptor.id); assertNull(store.entry(descriptor.id))
             assertTrue(File(root,"download").listFiles().orEmpty().isEmpty())
         } finally {records.close();root.deleteRecursively()}

@@ -20,6 +20,10 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         try { records.write(key, bytes) } finally { bytes.fill(0) }
     }
     fun hasIdentity() = records.transaction { records.read("local/device") != null }
+    fun attachmentPeer(id: String): Boolean = records.transaction { records.read("app/attachment-peer/$id")?.contentEquals(byteArrayOf(1)) == true }
+    fun attachmentPeer(id: String, supported: Boolean) = records.transaction {
+        if (supported) records.write("app/attachment-peer/$id", byteArrayOf(1)) else records.remove("app/attachment-peer/$id")
+    }
     fun contacts(): List<Contact> = records.transaction { records.keys("app/contact/").map { read<Contact>(it) ?: throw EndpointStorageFailure() } }
     fun contact(id: String) = contacts().firstOrNull { it.remoteDeviceId == id } ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
     fun save(contact: Contact) = records.transaction { put("app/contact/${contact.remoteDeviceId}", contact) }

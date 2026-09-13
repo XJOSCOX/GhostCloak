@@ -13,9 +13,13 @@ enum class DisappearingTimer(val seconds: Int, val label: String) {
 
 /** Application framing only: these bytes go inside the existing authenticated Signal envelope. */
 object ConversationPayload {
+    // Authenticated padding extension. Older decoders already ignore padding.
+    // Not user text: a quoted/copied advertisement can never establish support.
+    private val attachmentSupport = "GhostCloak/padding/attachments/v1!".toByteArray(Charsets.US_ASCII)
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
     private val magic = byteArrayOf(-1, 71, 67, 80)
-    class Content(val body: String, val seconds: Int, val control: Boolean, val attachment: ByteArray? = null) {
+    class Content(val body: String, val seconds: Int, val control: Boolean, val attachment: ByteArray? = null,
+        val supportsAttachments: Boolean = false) {
         override fun toString() = "Content(redacted)"
     }
     fun encodeAttachment(descriptor: org.ghostcloak.attachments.AttachmentDescriptor): ByteArray {
@@ -36,6 +40,8 @@ object ConversationPayload {
             val bytes = ByteArray(size).also { SecureRandom().nextBytes(it) }
             ByteBuffer.wrap(bytes).put(magic).put(1).put(if (control) 2 else 1).putShort(0)
                 .putInt(seconds).putInt(text.size).put(text)
+            if (bytes.size - 16 - text.size >= attachmentSupport.size)
+                attachmentSupport.copyInto(bytes, 16 + text.size)
             return bytes
         } finally { text.fill(0) }
     }
@@ -59,6 +65,8 @@ object ConversationPayload {
         if (length !in 0..MAX_TEXT || length > input.remaining() || (type == 2 && length != 0) ||
             ((16 + length + 255) / 256) * 256 != bytes.size) throw AppFailure(AppError.INVALID_TEXT)
         val text = ByteArray(length).also { input.get(it) }
+        val supports = input.remaining() >= attachmentSupport.size &&
+            ByteArray(attachmentSupport.size).also { input.get(it) }.contentEquals(attachmentSupport)
         if (type == 3) {
             try {
                 val descriptor=org.ghostcloak.attachments.AttachmentFormat.decode(text)
@@ -68,7 +76,7 @@ object ConversationPayload {
         }
         val body = try { text.decodeToString(throwOnInvalidSequence = true) } finally { text.fill(0) }
         if (type == 1) TextRules.encode(body).fill(0)
-        return Content(body, seconds, type == 2)
+        return Content(body, seconds, type == 2, supportsAttachments = supports)
     }
     fun policyText(seconds: Int) = if (seconds == 0) "Disappearing messages turned off"
         else "Disappearing messages set to ${DisappearingTimer.from(seconds).label}"

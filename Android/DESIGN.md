@@ -1,5 +1,9 @@
 # Messenger design
 
+## Photo and document attachments (Phase 1I.3)
+
+See [ATTACHMENTS_DESIGN.md](ATTACHMENTS_DESIGN.md#phase-1i3-implementation--2026-09-12) for the implemented picker, bounded image normalization, authenticated compatibility advertisement, explicit downloads and revocable viewer lifecycle. Media UI exposes only presentation summaries, never descriptor keys/capabilities. AppRuntime remains the single crypto/storage/network owner. A non-exported document provider grants a single short-lived read-only URI rather than exposing a directory. Text, delivery ACKs, expiry, background descriptor sync and generic notifications retain their existing meanings. No backend deployment or database migration is required for this slice.
+
 ## Directory availability and automatic prekey maintenance
 
 The pre-fix `MailboxService` Lookup branch had exactly one explicit 409: `prekeys_exhausted` when the target's stored bundle pool was empty. Username absence returned 404. Missing device/prekey rows would fail as server errors, not this 409; bundle shape/duplicate/signed-key conflicts are checked during registration/publication, not a second lookup validation step. The transport previously discarded the response error code as `server_rejected`. Thus the observed LOOKUP 409 is explained by this source path, and an isolated test reproduces pool exhaustion; the physical server's records were not inspected or changed.

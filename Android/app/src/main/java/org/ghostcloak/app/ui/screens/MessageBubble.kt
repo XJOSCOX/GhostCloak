@@ -15,7 +15,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-@Composable fun MessageBubble(message: Message, onDelete: () -> Unit) {
+@Composable fun MessageBubble(message: Message, onDelete: () -> Unit, content: (@Composable () -> Unit)? = null) {
     val outgoing = message.direction == Direction.OUTGOING
     var menu by remember { mutableStateOf(false) }
     val time = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(message.timestamp))
@@ -27,7 +27,7 @@ import java.time.format.DateTimeFormatter
                 modifier=Modifier.widthIn(max=GhostDimensions.previewWidth).combinedClickable(onClick={},onLongClick={menu=true})
                     .semantics { customActions=listOf(CustomAccessibilityAction("Delete from this device") { onDelete();true }) }) {
                 Column(Modifier.padding(horizontal=GhostDimensions.fieldCorner,vertical=GhostDimensions.controlGap),verticalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
-                    Text(message.body,style=MaterialTheme.typography.bodyLarge)
+                    if(content!=null) content() else Text(message.body,style=MaterialTheme.typography.bodyLarge)
                     Text(time,Modifier.align(Alignment.End),style=MaterialTheme.typography.labelSmall,color=LocalContentColor.current.copy(alpha=GhostEffects.SecondaryContentAlpha))
                 }
             }

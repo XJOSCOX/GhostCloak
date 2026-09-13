@@ -69,8 +69,18 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     }
     suspend fun messages(id: String) = action { repository.contact(id); repository.messages(id) }
     suspend fun messagesForUi(id:String) = action {
-        repository.contact(id); repository.messages(id).filterNot { repository.hasAttachment(id,it.localId) }
+        val contact = repository.contact(id)
+        repository.messages(id).map { message ->
+            repository.attachment(id,message.localId)?.let { descriptor ->
+                val summary = if (contact.request) AttachmentSummary(false,"Attachment",0)
+                    else AttachmentSummary(descriptor.kind == org.ghostcloak.attachments.AttachmentKind.IMAGE,
+                        descriptor.filename ?: if (descriptor.kind == org.ghostcloak.attachments.AttachmentKind.IMAGE) "Photo" else "Attachment",
+                        descriptor.plaintextLength, descriptor.kind in setOf(org.ghostcloak.attachments.AttachmentKind.IMAGE,org.ghostcloak.attachments.AttachmentKind.DOCUMENT))
+                message.copy(body = if (contact.request) "Attachment" else if (summary.photo) "Photo" else summary.filename, attachment = summary)
+            } ?: message
+        }
     }
+    suspend fun attachmentPeer(id: String) = action { networkAllowed(id); repository.attachmentPeer(id) }
     suspend fun sendNetwork(id:String,body:String,outbox:DurableOutbox):Message=action {
         enqueueNetwork(id, body, repository.policy(id), false, outbox)
     }
@@ -163,6 +173,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             if (content.control && (contacts.none { it.remoteDeviceId == contact.remoteDeviceId } || contact.request))
                 throw AppFailure(AppError.BLOCKED)
             repository.save(contact)
+            // A later legacy message withdraws the claim (for example after a downgrade).
+            if (content.attachment == null) repository.attachmentPeer(contact.remoteDeviceId,content.supportsAttachments)
             val now = repository.clock.now()
             repository.saveAccepted(Message(envelope.envelopeId,contact.remoteDeviceId,Direction.INCOMING,
                 if (content.control) ConversationPayload.policyText(content.seconds) else content.body,
@@ -216,6 +228,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         repository.contact(id)
         val pending = repository.pending(id) ?: throw AppFailure(AppError.FRESH_CARD_REQUIRED)
         engine.trustNewIdentity(id, expected)
+        repository.attachmentPeer(id,false)
         // Explicit approval only. No auto-verification; the engine still validates the signed bundle.
         engine.reestablishSession(ContactCardCodec.decode(pending).bundle(), expected)
         repository.card(id, pending); repository.clearPending(id)

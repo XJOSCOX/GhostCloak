@@ -80,7 +80,7 @@ import org.ghostcloak.app.ui.components.*
                         ConversationScreen(state, contact, { nav.popBackStack() }, { nav.navigate("security/$id") },
                             { text, success -> model.send(id, text, success) }, { model.delete(id, it) }, model::connectNetwork, model::syncNetwork,
                             { model.acceptRequest(id) }, { model.deleteRequest(id); nav.popBackStack() }, { model.clearConversation(id) },
-                            { model.setDisappearing(id, it) })
+                            { model.setDisappearing(id, it) }, { model.refresh() })
                     }
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable

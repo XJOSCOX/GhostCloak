@@ -21,7 +21,7 @@ import org.ghostcloak.messaging.*
 import org.ghostcloak.protocol.EnvelopeCodec
 
 @Composable fun ConversationScreen(state: AppState, status: ContactStatus, back: () -> Unit,
-    security: () -> Unit, send: (String, () -> Unit) -> Unit, delete: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, accept: () -> Unit = {}, reject: () -> Unit = {}, clear: () -> Unit = {}, disappearing: (Int) -> Unit = {}) {
+    security: () -> Unit, send: (String, () -> Unit) -> Unit, delete: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, accept: () -> Unit = {}, reject: () -> Unit = {}, clear: () -> Unit = {}, disappearing: (Int) -> Unit = {}, refresh: () -> Unit = {}) {
     var draft by remember(status.contact.remoteDeviceId) { mutableStateOf("") }
     var rejectedPaste by remember { mutableStateOf(false) }
     var actions by remember { mutableStateOf(false) }
@@ -77,7 +77,9 @@ import org.ghostcloak.protocol.EnvelopeCodec
                             Text(if (message.state == MessageState.PENDING) "Update pending · applies locally" else "Update not delivered · choose the timer again to retry",
                                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    else MessageBubble(message,onDelete={deleting=message.localId})
+                    else if(message.attachment!=null) MessageBubble(message,onDelete={deleting=message.localId}) {
+                        AttachmentMessage(message,active,message.localId in state.cachedAttachments,refresh)
+                    } else MessageBubble(message,onDelete={deleting=message.localId})
                 }
             }
         }
@@ -95,6 +97,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
             ErrorNotice(state.error, important = state.errorImportant)
             if (size > ConversationPayload.MAX_TEXT || rejectedPaste) Text("Too large. Maximum 16,368 UTF-8 bytes; text was not sent.", color = MaterialTheme.colorScheme.error)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(GhostDimensions.controlGap)) {
+                if(state.networkConfigured && !state.demo) AttachmentComposer(status.contact.remoteDeviceId,active && !state.loading,refresh)
                 OutlinedTextField(draft, onValueChange = { rejectedPaste = it.length > 65536; if (!rejectedPaste) draft = it },
                     enabled = active && !state.loading, modifier = Modifier.weight(1f), placeholder = { Text("Write a message…") }, maxLines = 5,
                     colors=OutlinedTextFieldDefaults.colors(unfocusedBorderColor=androidx.compose.ui.graphics.Color.Transparent,unfocusedContainerColor=MaterialTheme.colorScheme.surface,focusedContainerColor=MaterialTheme.colorScheme.surface),

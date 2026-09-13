@@ -15,6 +15,44 @@ import java.nio.file.Files
 import java.time.*
 
 class AttachmentTest {
+    @Test fun authenticatedPaddingEstablishesSupportAndAttachmentUiDoesNotExposeRequestMetadata()=runBlocking {
+        Fixture().use { f ->
+            val a=f.person("alice");val b=f.person("bob")
+            NetworkAccount(a.client,a.state).connect("bob",a.engine)
+            val ar=LocalRepository(a.records);val br=LocalRepository(b.records)
+            ar.save(Contact("synthetic-contact",b.registration.accountId,"bob",b.registration.deviceId))
+            val sender=ConversationService(a.engine,ar);sender.open()
+            val receiver=ConversationService(b.engine,br);receiver.open()
+            assertFalse(sender.attachmentPeer(b.registration.deviceId))
+            val outbox=DurableOutbox(a.records,a.engine,NetworkMailboxTransport(a.client,a.state))
+            sender.sendNetwork(b.registration.deviceId,"hello",outbox)
+            val text=b.client.call(ApiRequest.Fetch(includeSenders=true)).deliveries.single()
+            receiver.acceptNetwork(EnvelopeCodec.decode(text.encryptedEnvelope),text.sender)
+            assertTrue(br.attachmentPeer(a.registration.deviceId))
+            b.client.call(ApiRequest.Ack(listOf(text.serverMessageId)))
+            val source=byteArrayOf(0,1,2,3,-1)
+            val descriptor=a.store.prepare(source.inputStream(),source.size.toLong(),AttachmentKind.DOCUMENT,0,"private-document.pdf"){true}
+            assertEquals("private-document.pdf",a.store.entry(descriptor.id)!!.descriptor.filename)
+            a.store.upload(descriptor.id,a.bulk){true}
+            sender.sendAttachment(b.registration.deviceId,descriptor,outbox,true)
+            val attachment=b.client.call(ApiRequest.Fetch(includeSenders=true)).deliveries.single()
+            receiver.acceptNetwork(EnvelopeCodec.decode(attachment.encryptedEnvelope),attachment.sender)
+            val before=receiver.messagesForUi(a.registration.deviceId).last()
+            assertEquals("Attachment",before.attachment!!.filename);assertEquals(0L,before.attachment!!.bytes)
+            try { receiver.attachment(a.registration.deviceId,before.localId);fail() } catch (_:AppFailure) {}
+            receiver.acceptRequest(a.registration.deviceId)
+            val reopened=ConversationService(b.engine,LocalRepository(b.records));reopened.open()
+            assertTrue(reopened.attachmentPeer(a.registration.deviceId))
+            val after=reopened.messagesForUi(a.registration.deviceId).last()
+            assertEquals("private-document.pdf",after.attachment!!.filename)
+            assertFalse(File(b.directory,"download").listFiles().orEmpty().any())
+            // UI serialization does not persist presentation fields or change existing message schema.
+            assertFalse(NetworkCodec.encode(after).toString(Charsets.ISO_8859_1).contains("capability"))
+            b.store.download(reopened.attachment(a.registration.deviceId,after.localId)!!,"message",b.bulk){true}.use {
+                val copied=ByteArrayOutputStream();it.copyTo(copied);assertArrayEquals(source,copied.toByteArray())
+            }
+        }
+    }
     @Test fun revokingAccessCancelsActiveTransferBeforePlaintextIsPublished()=runBlocking {
         Fixture().use { f ->
             val a=f.person("alice")

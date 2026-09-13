@@ -15,9 +15,15 @@ data class ContactStatus(val contact: Contact, val identity: RemoteIdentityStatu
 @Serializable
 data class Message(val localId: String, val conversationId: String, val direction: Direction,
     val body: String, val timestamp: Long, val state: MessageState, val envelopeId: String? = null,
-    val disappearingSeconds: Int = 0, val expiry: ExpiryDeadline? = null, val policyEvent: Boolean = false) {
+    val disappearingSeconds: Int = 0, val expiry: ExpiryDeadline? = null, val policyEvent: Boolean = false,
+    @kotlinx.serialization.Transient val attachment: AttachmentSummary? = null) {
     val activeExpiry: ExpiryDeadline? get() = if (direction == Direction.OUTGOING && state != MessageState.DELIVERED) null else expiry
     override fun toString() = "Message(redacted)"
+}
+
+/** Presentation only; never contains a blob capability, key, or remote identifier. */
+data class AttachmentSummary(val photo: Boolean, val filename: String, val bytes: Long, val supported: Boolean = true) {
+    override fun toString() = "AttachmentSummary(redacted)"
 }
 enum class AppError { INVALID_USERNAME, INVALID_CARD, DUPLICATE_CONTACT, AMBIGUOUS_IDENTITY, EMPTY_MESSAGE,
     MESSAGE_TOO_LARGE, INVALID_TEXT, CONTACT_UNAVAILABLE, BLOCKED, LOCAL_CAPACITY, FRESH_CARD_REQUIRED }

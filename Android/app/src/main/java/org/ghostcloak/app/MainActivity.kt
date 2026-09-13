@@ -21,8 +21,8 @@ class MainActivity : FragmentActivity() {
     private var chatsRequest by mutableIntStateOf(0)
     private val runtime get() = (application as org.ghostcloak.app.application.GhostApplication).runtime
     private val appLock get() = (application as org.ghostcloak.app.application.GhostApplication).appLock
-    override fun onStart() { appLock.start(); super.onStart(); runtime.notificationActivityVisible(true) }
-    override fun onStop() { appLock.stop(isChangingConfigurations); runtime.notificationActivityVisible(false); super.onStop() }
+    override fun onStart() { appLock.start(); super.onStart(); runtime.notificationActivityVisible(true); (application as org.ghostcloak.app.application.GhostApplication).media.start() }
+    override fun onStop() { (application as org.ghostcloak.app.application.GhostApplication).media.stop(); appLock.stop(isChangingConfigurations); runtime.notificationActivityVisible(false); super.onStop() }
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)

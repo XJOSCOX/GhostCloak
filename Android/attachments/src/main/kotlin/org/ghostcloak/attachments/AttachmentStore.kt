@@ -54,6 +54,10 @@ class AttachmentStore(private val records: EndpointRecords, root: File,
         records.read(key(id))?.let { bytes -> try { NetworkCodec.decode<TransferEntry>(bytes,8192).also { it.descriptor.validate() } } finally { bytes.fill(0) } }
     }
     private fun entries()=records.transaction { records.keys("attachment/transfer/").mapNotNull { entry(it.removePrefix("attachment/transfer/")) } }
+    fun cachedReferences(): Set<String> = entries().filter {
+        it.state in setOf(TransferState.READY,TransferState.UPLOADED) &&
+            (file(downloads,it.descriptor.id).exists() || (it.upload && file(uploads,it.descriptor.id).exists()))
+    }.flatMap { it.references }.toSet()
     private fun update(entry:TransferEntry,state:TransferState) = records.transaction {
         val current=this.entry(entry.descriptor.id) ?: error("attachment_unavailable")
         TransferEntry(entry.descriptor,state,current.upload,entry.createdAt,current.references).also(::save)
@@ -69,14 +73,18 @@ class AttachmentStore(private val records: EndpointRecords, root: File,
         check(generation.get()==expected && allowed()) { "attachment_unavailable" }
     }
     suspend fun prepare(source:InputStream,length:Long,kind:AttachmentKind,seconds:Int,
-        allowed:()->Boolean):AttachmentDescriptor=transfer {
+        filename: String? = null, allowed:()->Boolean):AttachmentDescriptor=transfer {
         val epoch=generation.get(); checkpoint(epoch,allowed)
         require(entries().size<128)
         val temporary=file(uploads,AttachmentFormat.newId())
         val context=currentCoroutineContext()
         emit(AttachmentEvent.ATTACH_ENCRYPT_START)
         try {
-            val descriptor=source.use { AttachmentFormat.encrypt(it,temporary,length,kind,seconds) { context.ensureActive(); checkpoint(epoch,allowed) } }
+            val raw=source.use { AttachmentFormat.encrypt(it,temporary,length,kind,seconds) { context.ensureActive(); checkpoint(epoch,allowed) } }
+            val descriptor=AttachmentDescriptor(id=raw.id,capability=raw.capability,key=raw.key,digest=raw.digest,
+                plaintextLength=raw.plaintextLength,paddedLength=raw.paddedLength,ciphertextLength=raw.ciphertextLength,
+                kind=raw.kind,disappearingSeconds=raw.disappearingSeconds,
+                filename=filename?.let(AttachmentFormat::sanitizeFilename)).also { it.validate() }
             checkpoint(epoch,allowed)
             Files.move(temporary.toPath(),file(uploads,descriptor.id).toPath(),StandardCopyOption.ATOMIC_MOVE)
             records.transaction { checkpoint(epoch,allowed); save(TransferEntry(descriptor,TransferState.ENCRYPTED,true,System.currentTimeMillis())) }
@@ -106,7 +114,7 @@ class AttachmentStore(private val records: EndpointRecords, root: File,
         val epoch=generation.get(); checkpoint(epoch,allowed)
         val safe=AttachmentFormat.decode(AttachmentFormat.encode(descriptor))
         require(reference.length in 1..256)
-        require(downloads.listFiles().orEmpty().sumOf { it.length() }+safe.ciphertextLength<=100L*1048576)
+        require(downloads.listFiles().orEmpty().filter { it.name!=safe.id }.sumOf { it.length() }+safe.ciphertextLength<=100L*1048576)
         require(directory.usableSpace>=safe.ciphertextLength+safe.paddedLength+1048576)
         val previous=entry(safe.id)
         if(previous!=null) require(previous.descriptor.digest.contentEquals(safe.digest) && previous.descriptor.key.contentEquals(safe.key))
@@ -116,7 +124,14 @@ class AttachmentStore(private val records: EndpointRecords, root: File,
         val plaintext=file(scratch,AttachmentFormat.newId())
         val context=currentCoroutineContext()
         try {
-            client.download(safe,ciphertext); checkpoint(epoch,allowed)
+            val uploadCache=file(uploads,safe.id)
+            if (!ciphertext.exists() && saved.upload && previous?.references?.isNotEmpty()==true && uploadCache.exists())
+                Files.copy(uploadCache.toPath(),ciphertext.toPath())
+            if (!ciphertext.exists() || ciphertext.length()!=safe.ciphertextLength ||
+                !java.security.MessageDigest.isEqual(AttachmentFormat.digest(ciphertext),safe.digest)) {
+                ciphertext.delete();client.download(safe,ciphertext)
+            }
+            checkpoint(epoch,allowed)
             saved=update(saved,TransferState.VERIFYING)
             AttachmentFormat.decrypt(safe,ciphertext,plaintext) { context.ensureActive(); checkpoint(epoch,allowed) }
             records.transaction { checkpoint(epoch,allowed); check(entry(safe.id)!=null); update(saved,TransferState.READY) }

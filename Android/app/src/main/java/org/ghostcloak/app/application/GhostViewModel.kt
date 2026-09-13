@@ -14,6 +14,7 @@ import org.ghostcloak.messaging.*
 import org.ghostcloak.transport.TransportFailure
 
 data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? = null,
+    val cachedAttachments: Set<String> = emptySet(),
     val disappearingPolicies: Map<String, Int> = emptyMap(),
     val unreadExpiries: Map<String, List<ExpiryDeadline>> = emptyMap(),
     val unreadCount: Int = 0, val unreadByConversation: Map<String, Int> = emptyMap(), val contacts: List<ContactStatus> = emptyList(), val previews: Map<String, Message> = emptyMap(), val messages: List<Message> = emptyList(),
@@ -60,6 +61,7 @@ class GhostViewModel internal constructor(application: Application, private val 
                     selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.markRead(it) }
                     val unread = if (identity != null) active.unreadCounts() else emptyMap()
                     mutable.value = mutable.value.copy(identity = identity, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
+                        cachedAttachments = runtime.cachedAttachments(selected),
                         disappearingPolicies = if (identity != null) active.policies() else emptyMap(),
                         unreadExpiries = if (identity != null) active.unreadExpiries() else emptyMap(),
                         previews = contacts.mapNotNull { c -> active.messagesForUi(c.contact.remoteDeviceId).lastOrNull()?.let { c.contact.remoteDeviceId to it } }.toMap(),

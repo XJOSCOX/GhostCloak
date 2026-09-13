@@ -1,6 +1,52 @@
 # Encrypted attachments and voice notes
 
-Status: Phase 1I.2 foundation implemented locally, 2026-09-12. The original audit below describes the pre-attachment baseline at `5b793f5`; this status section distinguishes implemented foundation from later media features. No remote deployment has occurred.
+## Phase 1I.3 implementation — 2026-09-12
+
+Photo/document UI now uses the Phase 1I.2 foundation. The owner reports that foundation is deployed. **This phase requires no backend deployment, API expansion or database migration.** Deployment statements below describe the historical foundation delivery.
+
+### Selection, normalization and sending
+
+The composer selects one Photo through AndroidX `PickVisualMedia(ImageOnly)` (system Photo Picker with system/SAF fallback) or one Document through `OpenDocument` / `ACTION_OPEN_DOCUMENT`. No broad media/storage permissions, persistent URI grants, scanner, camera, video or microphone are added. Actual stream bytes, not provider-reported sizes, are capped while copying into random private files under credential-encrypted `noBackupFilesDir/media-presentation`.
+
+Actual caps preserve the foundation: **20 MiB document**, **20 MiB photo source**, **10 MiB normalized photo**, **32,000,000 source pixels**, **4096-pixel normalized long edge**, preserved aspect ratio, no upscale. A 20 MiB document encrypts to 20 MiB + 360 bytes; a 10 MiB photo to 10 MiB + 200 bytes, below the deployed 26 MiB cap. The suggested 25 MiB document cap is intentionally not adopted.
+
+Initial images are standard JPEG and 8-bit non-paletted PNG. Bounded container inspection rejects animation, high-bit-depth/profile/HDR PNG chunks, unsupported signatures and multi-picture/gain-map JPEG markers. Framework ImageDecoder checks dimensions before full decode, rejects animated/wide-gamut/gain-map images and partial decode, applies EXIF orientation, and downscales. Re-encoding pixels produces JPEG quality 85 or PNG for alpha, without copying GPS, make/model, timestamps, EXIF or XMP. Unsupported inputs are rejected, never sent unchanged. Not every JPEG/PNG variant is supported.
+
+Documents retain exact bytes and embedded metadata; they are never internally decompressed or parsed. Display filenames are sanitized by the existing 128-UTF-8-byte rules (no path separators, controls or bidi overrides; generic fallback). Names stay in the encrypted descriptor/journal, never local paths or HTTP metadata. MIME/extensions/provider size claims are not trusted.
+
+Confirm Send freezes the current disappearing duration, streams encryption through the existing store, uploads immutable ciphertext, then enqueues the authenticated descriptor. Upload failure is local to the attachment presentation and sends no descriptor. Retry reuses finalized ciphertext, and an existing journal/message binding prevents a second enqueue after uncertain completion. Plaintext is deleted after encryption, cancellation, background or failure. Process death preserves journal/ciphertext/outbox but does not restore plaintext drafts or silently send unconfirmed selections. Unbound encrypted drafts retain the foundation's 24-hour local orphan cleanup.
+
+### Peer compatibility
+
+New text/policy frames advertise support using the fixed 34-byte `GhostCloak/padding/attachments/v1!` marker at the beginning of spare **existing application padding**, inside authenticated Signal ciphertext and outside the text length. Frame version/type/canonical size and text remain unchanged. Older decoders already ignore padding. There is no new unsupported probe, server-visible capability or endpoint.
+
+Only authenticated, committed padding establishes support. Quoting the marker in text cannot do so. The per-device encrypted record defaults absent, clears on identity replacement, and is withdrawn by later non-advertising text/policy messages, including a long frame without sufficient spare padding. Existing request/block/changed-key gates still apply; capability is not identity verification. A downgrade without any later received message cannot be remotely detected.
+
+**Rollout: update both phones, then each sends a short text such as `Hi`.** Each can then send attachments to the other. Unknown support shows the update/exchange-text guidance and leaves text messaging functional. No username/account-age inference or re-registration occurs.
+
+### Receiving, presentation and lifecycle
+
+Incoming messages show safe placeholders. Unaccepted senders show only a generic attachment indicator; no filename, body fetch or parser is invoked. Accepted, unblocked, unchanged-identity contacts may explicitly Download. Full ciphertext digest, AEAD and finality checks complete before photo decoding or document access. Cached ciphertext can be reopened without another HTTP download, with full authentication again. Unsupported future media kinds have no download/open UI.
+
+Photos display in a secure in-app preview dialog. No plaintext thumbnails are uploaded, saved to Gallery or persistently cached. Bitmap references are dropped on close/background/lock; this is not a promise of physical RAM erasure. Private file scratch is deleted on close, cancellation, background, lock and startup. Expiry/delete/block checks revoke active presentation through the existing cleanup cadence and deny subsequent access immediately.
+
+Documents require explicit Open and a warning that another app may retain a copy. A non-exported `AttachmentViewerProvider` maps only one random, short-lived URI in memory, **not a filesystem directory**. Unknown URIs and writes fail. The URI grant is read-only, exposes a generic display name, and uses the Android chooser. A bounded five-byte PDF signature supplies a viewer-routing hint; everything else uses octet-stream. This is not document validation and does not trust an extension.
+
+The explicit external-view lease lasts at most 60 seconds and is revoked on return, lock, logout, deletion or expiry. Ordinary transfers/presentation cancel on background; only the explicitly authorized external-view lease may survive background while app lock remains unlocked. Immediate app lock may prevent a viewer from opening; it is not bypassed. URI revocation and unlinking cannot retract already-open external file descriptors or copies. No Downloads copy or general share/export action is added.
+
+Delivery still means descriptor commit/ACK, not body download/open. Incoming expiry begins on descriptor commit; outgoing expiry begins only at observed delivery ACK. A message can expire before its body is downloaded. Local delete remains local-only and preserves required hidden outbox/replay evidence. Notifications remain generic. WorkManager fetches descriptors only. View once remains unimplemented and requires its future separate durable OPENING gate; download is not consumption.
+
+### Validation / next phase
+
+DEVELOPMENT.md records validation and physical steps. Local tests cover authenticated compatibility, request gates, byte-preserving document transfer, EXIF/orientation, bounded photo decoding/copying, corruption before decoding, provider path/write denial, replay, renewal, deletion and expiry. Local fixture privacy checks do not establish the state of a live VPS; physical picker/viewer and staging inspection remain distinct acceptance checks.
+
+Phase 1I.4 still requires microphone permission-on-tap, explicit bounded recording, stop/preview/delete/send, no background recording, format selection, local gated playback and voice-specific lifecycle/privacy tests. Video, captions, forwarding, view once and remote deletion remain outside this phase.
+
+Platform references: [Photo Picker and fallback](https://developer.android.com/training/data-storage/shared/photo-picker), [ImageDecoder](https://developer.android.com/reference/android/graphics/ImageDecoder).
+
+## Historical Phase 1I.2 baseline
+
+The following foundation-delivery record and original architecture audit are historical; the Phase 1I.3 implementation above supersedes their statements about missing photo/document UI. At foundation delivery, implementation was local and remote deployment had not been performed by the agent. The original audit describes the pre-attachment baseline at `5b793f5`.
 
 ### Implemented in 1I.2
 

@@ -136,7 +136,9 @@ class AppRuntime internal constructor(
     suspend fun <T> use(block: suspend (ConversationService) -> T): T = withContext(Dispatchers.IO) {
         mutex.withLock {
             if (local == null) {
-                val records = EncryptedEndpointStore.open(context, endpointName)
+                val records = LocalStateDiagnostics.open(context.noBackupFilesDir, endpointName, apiOrigin) {
+                    EncryptedEndpointStore.open(context, endpointName)
+                }
                 try {
                 val engine=SignalProtocolEngine(records)
                 val cooldown = if (networkConfigured) storedFetchCooldown(records, java.net.URI(apiOrigin).host,

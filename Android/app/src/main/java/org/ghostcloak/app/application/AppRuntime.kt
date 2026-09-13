@@ -58,6 +58,7 @@ class AppRuntime internal constructor(
     }
     internal fun revokeAttachmentAccess() { attachments?.invalidate() }
     private fun attachmentAllowed() = canAutoSync && foreground && activityVisible && attachmentAccess()
+    internal val attachmentTransfersAllowed get() = attachmentAllowed()
     private fun cancelNotificationSafely() { try { notifications.cancel() } catch (_: Exception) { } }
     private fun reconcileNotifications() {
         if (notifications === NoLocalNotifications) return

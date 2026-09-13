@@ -1,5 +1,14 @@
 # Messenger design
 
+## Inline photo presentation (Phase 1I.3.1)
+
+Accepted, unlocked foreground conversation photos auto-fetch through the existing
+authenticated attachment path and render inline only after complete verification.
+Documents stay manual. See [ATTACHMENTS_DESIGN.md](ATTACHMENTS_DESIGN.md#phase-1i31--inline-photos-and-private-cache-2026-09-13)
+for the 250 MiB photo admission limit, preservation of irreplaceable encrypted
+history, redundant-copy-only LRU eviction, and bounded ephemeral plaintext previews.
+No backend, schema, wire-format, crypto, notification or background-sync changes.
+
 ## Photo and document attachments (Phase 1I.3)
 
 See [ATTACHMENTS_DESIGN.md](ATTACHMENTS_DESIGN.md#phase-1i3-implementation--2026-09-12) for the implemented picker, bounded image normalization, authenticated compatibility advertisement, explicit downloads and revocable viewer lifecycle. Media UI exposes only presentation summaries, never descriptor keys/capabilities. AppRuntime remains the single crypto/storage/network owner. A non-exported document provider grants a single short-lived read-only URI rather than exposing a directory. Text, delivery ACKs, expiry, background descriptor sync and generic notifications retain their existing meanings. No backend deployment or database migration is required for this slice.

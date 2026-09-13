@@ -40,7 +40,18 @@ import org.ghostcloak.messaging.Message
             DropdownMenuItem(text={Text("Document")},onClick={menu=false;document.launch(arrayOf("*/*"))})
         }
     }
-    if(state.conversation==conversation) AlertDialog(onDismissRequest=owner::cancel,
+    if(state.conversation==conversation && state.photo && state.message!=null && state.ready) {
+        androidx.compose.ui.window.Dialog(onDismissRequest=owner::cancel,
+            properties=DialogProperties(usePlatformDefaultWidth=false,securePolicy=SecureFlagPolicy.SecureOn)) {
+            Surface(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+                    TextButton(onClick=owner::cancel) { Text("Close photo") }
+                    state.preview?.let { Image(it.asImageBitmap(),"Photo",Modifier.fillMaxSize(),
+                        contentScale=androidx.compose.ui.layout.ContentScale.Fit) }
+                }
+            }
+        }
+    } else if(state.conversation==conversation && !state.sending) AlertDialog(onDismissRequest=owner::cancel,
         properties=DialogProperties(securePolicy=SecureFlagPolicy.SecureOn),
         title={Text(if(state.photo) "Photo" else "Document")},
         text={ Column(verticalArrangement=Arrangement.spacedBy(GhostDimensions.medium)) {
@@ -69,9 +80,10 @@ import org.ghostcloak.messaging.Message
 @Composable fun AttachmentMessage(message: Message, enabled: Boolean, cached: Boolean, refresh: ()->Unit) {
     val owner=(LocalContext.current.applicationContext as GhostApplication).media
     val summary=message.attachment ?: return
+    if(summary.photo && summary.supported) { InlinePhotoMessage(message,enabled); return }
     Column {
-        Text(if(summary.photo) "Photo" else summary.filename,style=MaterialTheme.typography.bodyLarge)
-        if(summary.bytes>0) Text("${(summary.bytes+1023)/1024} KiB",style=MaterialTheme.typography.labelSmall)
+        Text(if(enabled) summary.filename else "Attachment",style=MaterialTheme.typography.bodyLarge)
+        if(enabled && summary.bytes>0) Text("${(summary.bytes+1023)/1024} KiB",style=MaterialTheme.typography.labelSmall)
         if(enabled && summary.supported) TextButton(onClick={owner.download(message.conversationId,message.localId,summary.photo,summary.filename,refresh)}) {
             Text(if(cached) { if(summary.photo) "View photo" else "Open document" } else "Download",color=LocalContentColor.current)
         } else Text(if(summary.supported) "Attachment unavailable until this conversation is accepted and secure." else "Unsupported attachment type.",style=MaterialTheme.typography.bodySmall)

@@ -1,5 +1,95 @@
 # Encrypted attachments and voice notes
 
+## Phase 1I.3.1 — inline photos and private cache (2026-09-13)
+
+This client-only slice supersedes the historical manual-photo-download policy below.
+No backend endpoint, wire descriptor, cryptographic format, SQL schema or migration
+changes. No new permissions, notification content or WorkManager behavior.
+
+### Automatic retrieval and presentation
+
+Composed photo rows in the foreground conversation automatically retrieve encrypted
+blobs only for accepted, unblocked contacts without a changed identity and with an
+active conversation session. The runtime additionally requires the existing account
+connection eligibility, foreground/visible Activity, unlocked content, a valid
+authenticated descriptor, and a still-existing/unexpired message. Requests remain
+generic until acceptance; documents remain explicit Download/Open. Future kinds and
+view-once do not inherit this behavior. Photos are **auto-fetched**, not displayed
+without network retrieval. Offline failure is local to the row; retry does not resend
+the message or change descriptor delivery. Existing auth renewal and cooldown apply.
+
+Rows show waiting/fetching/preparing verified photo/ready or a compact unavailable
+retry action. The store completes digest, AEAD and finality verification before any
+photo parser runs. Decoding then makes an aspect-preserving inline image (at most a
+512-pixel long edge). At most 12 ephemeral previews are retained per presentation
+owner, and automatic loads serialize. Scrolling a row out of composition releases
+its preview and cancels its work. There is no persistent thumbnail cache.
+
+Tap opens a secure full-screen in-app photo viewer, authenticated again from local
+ciphertext when available. It has no export, external viewer or Gallery action.
+The sender's sanitized local preview stays inline while encryption/upload proceeds;
+once the descriptor is queued, its own encrypted upload file supplies presentation
+without a GET or a duplicate download-cache copy. Transfer state is separate from
+PENDING / SERVER_ACCEPTED / DELIVERED; ACK still means descriptor stored, never viewed.
+
+### Encrypted cache policy
+
+The **250 MiB photo admission limit** counts IMAGE ciphertext in both private upload
+and download directories. Documents keep their separate 100 MiB downloaded-cache
+limit. Existing encrypted SQLCipher transfer records and random blob filenames are
+reused, under the endpoint's credential-encrypted `noBackupFilesDir`. No new record
+fields, plaintext indexes, paths derived from filenames, or database migrations.
+
+Referenced non-disappearing photos have **no local age TTL**. Expiry/local delete
+purges them through the existing durable reference/delete journal, except ciphertext
+still required by a pending outgoing delivery. That retained transport copy is not
+available through deleted-message UI. The 24-hour rule applies only to unbound orphan
+drafts, never normal chat history. The existing 128-draft preparation limit now
+counts unbound uploads rather than received history records.
+
+Before admitting additional photo ciphertext, evict least-recently-used **redundant
+download copies only**, and only when the corresponding referenced upload file has
+the correct length and digest. Never evict the upload, journal or only history copy.
+File modification time is only an eviction-order hint, not an expiry or security
+decision. Outgoing presentation now avoids making these redundant copies at all;
+older copies can be reclaimed. Low free disk space also refuses admission.
+
+The current recipient GET response provides no trustworthy remaining blob TTL, and
+descriptor receipt time does not establish upload time. Therefore **no unique
+received photo is assumed safely re-fetchable**. If redundant copies cannot free
+enough space, new photos show local storage-full/retry guidance. The user can delete
+local photo messages/clear a conversation to free space. Existing history remains
+readable even if an older installation is already above the admission limit; no
+destructive forced shrink occurs. This explicitly favors retained history over
+silently evicting potentially irreplaceable ciphertext. A future opt-in cache manager
+can offer informed deletion, not a guessed server TTL. This is not unlimited storage:
+new photo admission stops at the cap; transient preparation/quarantine additionally
+needs bounded working space and pending transport data is never sacrificed.
+
+### Plaintext lifecycle and remaining policy
+
+VerifiedAttachment owns private quarantine; its close deletes it. Inline decode
+uses another random private presentation file which is deleted in `finally`
+immediately after decode. Full-screen photos likewise discard the plaintext file
+after decoding. Lock/background cancels jobs, removes bitmap references, closes
+presentation and sweeps scratch; startup removes stale presentation/quarantine.
+Delete/expiry/block/logout checks revoke rows/viewers via the existing local cleanup
+cadence and deny future access immediately. Closing the full-screen viewer drops its
+larger bitmap; any still-visible inline row may retain its bounded preview. Android
+managed RAM and filesystem unlinking do not guarantee physical RAM/flash erasure.
+
+Foreground auto-fetch is the initial policy on Wi-Fi or cellular. A persisted
+Photos Always / Wi-Fi only / Never preference remains future work; no new settings
+UI is added. Background sync remains descriptor-only, with generic notifications.
+Document selection/download/open and the existing narrow external-view grant remain
+manual and unchanged.
+
+Validation and the two-phone retest checklist are in DEVELOPMENT.md. A controlled
+staging JPEG/document transfer and read-only VPS audit confirmed ciphertext hashes
+and lengths match, no plaintext fixture/image signatures, and the unchanged minimal
+blob schema with no filename/MIME/thumbnail/key columns. This checks the deployed
+service with synthetic data; it does not replace physical OEM UI testing.
+
 ## Phase 1I.3 implementation — 2026-09-12
 
 Photo/document UI now uses the Phase 1I.2 foundation. The owner reports that foundation is deployed. **This phase requires no backend deployment, API expansion or database migration.** Deployment statements below describe the historical foundation delivery.

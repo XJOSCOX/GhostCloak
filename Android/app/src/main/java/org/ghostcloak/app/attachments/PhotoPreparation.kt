@@ -79,7 +79,7 @@ object PhotoPreparation {
         error("unsupported_photo")
     }
 
-    fun decode(file: File): Bitmap {
+    fun decode(file: File, maximumEdge: Int = LONG_EDGE): Bitmap {
         inspect(file)
         return ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
             require(!info.isAnimated && info.size.width > 0 && info.size.height > 0 &&
@@ -87,7 +87,7 @@ object PhotoPreparation {
             require(info.colorSpace?.isWideGamut != true)
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             decoder.setTargetColorSpace(ColorSpace.get(ColorSpace.Named.SRGB))
-            val scale = minOf(1.0, LONG_EDGE.toDouble()/maxOf(info.size.width,info.size.height))
+            val scale = minOf(1.0, maximumEdge.toDouble()/maxOf(info.size.width,info.size.height))
             decoder.setTargetSize(maxOf(1,(info.size.width*scale).roundToInt()),maxOf(1,(info.size.height*scale).roundToInt()))
             decoder.setOnPartialImageListener { false }
         }.also { bitmap ->

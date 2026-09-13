@@ -83,6 +83,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
                 }
             }
         }
+        SendingPhoto(status.contact.remoteDeviceId,refresh)
         if (status.contact.request && !status.contact.blocked) {
             Column(Modifier.padding(GhostLayout.pageInset), verticalArrangement = Arrangement.spacedBy(GhostDimensions.compact)) {
                 Text("Accept this conversation?", style = MaterialTheme.typography.titleMedium)

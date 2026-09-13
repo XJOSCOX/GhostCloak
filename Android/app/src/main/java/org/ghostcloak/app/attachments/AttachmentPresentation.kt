@@ -14,7 +14,7 @@ import java.io.File
 data class MediaUi(val conversation: String = "", val message: String? = null,
     val filename: String = "", val photo: Boolean = false, val bytes: Long = 0,
     val busy: Boolean = false, val error: String? = null, val ready: Boolean = false,
-    val preview: Bitmap? = null) {
+    val preview: Bitmap? = null, val sending: Boolean = false) {
     override fun toString() = "MediaUi(redacted)"
 }
 
@@ -23,6 +23,9 @@ class AttachmentPresentation(private val app: GhostApplication) {
     private val scope = CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
     private val mutable = MutableStateFlow(MediaUi())
     val state = mutable.asStateFlow()
+    private val session = MutableStateFlow(0L)
+    val presentationSession = session.asStateFlow()
+    private var transferEligible = false
     private val root = File(app.noBackupFilesDir,"media-presentation").apply { mkdirs() }
     private var file: File? = null
     private var blob: String? = null
@@ -35,13 +38,27 @@ class AttachmentPresentation(private val app: GhostApplication) {
     @Volatile private var lease: Pair<Uri,File>? = null
     @Volatile private var leaseDeadline = 0L
     @Volatile private var leaseMessage: Pair<String,String>? = null
+    val photos = InlinePhotos(scope, ::allowed, app.runtime::attachmentAvailableNow) { conversation, message, verifying ->
+        val target=temporary()
+        try {
+            app.runtime.downloadAttachment(conversation,message).use { verified ->
+                withContext(Dispatchers.IO) { target.outputStream().use(verified::copyTo) }
+            }
+            currentCoroutineContext().ensureActive(); check(allowed()); verifying()
+            withContext(Dispatchers.IO) { PhotoPreparation.decode(target,512) }.also {
+                currentCoroutineContext().ensureActive(); check(allowed())
+                check(app.runtime.attachmentAvailableNow(conversation,message))
+            }
+        } finally { target.delete() }
+    }
     init { root.listFiles()?.filter { it.isFile }?.forEach { it.delete() } }
-    private fun allowed() = visible && app.appLock.state.value.canShowContent
+    private fun allowed() = visible && app.appLock.state.value.canShowContent && app.runtime.attachmentTransfersAllowed
     private fun check(expected: Long) { check(expected == epoch && allowed()) { "attachment_unavailable" } }
     private fun temporary() = File(root,AttachmentFormat.newId())
-    fun start() { visible = true; revokeLease() }
-    fun stop() { visible = false; clear() }
-    fun locked() { clear(); revokeLease() }
+    fun start() { visible = true; session.value++; revokeLease() }
+    private fun sweepPresentation() { root.listFiles()?.filter { it.isFile && it!=lease?.second }?.forEach { it.delete() } }
+    fun stop() { visible = false; photos.clear(); clear(); sweepPresentation() }
+    fun locked() { photos.clear(); clear(); revokeLease(); sweepPresentation() }
     fun clear() {
         val revoked=synchronized(inputGate) {
             epoch++
@@ -51,7 +68,6 @@ class AttachmentPresentation(private val app: GhostApplication) {
         revoked.first?.cancel()
         try { revoked.second?.close() } catch (_: Exception) {}
         file?.delete(); file=null; blob=null
-        root.listFiles()?.filter { it.isFile && it != lease?.second }?.forEach { it.delete() }
         // Removing references prevents the UI from presenting it after background/lock.
         mutable.value=MediaUi()
     }
@@ -125,7 +141,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
                 }
                 check(expected)
                 file=prepared
-                val preview=if(photo) withContext(Dispatchers.IO) { PhotoPreparation.decode(prepared!!) } else null
+                val preview=if(photo) withContext(Dispatchers.IO) { PhotoPreparation.decode(prepared!!,512) } else null
                 check(expected)
                 mutable.value=mutable.value.copy(filename=name,bytes=prepared!!.length(),preview=preview,busy=false,ready=true)
             } finally {
@@ -139,7 +155,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
     fun send(refresh: ()->Unit) {
         val before=mutable.value
         if (before.conversation.isEmpty() || before.message != null || before.busy) return
-        mutable.value=before.copy(busy=true,error=null)
+        mutable.value=before.copy(busy=true,error=null,sending=before.photo)
         launch { expected ->
             if(!app.runtime.supportsAttachments(before.conversation)) {
                 mutable.value=mutable.value.copy(busy=false,error="This contact needs a newer Ghost Cloak version to receive attachments. Exchange a short text after updating.")
@@ -171,7 +187,9 @@ class AttachmentPresentation(private val app: GhostApplication) {
                 check(expected)
                 // Framework decoders see bytes only after full digest/AEAD/finality verification.
                 val preview=if(photo) withContext(Dispatchers.IO) { PhotoPreparation.decode(target) } else null
-                check(expected); file=target
+                check(expected)
+                check(app.runtime.attachmentAvailableNow(conversation,message))
+                if(photo) target.delete() else file=target
                 mutable.value=mutable.value.copy(busy=false,ready=true,bytes=target.length(),preview=preview)
                 refresh()
             } finally { if(file!=target) target.delete() }
@@ -182,6 +200,9 @@ class AttachmentPresentation(private val app: GhostApplication) {
         if(current.message!=null && current.message !in messages) clear()
     }
     fun reconcileStored() {
+        val eligible=allowed()
+        if(eligible!=transferEligible) { transferEligible=eligible; session.value++ }
+        photos.reconcile()
         val current=mutable.value
         if(current.message!=null && !app.runtime.attachmentAvailableNow(current.conversation,current.message)) clear()
         leaseMessage?.let { if(!app.runtime.attachmentAvailableNow(it.first,it.second)) revokeLease() }

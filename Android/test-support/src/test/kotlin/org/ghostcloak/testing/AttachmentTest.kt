@@ -86,7 +86,7 @@ class AttachmentTest {
             ar.save(Contact("synthetic-contact",b.registration.accountId,"bob",b.registration.deviceId))
             val sender=ConversationService(a.engine,ar);sender.open()
             val receiver=ConversationService(b.engine,br);receiver.open()
-            val d=a.store.prepare(byteArrayOf(1,2).inputStream(),2,AttachmentKind.DOCUMENT,30){true}
+            val d=a.store.prepare(byteArrayOf(1,2).inputStream(),2,AttachmentKind.IMAGE,30){true}
             a.store.upload(d.id,a.bulk){true}
             val outbox=DurableOutbox(a.records,a.engine,NetworkMailboxTransport(a.client,a.state))
             val sent=sender.sendAttachment(b.registration.deviceId,d,outbox,true) {a.store.bind(d.id,"${it.conversationId}/${it.localId}")}

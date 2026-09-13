@@ -1,5 +1,49 @@
 # Android Studio development
 
+## Phase 1I.3.1 — inline photos
+
+Update both phones in place using Android Studio Run. No backend deployment or
+database migration is required. Photo bodies now auto-fetch only in accepted,
+unlocked foreground conversations; documents remain manual. This uses network
+retrieval of encrypted blobs, not plaintext server thumbnails.
+
+Two-phone checks:
+
+1. A selects a photo and taps Send. Its sanitized preview stays inline while sending.
+2. B opens the accepted conversation: placeholder → automatic fetch → inline photo,
+   without a Download button. Tap it for the full-screen Ghost Cloak viewer.
+3. Close/reopen, background/return, then lock/unlock with the viewer open. Content
+   must disappear while protected and reopen from private ciphertext afterward.
+4. Send from an unaccepted contact: only generic attachment presence, no body fetch
+   or thumbnail until acceptance and any required identity review.
+5. Test short-lived photos and local deletion: no reopening after expiry/delete,
+   including restart. Queued outgoing messages keep the existing delivery-based timer.
+6. Send a document: explicit Download and Open/chooser are still required.
+7. Confirm no Gallery/Downloads copy or photo notification content. Test offline
+   cached reopening and local failure/retry without a global reconnect prompt.
+
+Photo cache: 250 MiB admission limit across photo ciphertext, no age-based deletion
+of referenced history. Only verified redundant download copies are automatically
+evicted in LRU order; unique history/pending uploads are protected. A full cache
+refuses new photos with local guidance; explicitly delete local photos to free space.
+Existing over-limit history stays readable. Plaintext scratch is removed after
+decoding and on lifecycle/security revocation; bounded bitmap references are dropped.
+See ATTACHMENTS_DESIGN.md for caveats, document limits and future download preferences.
+
+Validation (2026-09-13): 158 JVM tests passed; debug/release builds and strict
+dependency verification passed, including the IDE source/Javadoc verifier. The full
+connected run passed 100/101 app tests and all 10 storage tests; the sole failure was
+a Compose-idling timeout in the existing picker regression suite. All six picker
+tests subsequently passed on focused rerun. The final three inline UI tests and
+three presentation-owner tests passed, covering automatic eligibility, local retry,
+late-result cancellation, generic protected content, bounded layout and permissions.
+Cache tests cover sender reuse, restart/remote unavailability, safe eviction/admission,
+corrupt/truncated/wrong-key fail-closed behavior and scratch cleanup. The delivery/
+expiry/replay integration fixture now exercises a photo descriptor. A controlled
+HTTPS JPEG/document transfer plus read-only server filesystem/schema audit passed.
+These are emulator/synthetic checks; the physical two-phone checklist above remains
+the device acceptance test. No backend deployment was performed.
+
 ## Phase 1I.3 — photos and documents
 
 Open `Android/` in Android Studio, select each physical phone, and Run the debug app to update in place. Debug defaults to staging; release retains the separate explicit/fail-safe origin configuration. **No backend deployment or database migration is required** beyond the owner's already-deployed 1I.2 foundation. Do not clear data, recreate identities, or reinstall from scratch.

@@ -21,7 +21,7 @@ class NetworkController(
     val configured get() = origin.isNotEmpty()
     private val state by lazy { EndpointNetworkState(records, URI(origin).host, KeystoreDeviceAuth()) }
     private var backgroundFetches: Int? = null
-    private val client: HttpGhostClient by lazy { HttpGhostClient(origin, state, transport = connection, renewSession = ::renewSession, authenticatedFailure = ::networkFailure, diagnostics = NetworkDiagnostics.observer,
+    private val client: HttpGhostClient by lazy { HttpGhostClient(origin, state, transport = AccountRecoveryDiagnostics.wrap(connection), renewSession = ::renewSession, authenticatedFailure = ::networkFailure, diagnostics = NetworkDiagnostics.observer,
         fetchCooldown = cooldown, beforeFetch = {
             backgroundFetches?.let { count ->
                 if (count >= 4) throw BackgroundDeferred()
@@ -49,11 +49,17 @@ class NetworkController(
     var status = if (configured) NetworkStatus.NEEDS_CONNECT else NetworkStatus.DISABLED
         private set(value) { NetworkDiagnostics.status(field, value); field = value }
     private fun device() = records.transaction { records.read("local/device")?.decodeToString() ?: throw ApiFailure(401, "credential_missing") }
+    init {
+        AccountRecoveryDiagnostics.path("OPEN")
+        AccountRecoveryDiagnostics.snapshot(records, URI(origin).host)
+    }
     private fun networkFailure(e: ApiFailure) {
         if (e.status == 401) renewalBlocked = true
         status = when (e.status) { 401 -> NetworkStatus.NEEDS_CONNECT; 429 -> NetworkStatus.RATE_LIMITED; 503 -> NetworkStatus.OFFLINE; else -> NetworkStatus.ERROR }
     }
     private suspend fun renewSession(rejectedToken: String) = renewalMutex.withLock {
+        AccountRecoveryDiagnostics.path("SILENT_RENEWAL")
+        AccountRecoveryDiagnostics.snapshot(records, URI(origin).host)
         requireApi(canAutoSync, "connect_required", 401)
         // Another operation may already have replaced the rejected access session.
         if (state.read() != rejectedToken) return@withLock
@@ -79,16 +85,22 @@ class NetworkController(
     suspend fun connect(username: String) = operation(NetworkOperation.AUTH) {
         requireApi(configured, "server_not_configured")
         status = NetworkStatus.CONNECTING
+        AccountRecoveryDiagnostics.snapshot(records, URI(origin).host)
         if (!state.registered()) {
+            AccountRecoveryDiagnostics.path("CONNECT_UNMARKED_LOGIN_FIRST")
             // Retry login first: registration may have committed before its response was lost.
             val name = try { Usernames.normalize(username) } catch (_: ApiFailure) { throw ApiFailure(400, "invalid_network_username") }
             val registration = state.registration(name, listOf(engine.publicBundle().publicData()))
             try { account.login(registration.accountId, registration.deviceId); state.markRegistered() }
             catch (e: ApiFailure) {
                 if (e.status != 401) throw e
+                AccountRecoveryDiagnostics.path("CONNECT_REGISTER_AFTER_401")
                 account.register(registration); account.login(registration.accountId, registration.deviceId)
             }
-        } else { account.login(state.accountId(), device()) }
+        } else {
+            AccountRecoveryDiagnostics.path("CONNECT_REGISTERED_LOGIN")
+            account.login(state.accountId(), device())
+        }
         renewalBlocked = false; status = NetworkStatus.CONNECTED
     }
     suspend fun add(username: String, service: ConversationService) = operation(NetworkOperation.LOOKUP) {
@@ -179,6 +191,7 @@ class NetworkController(
         status = NetworkStatus.CONNECTED
     }
     suspend fun logout() {
+        AccountRecoveryDiagnostics.path("LOGOUT")
         loggingOut = true
         try { operation(NetworkOperation.AUTH) { account.logout() } }
         finally {

@@ -141,11 +141,14 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
             (old?.usedEc ?: emptySet()) + bundles.map { it.preKeyId }, (old?.usedPq ?: emptySet()) + bundles.map { it.kyberId },
             (old?.signed ?: emptyMap()) + bundles.associate { it.signedId to (it.signedKey + it.signature) }))
     }
+    fun authenticateSession(token: String): DeviceRow = db.transaction {
+        val session = db.sessions.get(tokenHash(token)) ?: throw ApiFailure(401, "unauthorized")
+        requireApi(session.expiresAt > now(), "unauthorized", 401)
+        db.devices.get(session.deviceId) ?: throw ApiFailure(401, "unauthorized")
+    }
     private fun authenticated(r: ApiRequest, token: String): ApiResponse {
         val hash = tokenHash(token)
-        val session = db.sessions.get(hash) ?: throw ApiFailure(401, "unauthorized")
-        requireApi(session.expiresAt > now(), "unauthorized", 401)
-        val device = db.devices.get(session.deviceId) ?: throw ApiFailure(401, "unauthorized")
+        val device = authenticateSession(token)
         return when(r) {
             is ApiRequest.Revoke -> { db.sessions.remove(hash); ApiResponse() }
             is ApiRequest.Rename -> {

@@ -73,26 +73,30 @@ class HttpGhostClient(
             } finally { diagnostic(NetworkEvent.END, httpStatus, since = attemptStarted) }
         }
         if (!authenticated) return@withContext attempt(null)
+        authenticatedExchange({ event -> diagnostic(event) }) { attempt(it) }
+    }
+    /** The only authenticated one-retry boundary, shared with bulk streaming operations. */
+    suspend fun <T> authenticatedExchange(
+        event: (NetworkEvent) -> Unit = {},
+        reportTransientFailure: Boolean = true,
+        beforeRenew: () -> Unit = {},
+        attempt: suspend (String) -> T,
+    ): T {
         try {
             val token = tokens.read() ?: throw ApiFailure(401, "unauthorized")
-            try { attempt(token) } catch (e: ApiFailure) {
+            return try { attempt(token) } catch (e: ApiFailure) {
                 if (e.status != 401 || renewSession == null) throw e
-                diagnostic(NetworkEvent.RENEWAL_ATTEMPT)
-                try {
-                    renewSession.invoke(token)
-                    diagnostic(NetworkEvent.RENEWAL_SUCCEEDED)
-                } catch (failure: kotlinx.coroutines.CancellationException) {
-                    diagnostic(NetworkEvent.CANCELLED); throw failure
-                } catch (failure: Exception) {
-                    diagnostic(NetworkEvent.RENEWAL_FAILED, failure = failure as? ApiFailure); throw failure
-                }
-                diagnostic(NetworkEvent.RETRY)
-                // Retry these exact bytes once, including the original submission ID.
+                beforeRenew()
+                event(NetworkEvent.RENEWAL_ATTEMPT)
+                try { renewSession.invoke(token); event(NetworkEvent.RENEWAL_SUCCEEDED) }
+                catch (failure: kotlinx.coroutines.CancellationException) { event(NetworkEvent.CANCELLED); throw failure }
+                catch (failure: Exception) { event(NetworkEvent.RENEWAL_FAILED); throw failure }
+                event(NetworkEvent.RETRY)
                 attempt(tokens.read() ?: throw ApiFailure(401, "unauthorized"))
             }
         } catch (e: ApiFailure) {
-            diagnostic(NetworkEvent.API_FAILURE, failure = e)
-            authenticatedFailure(e); throw e
+            if (reportTransientFailure || e.status == 401) authenticatedFailure(e)
+            throw e
         }
     }
     override suspend fun lookup(username: String) = call(ApiRequest.Lookup(Usernames.normalize(username))).directory ?: throw ApiFailure(502, "invalid_response")

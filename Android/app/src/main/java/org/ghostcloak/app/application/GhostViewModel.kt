@@ -62,8 +62,8 @@ class GhostViewModel internal constructor(application: Application, private val 
                     mutable.value = mutable.value.copy(identity = identity, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
                         disappearingPolicies = if (identity != null) active.policies() else emptyMap(),
                         unreadExpiries = if (identity != null) active.unreadExpiries() else emptyMap(),
-                        previews = contacts.mapNotNull { c -> active.messages(c.contact.remoteDeviceId).lastOrNull()?.let { c.contact.remoteDeviceId to it } }.toMap(),
-                        messages = selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.messages(it) } ?: emptyList(),
+                        previews = contacts.mapNotNull { c -> active.messagesForUi(c.contact.remoteDeviceId).lastOrNull()?.let { c.contact.remoteDeviceId to it } }.toMap(),
+                        messages = selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.messagesForUi(it) } ?: emptyList(),
                         demo = runtime.inDemo, protection = runtime.protection, ready = true,
                         networkRequiresConnect=runtime.networkRequiresConnect,networkConfigured=runtime.networkConfigured,networkStatus=runtime.networkStatus)
                 }

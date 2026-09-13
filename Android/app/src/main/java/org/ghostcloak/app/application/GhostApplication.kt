@@ -5,7 +5,7 @@ import kotlinx.coroutines.launch
 
 /** A single store/engine owner per process; activity recreation never opens a second engine. */
 class GhostApplication : Application(), androidx.work.Configuration.Provider {
-    val appLock by lazy {
+    val appLock: org.ghostcloak.app.access.AppLockController by lazy {
         org.ghostcloak.app.access.AppLockController(object : org.ghostcloak.app.access.LockPersistence {
             override suspend fun read() = runtime.readAppLock()
             override suspend fun write(bytes: ByteArray) = runtime.writeAppLock(bytes)
@@ -13,14 +13,17 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider {
             android.os.SystemClock::elapsedRealtime,
             { android.provider.Settings.Global.getInt(contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0) })
     }
-    val runtime by lazy { AppRuntime(this, backgroundEligibility = { BackgroundSyncSchedule.reconcile(this, it) },
-        notifications = AndroidLocalNotifications(this)) }
+    val runtime: AppRuntime by lazy { AppRuntime(this, backgroundEligibility = { BackgroundSyncSchedule.reconcile(this, it) },
+        notifications = AndroidLocalNotifications(this), attachmentAccess = { appLock.state.value.canShowContent }) }
     override val workManagerConfiguration get() = androidx.work.Configuration.Builder()
         // Silence WorkManager's own logs; only our allowlisted debug events are emitted.
         .setMinimumLoggingLevel(Int.MAX_VALUE).build()
     private val backgroundScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
     override fun onCreate() {
         super.onCreate()
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+kotlinx.coroutines.Dispatchers.Main.immediate).launch {
+            appLock.state.collect { if (!it.canShowContent) runtime.revokeAttachmentAccess() }
+        }
         // No Direct Boot access; WorkManager itself handles OS-approved persistence/reboot.
         if (getSystemService(android.os.UserManager::class.java).isUserUnlocked) {
             backgroundScope.launchInitialization()

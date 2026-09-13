@@ -21,6 +21,7 @@ class AppRuntime internal constructor(
     private val notifications: LocalNotifications = NoLocalNotifications,
     private val expiryClock: ExpiryClock = ExpiryClock(System::currentTimeMillis, android.os.SystemClock::elapsedRealtime,
         { android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0) }),
+    private val attachmentAccess: () -> Boolean = { true },
 ) : AutoCloseable {
     private val expiryChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
     val expiryRevision: kotlinx.coroutines.flow.StateFlow<Long> get() = expiryChanges
@@ -31,8 +32,10 @@ class AppRuntime internal constructor(
     private var local: ConversationService? = null
     private var network: NetworkController? = null
     private var notificationLedger: NotificationLedger? = null
+    private var attachments: org.ghostcloak.attachments.AttachmentStore? = null
+    @Volatile private var attachmentContacts:Set<String> = emptySet()
     private val notificationGate = Any()
-    private var activityVisible = false
+    @Volatile private var activityVisible = false
     val syncActive get() = network?.syncActive == true
     val fetchRetryDelayMillis get() = network?.fetchRetryDelayMillis ?: 0L
     val canAutoSync get() = !inDemo && network?.canAutoSync == true
@@ -47,11 +50,14 @@ class AppRuntime internal constructor(
     @Volatile private var foreground = false
     private var scheduledEligibility: Boolean? = null
     fun foregroundStarted() = synchronized(notificationGate) { foreground = true; cancelNotificationSafely() }
-    fun foregroundStopped() = synchronized(notificationGate) { foreground = false }
+    fun foregroundStopped() = synchronized(notificationGate) { foreground = false; attachments?.invalidate() }
     fun notificationActivityVisible(visible: Boolean) = synchronized(notificationGate) {
         activityVisible = visible
+        if (!visible) attachments?.invalidate()
         if (visible) cancelNotificationSafely()
     }
+    internal fun revokeAttachmentAccess() { attachments?.invalidate() }
+    private fun attachmentAllowed() = canAutoSync && foreground && activityVisible && attachmentAccess()
     private fun cancelNotificationSafely() { try { notifications.cancel() } catch (_: Exception) { } }
     private fun reconcileNotifications() {
         if (notifications === NoLocalNotifications) return
@@ -140,6 +146,8 @@ class AppRuntime internal constructor(
                 local = ConversationService(engine, LocalRepository(records, expiryClock))
                 notificationLedger = NotificationLedger(records, expiryClock)
                 store = records
+                attachments = org.ghostcloak.attachments.AttachmentStore(records,java.io.File(context.noBackupFilesDir,"$endpointName-attachments"),
+                    AttachmentDiagnostics.observer)
                 } catch (e: Exception) { records.close(); throw e }
             }
             if (local!!.reconcileExpiry() > 0) expiryChanges.value++
@@ -147,6 +155,11 @@ class AppRuntime internal constructor(
                 if (local!!.reconcileExpiry() > 0) expiryChanges.value++
                 reconcileBackground()
                 reconcileNotifications()
+                attachmentContacts=local!!.contacts().filter { !it.contact.blocked && !it.contact.request &&
+                    it.identity?.trustState!=org.ghostcloak.identity.IdentityTrustState.CHANGED }.map {it.contact.remoteDeviceId}.toSet()
+                attachments?.reconcileReferences(
+                    store!!.transaction { store!!.keys("app/message/").map { it.removePrefix("app/message/") }.toSet() },
+                    store!!.transaction { store!!.keys("outbox/").map { it.removePrefix("outbox/") }.toSet() })
             }
         }
     }
@@ -185,9 +198,33 @@ class AppRuntime internal constructor(
     suspend fun addNetwork(username: String, service: ConversationService) { network!!.add(username, service) }
     suspend fun publishNetwork() { network!!.publish() }
     suspend fun logoutNetwork() {
+        attachments?.invalidate()
         try { network!!.logout() }
         finally { notificationLedger?.suppressAll(); cancelNotificationSafely() }
     }
     /** Process owner closes only after all foreground operations have finished (also used by reopen tests). */
-    override fun close() { store?.close(); store = null; local = null; network = null; notificationLedger = null; attached = false }
+    override fun close() { attachments?.invalidate(); attachments=null; store?.close(); store = null; local = null; network = null; notificationLedger = null; attached = false }
+    /** Internal synthetic-file foundation only; no picker/recorder/UI entry point. */
+    internal suspend fun prepareAttachment(source:java.io.InputStream,length:Long,kind:org.ghostcloak.attachments.AttachmentKind,seconds:Int):org.ghostcloak.attachments.AttachmentDescriptor {
+        use { check(attachmentAllowed()) }
+        return attachments!!.prepare(source,length,kind,seconds,::attachmentAllowed)
+    }
+    internal suspend fun uploadAttachment(id:String):org.ghostcloak.attachments.AttachmentDescriptor {
+        use { check(attachmentAllowed()) }
+        return attachments!!.upload(id,network!!.blobClient(::attachmentAllowed,{check(attachmentAllowed())}),::attachmentAllowed)
+    }
+    internal suspend fun sendPreparedAttachment(conversation:String,blob:String,peerSupportsAttachments:Boolean):Message=use { service ->
+        check(attachmentAllowed())
+        val entry=attachments!!.entry(blob) ?: error("attachment_missing")
+        check(entry.state==org.ghostcloak.attachments.TransferState.UPLOADED && entry.upload)
+        network!!.sendAttachment(service,conversation,entry.descriptor,peerSupportsAttachments) {
+            attachments!!.bind(blob,"$conversation/${it.localId}")
+        }
+    }
+    internal suspend fun downloadAttachment(conversation:String,message:String):org.ghostcloak.attachments.VerifiedAttachment {
+        val descriptor=use { check(attachmentAllowed()); it.attachment(conversation,message) ?: error("attachment_missing") }
+        val allowed = { attachmentAllowed() && conversation in attachmentContacts &&
+            LocalRepository(store!!,expiryClock).attachmentAvailable(conversation,message) }
+        return attachments!!.download(descriptor,"$conversation/$message",network!!.blobClient(allowed,{check(allowed())}),allowed)
+    }
 }

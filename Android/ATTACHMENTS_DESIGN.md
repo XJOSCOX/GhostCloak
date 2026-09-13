@@ -1,6 +1,19 @@
 # Encrypted attachments and voice notes
 
-Status: Phase 1I.1 DESIGN ONLY, audited against main `5b793f5`, 2026-09-12. All attachment capabilities, APIs, schemas and limits below are proposals. No implementation or infrastructure configuration is changed.
+Status: Phase 1I.2 foundation implemented locally, 2026-09-12. The original audit below describes the pre-attachment baseline at `5b793f5`; this status section distinguishes implemented foundation from later media features. No remote deployment has occurred.
+
+### Implemented in 1I.2
+
+- `attachments/` contains pinned Tink Android 1.20.0 streaming encryption, strict bounded descriptors, immutable ciphertext, private files/journal, explicit transfer APIs and revocable verified scratch handles. The key encoding is exactly 16 raw key bytes under fixed v1 parameters, rather than arbitrary serialized keysets; unknown algorithm/version/key lengths are rejected. Associated data is the ASCII domain followed by the decoded 32-byte blob ID. Crypto nonce/header construction remains Tink-owned.
+- Application payload type 3 carries the descriptor only inside Signal. Existing text/policy types are unchanged. Descriptors are stored separately in encrypted records, not exposed through UI Message models. Internal sends require explicit compatible-peer confirmation; there is no advertised negotiation or user-facing attachment sender yet. Unsupported old clients reject the reserved framing rather than treating it as text.
+- Explicit reserve/PUT/GET, session plus read-capability authorization, local server files and numbered PostgreSQL V003 are implemented. Enable routes only with `GHOSTCLOAK_ATTACHMENTS_DIR`. Completed orphan versus referenced state exists only in the client journal; server linkage remains unknowable. Partial one-hour and complete seven-day TTLs apply without early ACK/download deletion.
+- The existing retention worker runs bounded blob cleanup every 30 seconds, rather than adding a 15-minute worker. Shared per-account request budget is conservatively ten blob operations/minute; quotas include reservations and failed/partial attempts. Daily byte budgets use fixed UTC-day buckets. Account limits aggregate all devices. Initial whole-object transfers use a 660-second total client/handler budget, 10-second client connect and 30-second client read timeout; actual edge limits remain an operator gate. Mailbox body limits and ten-second handler deadline remain unchanged.
+- AppRuntime owns the private store and uses the existing HttpGhostClient renewal boundary. Bulk I/O stays outside its mailbox mutex. Foreground/lock/logout and message deletion/expiry gates cancel the active transfer coroutine and revoke scratch handles; pending outbox references retain needed encrypted material. Local access revocation is cancellation, never an authentication failure that requests renewal. Startup removes stale scratch; READY is not permission to present plaintext and is not a view-once state.
+- Debug-only `GhostCloakAttach` emits fixed enum event names without IDs, sizes or content. Release passes no observer. No picker, microphone permission, player, attachment bubble, automatic media download or new WorkManager work is added.
+
+### Still proposed / deployment gates
+
+Photo/video normalization, document viewer grants, waveform/thumbnail generation, recording/playback, user download controls, peer-capability rollout and future view-once presentation are not implemented. Synthetic internal APIs are not permission to enable media UI without those gates. See [manual deployment](../infrastructure/ATTACHMENTS_DEPLOYMENT.md) for required V003 migration, storage/grants, backup exclusion and private ingress review; VPS capacity and end-to-end slow-transfer behavior have not been measured here. Sections below remain the architecture for these later slices except for the explicit foundation refinements above.
 
 ## 1. Executive summary
 
@@ -35,7 +48,7 @@ Never log bodies, filenames, source paths/URIs, IDs, capabilities, tokens, keys,
 
 ## 3. Attachment encryption format
 
-Recommend vetted Tink Java/Android Streaming AEAD `AES128_GCM_HKDF_1MB`, fresh library-generated key per object, 128-bit key material/derived AES key. Never reuse Signal/session keys as bulk keys. Single-shot AEAD risks whole-file buffering; adding a separate native crypto stack is unnecessary initially. Pin and verify an Android-compatible Tink release and vectors in 1I.2. [Tink recommendation](https://developers.google.com/tink/streaming-aead).
+Use vetted Tink Java/Android Streaming AEAD `AES128_GCM_HKDF_1MB`, fresh platform-CSPRNG key per object, 128-bit key material/derived AES key. Never reuse Signal/session keys as bulk keys. Single-shot AEAD risks whole-file buffering; adding a separate native crypto stack is unnecessary initially. The foundation pins the Android library; framing/boundary tests accompany it. [Tink recommendation](https://developers.google.com/tink/streaming-aead).
 
 Tink generates a random salt and seven-byte nonce prefix. A segment nonce includes that prefix, a four-byte index and final-segment flag; each segment has a GCM tag. HKDF binds associated data into key derivation. Use the library framing and final EOF verification unchanged. GCM is not arbitrarily nonce-misuse resistant: fresh keys, library randomness and immutable retries are mandatory. Do not implement counters/tags locally. [Construction](https://developers.google.com/tink/streaming-aead/aes_gcm_hkdf_streaming).
 
@@ -222,6 +235,16 @@ Manual foreground body downloads initially; no auto cellular video, explicit lar
 
 ## 27. Implementation phases
 
+### Future view-once compatibility (not implemented in 1I.2)
+
+Transfer completion and presentation authorization are separate concepts. READY means bytes passed authentication; it must never imply permission to render, open a plaintext path or automatically consume a message. Reserve a future local presentation lifecycle `UNOPENED -> OPENING -> CONSUMED`, independent of transfer status and delivery ACK. The view-once flag belongs only inside versioned authenticated E2EE content; the blob API, database, quotas, retention and generic notifications must not learn or reveal it.
+
+A future explicit Open action must pass app lock, message existence/expiry and contact gates, then atomically commit durable OPENING before any plaintext is exposed to a viewer/player. Competing opens must serialize. Successful presentation closing/completing commits CONSUMED; opening failure or crash after OPENING fails closed and cannot grant unlimited retries. Recovery treats an unresolved OPENING as unavailable/consumed before admitting any presentation. Recomposition, restart and descriptor replay must not reset that state.
+
+Consume/delete cleanup removes plaintext scratch, previews, thumbnails/waveforms and cached decryption material when no remaining authorized reference requires it. Preserve separate cryptographic replay/deduplication evidence and a durable consumption marker for the message lifetime/replay policy; a replayed descriptor cannot recreate access. Pending sender delivery material is a separate reference, never a recipient reopening grant. App-private encrypted caching is not permission to bypass these gates.
+
+No automatic download, decrypt-preview, notification handling or background sync may accidentally present or consume future view-once content. The foundation must allow verified ciphertext to remain sealed until an explicit presentation transaction; future view-once processing must not use a convenience download-and-export API. Add no view-once server metadata/endpoints, public flags, UI or consumption state implementation in 1I.2. This is normal-UI access control, not protection against a modified recipient or external camera.
+
 - **1I.2 foundation:** finalize descriptor/compatible-peer rollout, pinned Tink vectors, streaming auth adapter, encrypted journal/refcounts, capability API, quotas/TTL/crash recovery. Test tampering/finality/nonce freshness/overflow/logout races before user media features.
 - **1I.3 photos/documents:** picker/SAF, sanitization, explicit download/view, unknown-sender gates, expiry/delete integration and external-viewer privacy.
 - **1I.4 voice:** just-in-time mic, Opus/Ogg, private playback, lifecycle/lock cancellation and caps.
@@ -250,6 +273,6 @@ Actual VPS capacity/ingress behavior, Tink integration and peer-version negotiat
 
 ## 29. Explicit non-goals
 
-No implementation, dependencies, endpoints, migrations, upload/download/recording/picker/player/permissions in this phase. No changed notification content, remote deletion, view-once, screenshot detection, calls/video calls/live streaming, cloud transcription, AI media processing, external storage/push, microphone service or weakened app lock/identity/crypto/session behavior. No indefinite availability, traffic anonymity or erasure of exported copies promised.
+Phase 1I.1 was design only; Phase 1I.2 implements only the foundation listed at the top. Still no user-facing picker/recording/player/attachment controls, new permissions, changed notification content, remote deletion, view-once, screenshot detection, calls/video calls/live streaming, cloud transcription, AI media processing, external storage/push, microphone service or weakened app lock/identity/crypto/session behavior. No indefinite availability, traffic anonymity or erasure of exported copies promised.
 
 Recommended order: **1I.2 encrypted blob foundation -> 1I.3 photos/documents -> 1I.4 direct voice notes -> 1I.5 video/resumability**, satisfying each gate before proceeding.

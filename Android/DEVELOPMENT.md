@@ -1,6 +1,16 @@
 # Android Studio development
 
-For the Phase 1I.1 design-only attachment/voice-note proposal, current limits, implementation gates and future two-phone test matrix, see [ATTACHMENTS_DESIGN.md](ATTACHMENTS_DESIGN.md). Upload, download and recording are not implemented by this documentation phase.
+For the attachment/voice-note architecture, implemented Phase 1I.2 foundation, future view-once compatibility and later two-phone matrix, see [ATTACHMENTS_DESIGN.md](ATTACHMENTS_DESIGN.md). Internal synthetic upload/download APIs exist; media picking, recording, rendering and user controls do not.
+
+## Phase 1I.2 foundation validation
+
+Android Studio Run remains unchanged. There is no paperclip, picker, recorder or download UI to test yet. `AttachmentTest` uses synthetic two-client E2EE/HTTP fixtures; `AttachmentFormatTest` exercises strict framing, chunk boundaries and corruption; `AttachmentStorageTest` exercises the SQLCipher journal and scratch revocation on an emulator. No public URLs or real private media are needed. Debug Logcat filter `tag:GhostCloakAttach` shows fixed operation events only; release diagnostics are off.
+
+Backend V003 migration and a VPS release/configuration review are required before blob API activation; neither is automatically deployed. Follow [ATTACHMENTS_DEPLOYMENT.md](../infrastructure/ATTACHMENTS_DEPLOYMENT.md). Existing staging text operation is unaffected by leaving blob routes disabled. Upgrade both peers and satisfy the explicit compatibility gate before future attachment sending; no automatic feature negotiation is claimed.
+
+Useful local checks from Android/: `./gradlew :attachments:test :test-support:test :app:testDebugUnitTest :app:testReleaseUnitTest :app:assembleDebug :app:assembleRelease --dependency-verification strict`, existing isolated `:test-support:postgresTest`, and `:app:connectedDebugAndroidTest :storage:connectedDebugAndroidTest`. IDE sources remain checked by `-I gradle/verify-ide-sources.init.gradle verifyIdeSources --dependency-verification strict`. Never run PostgreSQL tests against staging/production or put test credentials in Git/logs.
+
+Phase 1I.2 validation (2026-09-12): 130 JVM tests (4 attachment format, 82 test-support, 22 per app build variant), 11 isolated PostgreSQL tests and the full 88 API-37 emulator tests (78 app, 10 storage) passed. Debug/release assemblies, backend distribution and IDE source resolution passed with strict dependency verification; all 17 added dependency artifacts were checked against fresh publisher downloads. The final lifecycle cancellation change also has a focused attachment emulator rerun. No physical-device, disk-full fault injection, Linux filesystem durability or live VPS/ingress transfer result is claimed; those remain deployment/device checks.
 
 For the proposed background-delivery architecture, platform limitations and future physical-device test matrix, see [BACKGROUND_SYNC_DESIGN.md](BACKGROUND_SYNC_DESIGN.md). Phase 1F.1 implements background FETCH/STORE/ACK; Phase 1F.2 adds optional generic local notifications. Phase 1G.1 adds an optional local UI lock; auth-bound storage remains proposed.
 

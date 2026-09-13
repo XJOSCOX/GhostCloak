@@ -13,7 +13,18 @@ interface MailboxRepository : DedupeRepository { val mailbox: Rows<MailboxRow> }
 interface ChallengeRepository { val challenges: Rows<ChallengeRow> }
 interface SessionRepository { val sessions: Rows<SessionRow> }
 interface BackendDatabase : AccountRepository, DeviceRepository, PreKeyRepository, MailboxRepository, ChallengeRepository, SessionRepository {
+    val blobs: Rows<BlobRow>
+    val blobBudgets: Rows<BlobBudget>
     fun <T> transaction(block: () -> T): T
+}
+@Serializable class BlobRow(val id: String, val owner: String, val device: String, val length: Long,
+    val digest: ByteArray, val capabilityHash: ByteArray, val created: Long, val expires: Long,
+    val complete: Boolean = false, val uploading: Boolean = false) {
+    override fun toString() = "BlobRow(redacted)"
+}
+@Serializable class BlobBudget(val id: String, val minute: Long, val requests: Int, val upload: Long,
+    val download: Long, val day: Long) {
+    override fun toString() = "BlobBudget(redacted)"
 }
 @Serializable class AccountRow(val id: String, val username: String, val deviceId: String)
 @Serializable class DeviceRow(val id: String, val accountId: String, val routingId: String, val authPublicKey: ByteArray, val identity: ByteArray)
@@ -26,7 +37,8 @@ interface BackendDatabase : AccountRepository, DeviceRepository, PreKeyRepositor
     val accounts: MutableMap<String, AccountRow> = mutableMapOf(), val devices: MutableMap<String, DeviceRow> = mutableMapOf(),
     val prekeys: MutableMap<String, PrekeyRow> = mutableMapOf(), val challenges: MutableMap<String, ChallengeRow> = mutableMapOf(),
     val sessions: MutableMap<String, SessionRow> = mutableMapOf(), val mailbox: MutableMap<String, MailboxRow> = mutableMapOf(),
-    val submissions: MutableMap<String, SubmissionRow> = mutableMapOf())
+    val submissions: MutableMap<String, SubmissionRow> = mutableMapOf(),
+    val blobs: MutableMap<String, BlobRow> = mutableMapOf(), val blobBudgets: MutableMap<String, BlobBudget> = mutableMapOf())
 
 /** Bounded local development adapter only. All access must occur inside transaction. */
 class MemoryBackendDatabase : BackendDatabase {
@@ -43,6 +55,7 @@ class MemoryBackendDatabase : BackendDatabase {
     override val prekeys = rows { state.prekeys }; override val challenges = rows { state.challenges }
     override val sessions = rows { state.sessions }; override val mailbox = rows { state.mailbox }
     override val submissions = rows { state.submissions }
+    override val blobs = rows { state.blobs }; override val blobBudgets = rows { state.blobBudgets }
     @Synchronized override fun <T> transaction(block: () -> T): T {
         val before = NetworkCodec.encode(state)
         return try { block() } catch (e: Throwable) {

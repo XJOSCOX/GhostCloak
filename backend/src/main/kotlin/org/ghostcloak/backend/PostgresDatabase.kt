@@ -32,7 +32,14 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
                 execute("INSERT INTO schema_history VALUES (2,?)", receiptChecksum)
             }
             check(query("SELECT checksum FROM schema_history WHERE version=2") { it.getString(1) }.singleOrNull() == receiptChecksum) { "Migration validation failed" }
-            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 2) { "Unknown schema version" }
+            val blobMigration = javaClass.getResourceAsStream("/db/V003__encrypted_blobs.sql")!!.use { it.readBytes() }
+            val blobChecksum = DeviceAuth.digest(blobMigration).joinToString("") { "%02x".format(it) }
+            if (migrate && query("SELECT version FROM schema_history WHERE version=3") { it.getInt(1) }.isEmpty()) {
+                blobMigration.toString(Charsets.UTF_8).split(';').filter { it.isNotBlank() }.forEach { execute(it) }
+                execute("INSERT INTO schema_history VALUES (3,?)", blobChecksum)
+            }
+            check(query("SELECT checksum FROM schema_history WHERE version=3") { it.getString(1) }.singleOrNull() == blobChecksum) { "Migration validation failed" }
+            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 3) { "Unknown schema version" }
         }
     }
     override fun <T> transaction(block: () -> T): T {
@@ -66,6 +73,12 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
     }
     override val accounts=rows("accounts",read={ AccountRow(it.getString("id"),it.getString("username"),it.getString("device_id")) }) { _,r ->
         execute("INSERT INTO accounts VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username",r.id,r.username,r.deviceId)
+    }
+    override val blobs=rows("attachment_blobs",read={ BlobRow(it.getString("id"),it.getString("owner_account"),it.getString("owner_device"),it.getLong("encrypted_length"),it.getBytes("ciphertext_digest"),it.getBytes("capability_hash"),it.getLong("created_at"),it.getLong("expires_at"),it.getBoolean("complete"),it.getBoolean("uploading")) }) { _,r ->
+        execute("INSERT INTO attachment_blobs VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET expires_at=excluded.expires_at,complete=excluded.complete,uploading=excluded.uploading",r.id,r.owner,r.device,r.length,r.digest,r.capabilityHash,r.created,r.expires,r.complete,r.uploading)
+    }
+    override val blobBudgets=rows("attachment_budgets",read={ BlobBudget(it.getString("id"),it.getLong("minute_bucket"),it.getInt("requests"),it.getLong("uploaded"),it.getLong("downloaded"),it.getLong("day_bucket")) }) { _,r ->
+        execute("INSERT INTO attachment_budgets VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET minute_bucket=excluded.minute_bucket,requests=excluded.requests,uploaded=excluded.uploaded,downloaded=excluded.downloaded,day_bucket=excluded.day_bucket",r.id,r.minute,r.requests,r.upload,r.download,r.day)
     }
     override val devices=rows("devices",read={ DeviceRow(it.getString("id"),it.getString("account_id"),it.getString("routing_id"),it.getBytes("auth_public_key"),it.getBytes("identity_public_key")) }) { _,r ->
         execute("INSERT INTO devices VALUES (?,?,?,?,?)",r.id,r.accountId,r.routingId,r.authPublicKey,r.identity)

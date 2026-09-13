@@ -38,10 +38,11 @@ class ProductionConfig(val mode:String,val databaseUrl:String,val databaseUser:S
     }
 }
 class ProductionHttpServer(private val service:MailboxService, private val healthy:()->Boolean,
-    private val production:Boolean=true, port:Int=8787) : AutoCloseable {
+    private val production:Boolean=true, port:Int=8787, private val blobs: BlobService? = null) : AutoCloseable {
     private val permits=Semaphore(32)
     private val server=embeddedServer(Netty,serverConfig { module {
         routing {
+            blobs?.let { blobRoutes(it, production) }
             get("/health") {
                 val ok=withContext(Dispatchers.IO) { healthy() }
                 call.response.headers.append("Cache-Control","no-store")
@@ -81,15 +82,15 @@ class ProductionHttpServer(private val service:MailboxService, private val healt
         connector {host="127.0.0.1"; this.port=port}
         connectionGroupSize=2; workerGroupSize=4; callGroupSize=8
         runningLimit=64; maxHeaderSize=8192; maxInitialLineLength=2048
-        requestReadTimeoutSeconds=10; responseWriteTimeoutSeconds=15; enableHttp2=false
+        requestReadTimeoutSeconds=660; responseWriteTimeoutSeconds=660; enableHttp2=false
     }
     fun start():ProductionHttpServer {server.start(wait=false); return this}
     override fun close(){server.stop(1000,3000)}
 }
-class RetentionWorker(private val service:MailboxService,private val db:PostgresDatabase):AutoCloseable {
+class RetentionWorker(private val service:MailboxService,private val db:PostgresDatabase,private val blobs:BlobService? = null):AutoCloseable {
     private val executor=Executors.newSingleThreadScheduledExecutor()
     @Volatile var healthy=true; private set
-    init {executor.scheduleWithFixedDelay({try {service.cleanup(); db.cleanupRateLimits(System.currentTimeMillis()); healthy=true} catch(_:Exception) {healthy=false}},0,30,TimeUnit.SECONDS)}
+    init {executor.scheduleWithFixedDelay({try {service.cleanup(); db.cleanupRateLimits(System.currentTimeMillis()); blobs?.cleanup(); healthy=true} catch(_:Exception) {healthy=false}},0,30,TimeUnit.SECONDS)}
     override fun close(){executor.shutdownNow()}
 }
 fun main(args:Array<String>) {
@@ -102,9 +103,11 @@ fun main(args:Array<String>) {
         require(args.isEmpty())
         db.checkServiceRole()
         val service=MailboxService(db,policy=BackendPolicy(audience=config.audience),rate=PostgresRateLimiter(db))
-        val worker=RetentionWorker(service,db)
-        val server=ProductionHttpServer(service,{db.healthy() && worker.healthy},config.mode=="production",config.port).start()
-        Runtime.getRuntime().addShutdownHook(Thread {server.close(); worker.close()})
+        // Explicit deployment opt-in after directory/quota/ingress checks. Absent means no blob API.
+        val blobs=System.getenv("GHOSTCLOAK_ATTACHMENTS_DIR")?.let { BlobService(db,service,java.io.File(it)) }
+        val worker=RetentionWorker(service,db,blobs)
+        val server=ProductionHttpServer(service,{db.healthy() && worker.healthy},config.mode=="production",config.port,blobs).start()
+        Runtime.getRuntime().addShutdownHook(Thread {server.close(); worker.close(); blobs?.close()})
         java.util.concurrent.CountDownLatch(1).await()
     } catch(_:Exception) {kotlin.system.exitProcess(1)}
 }

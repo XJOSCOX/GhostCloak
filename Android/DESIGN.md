@@ -1,6 +1,6 @@
 # Messenger design
 
-Phase 1I.1's proposed encrypted attachment and direct voice-note architecture, threat model, audited blockers and implementation gates are documented in [ATTACHMENTS_DESIGN.md](ATTACHMENTS_DESIGN.md). This is design only; no attachment capability is implemented by that phase.
+The encrypted attachment/voice-note architecture and future view-once compatibility are documented in [ATTACHMENTS_DESIGN.md](ATTACHMENTS_DESIGN.md). Phase 1I.2 adds the internal encrypted blob foundation and separate private journal; media UI, picking, recording and playback remain later work. Attachment descriptors never enter UI message models, and existing text screens do not render attachment rows. No automatic body download or new notification content is introduced.
 
 Phase 1F's proposed private background delivery architecture and threat model are documented in [BACKGROUND_SYNC_DESIGN.md](BACKGROUND_SYNC_DESIGN.md), including the optional app-lock roadmap: initial UI lock and a later Keystore-gated maximum-security mode. Phase 1F.1 implements scheduled background FETCH/STORE/ACK; Phase 1F.2 adds an encrypted acceptance ledger and optional generic local notifications. Phase 1G.1 implements the optional root UI/app-access lock described below. Foreground polling cadence is unchanged. Notification taps enter the normal app root, pass the lock gate, then open Chats.
 

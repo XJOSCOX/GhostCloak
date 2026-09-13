@@ -7,7 +7,7 @@ import org.junit.Test
 class ArchitectureTest {
     private val root = File(System.getProperty("ghostcloak.root"))
     @Test fun libsignalTypesStayInsideCryptoAndTests() {
-        val roots = listOf("app", "identity", "protocol", "storage", "transport", "messaging").map { File(root, "Android/$it/src/main") } + File(root, "backend/src/main")
+        val roots = listOf("app", "identity", "protocol", "storage", "transport", "messaging", "attachments").map { File(root, "Android/$it/src/main") } + File(root, "backend/src/main")
         val leaks = roots.flatMap { it.walkTopDown().filter { f -> f.isFile && f.extension in setOf("kt", "java") }.toList() }
             .filter { it.readText().contains("org.signal.libsignal") }
         assertEquals("Vendor types outside crypto: ${leaks.map { it.relativeTo(root) }}", emptyList<File>(), leaks)

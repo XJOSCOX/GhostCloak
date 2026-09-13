@@ -77,6 +77,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         put(key, message)
     }
     fun delete(id: String, localId: String) = records.transaction {
+        records.remove("app/attachment/$id/$localId")
         records.remove("app/message/$id/$localId")
         val readKey = "app/read/$id"
         val remaining = read<List<String>>(readKey).orEmpty().filterNot { it == localId }
@@ -87,11 +88,27 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         // Receipt polling is derived from visible SERVER_ACCEPTED messages, not a separate ledger.
     }
     fun clear(id: String) = records.transaction {
+        records.keys("app/attachment/$id/").forEach(records::remove)
         records.keys("app/message/$id/").forEach(records::remove)
         records.remove("app/read/$id")
         NotificationLedger.clear(records, id)
     }
     fun capacity() = records.transaction { if (records.keys("app/message/").size >= 5000) throw AppFailure(AppError.LOCAL_CAPACITY) }
+    fun attachment(id:String,localId:String):org.ghostcloak.attachments.AttachmentDescriptor? = records.transaction {
+        records.read("app/attachment/$id/$localId")?.let { bytes ->
+            try { org.ghostcloak.attachments.AttachmentFormat.decode(bytes) } finally { bytes.fill(0) }
+        }
+    }
+    fun hasAttachment(id:String,localId:String) = records.transaction { "app/attachment/$id/$localId" in records.keys("app/attachment/$id/") }
+    fun attachmentAvailable(id:String,localId:String) = records.transaction {
+        val message=read<Message>("app/message/$id/$localId")
+        val contact=read<Contact>("app/contact/$id")
+        message!=null && message.activeExpiry?.reached(clock.now())!=true && contact!=null && !contact.blocked && !contact.request && hasAttachment(id,localId)
+    }
+    fun attachment(id:String,localId:String,bytes:ByteArray) = records.transaction {
+        org.ghostcloak.attachments.AttachmentFormat.decode(bytes)
+        records.write("app/attachment/$id/$localId",bytes)
+    }
     fun accepted(sender:String,id:String,hash:ByteArray):Boolean=records.transaction {
         val existing=records.read("app/accepted/$sender/$id") ?: return@transaction false
         require(java.security.MessageDigest.isEqual(existing,hash)) {"Envelope receipt conflict"}; true

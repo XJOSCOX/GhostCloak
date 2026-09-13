@@ -27,4 +27,5 @@ rootProject.name = "GhostCloak"
 include(":app")
 include(":identity", ":crypto", ":storage", ":protocol", ":transport", ":test-support", ":backend")
 include(":messaging")
+include(":attachments")
 project(":backend").projectDir = file("../backend")

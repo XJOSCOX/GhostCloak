@@ -15,7 +15,18 @@ enum class DisappearingTimer(val seconds: Int, val label: String) {
 object ConversationPayload {
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
     private val magic = byteArrayOf(-1, 71, 67, 80)
-    data class Content(val body: String, val seconds: Int, val control: Boolean)
+    class Content(val body: String, val seconds: Int, val control: Boolean, val attachment: ByteArray? = null) {
+        override fun toString() = "Content(redacted)"
+    }
+    fun encodeAttachment(descriptor: org.ghostcloak.attachments.AttachmentDescriptor): ByteArray {
+        val encoded = org.ghostcloak.attachments.AttachmentFormat.encode(descriptor)
+        try {
+            val bytes=ByteArray(((16+encoded.size+255)/256)*256).also { SecureRandom().nextBytes(it) }
+            ByteBuffer.wrap(bytes).put(magic).put(1).put(3).putShort(0)
+                .putInt(descriptor.disappearingSeconds).putInt(encoded.size).put(encoded)
+            return bytes
+        } finally { encoded.fill(0) }
+    }
     fun encode(body: String, seconds: Int, control: Boolean = false): ByteArray {
         DisappearingTimer.from(seconds)
         val text = if (control) { require(body.isEmpty()); byteArrayOf() } else TextRules.encode(body)
@@ -42,12 +53,19 @@ object ConversationPayload {
         if (!ByteArray(4).also { input.get(it) }.contentEquals(magic) || input.get().toInt() != 1)
             throw AppFailure(AppError.INVALID_TEXT)
         val type = input.get().toInt()
-        if (type !in 1..2 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
+        if (type !in 1..3 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
         val seconds = input.int; DisappearingTimer.from(seconds)
         val length = input.int
         if (length !in 0..MAX_TEXT || length > input.remaining() || (type == 2 && length != 0) ||
             ((16 + length + 255) / 256) * 256 != bytes.size) throw AppFailure(AppError.INVALID_TEXT)
         val text = ByteArray(length).also { input.get(it) }
+        if (type == 3) {
+            try {
+                val descriptor=org.ghostcloak.attachments.AttachmentFormat.decode(text)
+                require(descriptor.disappearingSeconds==seconds)
+                return Content("",seconds,false,text)
+            } catch (_: Exception) { text.fill(0); throw AppFailure(AppError.INVALID_TEXT) }
+        }
         val body = try { text.decodeToString(throwOnInvalidSequence = true) } finally { text.fill(0) }
         if (type == 1) TextRules.encode(body).fill(0)
         return Content(body, seconds, type == 2)

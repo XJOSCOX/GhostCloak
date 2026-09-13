@@ -16,6 +16,41 @@ import java.util.concurrent.Executors
 import java.time.*
 
 class PostgresTest {
+    @Test fun blobMigrationOwnershipCapabilityQuotaAndRetention()=runBlocking {
+        Fixture().use { f ->
+            val service=f.service(); val a=register(service,"alice"); val b=register(service,"bob")
+            f.source.connection.use { c -> c.createStatement().use {
+                it.execute("DROP TABLE attachment_budgets"); it.execute("DROP TABLE attachment_blobs")
+                it.execute("DELETE FROM schema_history WHERE version=3")
+            } }
+            try {PostgresDatabase(f.source);fail()}catch(_:IllegalStateException){}
+            val upgraded=PostgresDatabase(f.source,true)
+            assertNotNull(upgraded.transaction { upgraded.accounts.get(a.registration.accountId) })
+            PostgresDatabase(f.source,true) // idempotent numbered migration/checksum
+            val directory=java.nio.file.Files.createTempDirectory("blob-pg").toFile()
+            try {
+                BlobService(upgraded,service,directory,minimumFreeBytes=0).use { blobs ->
+                    val data=byteArrayOf(1,2,3); val capability=ByteArray(32){7}
+                    val id="a".repeat(64)
+                    val reservation=BlobReservation(id=id,length=3,digest=DeviceAuth.digest(data),capabilityHash=DeviceAuth.digest(capability))
+                    assertFalse(blobs.reserve(a.state.read()!!,reservation).complete)
+                    assertThrows(ApiFailure::class.java) {blobs.reserve(b.state.read()!!,reservation)}
+                    assertThrows(ApiFailure::class.java) {blobs.upload(a.state.read()!!,id,byteArrayOf(1).inputStream())}
+                    assertTrue(blobs.upload(a.state.read()!!,id,data.inputStream()).complete)
+                    assertThrows(ApiFailure::class.java) {blobs.download(b.state.read()!!,id,"0".repeat(64))}
+                    blobs.download(b.state.read()!!,id,capability.joinToString(""){"%02x".format(it)}).use {assertArrayEquals(data,it.readBytes())}
+                    val row=upgraded.transaction {upgraded.blobs.get(id)!!}
+                    assertFalse(capability.contentEquals(row.capabilityHash))
+                    upgraded.transaction { upgraded.blobs.put(id,BlobRow(row.id,row.owner,row.device,row.length,row.digest,row.capabilityHash,row.created,0,true)) }
+                    blobs.cleanup(); assertNull(upgraded.transaction {upgraded.blobs.get(id)})
+                    repeat(4) { index -> try {blobs.reserve(a.state.read()!!,BlobReservation(id=(index+1).toString().repeat(64),length=BlobPolicy.MAX_BYTES,digest=ByteArray(32),capabilityHash=ByteArray(32)))}catch(_:ApiFailure){} }
+                    assertTrue(upgraded.transaction {upgraded.blobs.all().sumOf {it.length}}<=BlobPolicy.DAILY_UPLOAD)
+                }
+                val columns=f.source.connection.use {c->c.createStatement().use {s->s.executeQuery("SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='attachment_blobs'").use {r->buildList {while(r.next())add(r.getString(1))}}}}
+                assertFalse(columns.any {it in setOf("key","filename","media_type","duration","contact","message_id")})
+            } finally {directory.deleteRecursively()}
+        }
+    }
     @Test fun additiveReceiptMigrationPreservesExistingAccount() = runBlocking {
         Fixture().use { f ->
             val original = register(f.service(), "alice").registration

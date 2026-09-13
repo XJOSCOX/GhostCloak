@@ -33,14 +33,14 @@ class NetworkController(
     private val outbox by lazy { DurableOutbox(records, engine, transport) }
     private val renewalMutex = Mutex()
     private val renewalBlockKey = "app/renewal-blocked/${URI(origin).host}"
-    private var renewalBlocked = records.transaction { records.read(renewalBlockKey) != null }
+    @Volatile private var renewalBlocked = records.transaction { records.read(renewalBlockKey) != null }
         set(value) {
             records.transaction {
                 if (value) records.write(renewalBlockKey, byteArrayOf(1)) else records.remove(renewalBlockKey)
             }
             field = value
         }
-    private var loggingOut = false
+    @Volatile private var loggingOut = false
     private var receiptOffset = 0
     var syncActive = false
         private set
@@ -187,5 +187,12 @@ class NetworkController(
             loggingOut = false
             status = NetworkStatus.NEEDS_CONNECT
         }
+    }
+    internal fun blobClient(allowed: () -> Boolean, checkpoint: () -> Unit) =
+        org.ghostcloak.attachments.StreamingBlobClient(origin,client,{ canAutoSync && allowed() },checkpoint)
+    internal suspend fun sendAttachment(service:ConversationService,id:String,descriptor:org.ghostcloak.attachments.AttachmentDescriptor,
+        supported:Boolean,onEnqueued:(Message)->Unit):Message {
+        requireApi(canAutoSync,"connect_required",401)
+        return service.sendAttachment(id,descriptor,outbox,supported,onEnqueued)
     }
 }

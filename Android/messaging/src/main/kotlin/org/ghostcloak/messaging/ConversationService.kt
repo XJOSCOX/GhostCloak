@@ -68,8 +68,36 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         repository.contacts().map { ContactStatus(it, engine.getRemoteIdentityStatus(it.remoteDeviceId), engine.getSessionLifecycle(it.remoteDeviceId)) }
     }
     suspend fun messages(id: String) = action { repository.contact(id); repository.messages(id) }
+    suspend fun messagesForUi(id:String) = action {
+        repository.contact(id); repository.messages(id).filterNot { repository.hasAttachment(id,it.localId) }
+    }
     suspend fun sendNetwork(id:String,body:String,outbox:DurableOutbox):Message=action {
         enqueueNetwork(id, body, repository.policy(id), false, outbox)
+    }
+    /** Internal foundation API: caller must have confirmed upload and compatible peer support. */
+    suspend fun sendAttachment(id:String,descriptor:org.ghostcloak.attachments.AttachmentDescriptor,
+        outbox:DurableOutbox,peerSupportsAttachments:Boolean,onEnqueued:(Message)->Unit = {}):Message=action {
+        require(peerSupportsAttachments)
+        networkAllowed(id); repository.capacity(); descriptor.validate()
+        val bytes=ConversationPayload.encodeAttachment(descriptor)
+        lateinit var message:Message
+        val submission=try { outbox.enqueue(id,bytes) { localId ->
+            message=Message(localId,id,Direction.OUTGOING,"",repository.clock.now().wall,MessageState.PENDING,
+                disappearingSeconds=descriptor.disappearingSeconds)
+            repository.save(message)
+            val encoded=org.ghostcloak.attachments.AttachmentFormat.encode(descriptor)
+            try { repository.attachment(id,localId,encoded) } finally { encoded.fill(0) }
+            onEnqueued(message)
+        } } finally { bytes.fill(0) }
+        try { outbox.process(submission) { repository.acceptedOutgoing(id,it.submissionId) } }
+        catch (_:ApiFailure) { return@action message }
+        outbox.removeFinished(submission)
+        repository.messages(id).firstOrNull {it.localId==submission} ?: message
+    }
+    suspend fun attachment(id:String,localId:String)=action {
+        networkAllowed(id)
+        require(repository.messages(id).any {it.localId==localId})
+        repository.attachment(id,localId)
     }
     suspend fun setDisappearing(id: String, seconds: Int, outbox: DurableOutbox): Message = action {
         enqueueNetwork(id, "", seconds, true, outbox)
@@ -141,6 +169,10 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 now.wall,MessageState.RECEIVED,envelope.envelopeId, content.seconds,
                 if (!content.control && content.seconds > 0) ExpiryDeadline.start(content.seconds, now) else null, content.control),hash)
             if (content.control) repository.policy(contact.remoteDeviceId, content.seconds)
+            content.attachment?.let { encoded ->
+                try { repository.attachment(contact.remoteDeviceId,envelope.envelopeId,encoded) }
+                finally { encoded.fill(0) }
+            }
         }
     }
     suspend fun acceptRequest(id: String) = action {

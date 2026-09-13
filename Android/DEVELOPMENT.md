@@ -268,3 +268,8 @@ Do not use Phone A's unrelated missing-local-state case as a refill test: this p
 Validation commands: `:test-support:test :app:testDebugUnitTest :app:testReleaseUnitTest :app:assembleDebug :app:assembleRelease`, isolated `:test-support:postgresTest`, and `:app:connectedDebugAndroidTest :storage:connectedDebugAndroidTest`, all with `--dependency-verification strict`. New tests cover seeded/exhausted pools, privacy-equivalent lookup errors, refill/unique IDs/strict duplicate rejection, lost upload response and restart, concurrent callers, cooldown/logout, single 401 retry, unchanged identity/session, PostgreSQL persistence and Android background/foreground integration. Run PostgreSQL tests only against the explicit isolated test database.
 
 Validation result: 146 JVM tests and all 13 isolated PostgreSQL tests passed; debug/release builds passed with strict dependency verification. The API 37 emulator exercised 84 app tests: 82 passed in the full run, the new prekey fixture's sealed-request encoding was corrected and its focused rerun passed, and an existing notification publication timeout passed on its focused rerun. An earlier runner interruption and later cleanup stall required restarting the test emulator without wiping its data. The storage suite then passed all 10 tests. No physical-phone data was changed and no backend deployment was performed.
+
+## Picker crash regression
+
+See [PICKER_CRASH_FIX.md](PICKER_CRASH_FIX.md) for the Fragment/Activity dependency
+correction, regression coverage, and physical Photo/Document retest steps.

@@ -71,6 +71,8 @@ tasks.withType<Test>().configureEach {
 }
 
 dependencies {
+    // Biometric needs FragmentActivity; its old transitive Fragment rejects Activity Result request codes.
+    implementation(libs.androidx.fragment)
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.work.runtime)
     androidTestImplementation(libs.androidx.work.testing)

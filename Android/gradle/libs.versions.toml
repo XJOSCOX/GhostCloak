@@ -13,13 +13,15 @@ junit = "4.13.2"
 junitVersion = "1.1.5"
 espressoCore = "3.7.0"
 lifecycleRuntimeKtx = "2.6.1"
-activityCompose = "1.8.0"
+activityCompose = "1.8.2"
+fragment = "1.8.9"
 kotlin = "2.2.10"
 composeBom = "2026.02.01"
 navigation = "2.9.7"
 viewmodel = "2.9.4"
 
 [libraries]
+androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "fragment" }
 androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "biometric" }
 androidx-work-runtime = { module = "androidx.work:work-runtime", version.ref = "work" }
 androidx-work-testing = { module = "androidx.work:work-testing", version.ref = "work" }

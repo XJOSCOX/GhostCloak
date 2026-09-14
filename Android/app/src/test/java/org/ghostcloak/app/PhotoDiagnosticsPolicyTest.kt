@@ -7,12 +7,15 @@ import org.junit.Test
 class PhotoDiagnosticsPolicyTest {
     @Test fun releaseCannotEmitAndDiagnosticsHaveClosedVocabulary() {
         assertEquals(BuildConfig.DEBUG,PhotoDiagnostics.enabled)
+        assertEquals(BuildConfig.DEBUG,DocumentDiagnostics.enabled)
         for(event in PhotoEvent.entries) {
             assertTrue(event.text.matches(Regex("[A-Z_]+(=[A-Z_]+)?")))
             if(!BuildConfig.DEBUG) PhotoDiagnostics.emit(event)
         }
         if(!BuildConfig.DEBUG) for(operation in PhotoOperation.entries) {
             PhotoDiagnostics.stage(operation,true);PhotoDiagnostics.stage(operation,false)
+            DocumentDiagnostics.stage(operation,true);DocumentDiagnostics.stage(operation,false)
+            for(exception in PhotoException.entries) DocumentDiagnostics.stageFailure(operation,exception)
             for(exception in PhotoException.entries) PhotoDiagnostics.stageFailure(operation,exception)
         }
         if(!BuildConfig.DEBUG) for(reason in PhotoFailureReason.entries) PhotoDiagnostics.failed(reason)

@@ -11,6 +11,13 @@ import org.junit.Test
 
 class PhotoPreparationActionTest {
     @get:Rule val compose=createComposeRule()
+    @Test fun failedDocumentPreparationOffersReselection() {
+        var choices=0
+        compose.setContent { MaterialTheme { PreparationAction(MediaUi(photo=false,error="Read failed"),true,{choices++},{fail()}) } }
+        compose.onNodeWithText("Send").assertDoesNotExist()
+        compose.onNodeWithText("Choose another document").performClick()
+        assertEquals(1,choices)
+    }
     @Test fun failedPreparationOnlyOffersReselectionAndNeverSends() {
         var choices=0;var sends=0
         compose.setContent { MaterialTheme { PreparationAction(MediaUi(photo=true,error="Couldn't safely decode this photo."),true,{choices++},{sends++}) } }

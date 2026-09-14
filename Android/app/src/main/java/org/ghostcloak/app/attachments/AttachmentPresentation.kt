@@ -116,7 +116,11 @@ class AttachmentPresentation(private val app: GhostApplication) {
                         mutable.value.photo && (failure is java.io.IOException || failure is SecurityException) -> PhotoFailureReason.READ.userMessage
                         failure.message=="attachment_size" -> "File is too large. Maximum document size is 20 MiB."
                         mutable.value.photo -> PhotoFailureReason.NORMALIZE.userMessage
-                        else -> "Couldn't prepare document. Choose a nonempty file up to 20 MiB."
+                        failure.message=="attachment_empty" -> "This document is empty. Choose another document."
+                        failure.message=="attachment_unavailable" -> "Document preparation was interrupted because the app wasn't ready. Keep this conversation open and choose the document again."
+                        failure is SecurityException -> "Access to this document was denied. Choose it again from the system picker."
+                        failure is java.io.IOException -> "Couldn't read this document. Make sure it is downloaded and available, then choose it again."
+                        else -> "Couldn't prepare this document. Choose it again."
                     })
             }
         }
@@ -125,7 +129,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
         clear()
         mutable.value=MediaUi(conversation=conversation,photo=photo,busy=true)
         if(photo) PhotoDiagnostics.emit(PhotoEvent.START)
-        val trace=if(photo) PhotoTrace() else null
+        val trace=PhotoTrace(document=!photo)
         launch(trace) { expected ->
             trace?.begin(PhotoOperation.ELIGIBILITY_CHECK)
             if (!app.runtime.supportsAttachments(conversation)) {

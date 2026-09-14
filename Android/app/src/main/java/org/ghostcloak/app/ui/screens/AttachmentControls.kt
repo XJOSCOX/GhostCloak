@@ -68,7 +68,7 @@ import org.ghostcloak.messaging.Message
         } },
         confirmButton={
             if(state.message==null) PreparationAction(state,enabled,
-                {owner.cancel();photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))},
+                {owner.cancel();if(state.photo) photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) else document.launch(arrayOf("*/*"))},
                 {owner.send(refresh)})
             else if(state.ready && !state.photo) TextButton(onClick={external=true},enabled=enabled) { Text("Open document") }
             else if(state.error!=null) TextButton(onClick={owner.download(conversation,state.message!!,state.photo,state.filename,refresh)},enabled=enabled) { Text("Retry download") }
@@ -83,9 +83,9 @@ import org.ghostcloak.messaging.Message
 }
 
 @Composable internal fun PreparationAction(state: org.ghostcloak.app.attachments.MediaUi, enabled: Boolean,
-    choosePhoto: () -> Unit, send: () -> Unit) {
-    if(state.photo && state.error!=null && !state.uploadPrepared)
-        TextButton(onClick=choosePhoto,enabled=enabled && !state.busy) { Text("Choose another photo") }
+    chooseFile: () -> Unit, send: () -> Unit) {
+    if(state.error!=null && !state.uploadPrepared)
+        TextButton(onClick=chooseFile,enabled=enabled && !state.busy) { Text(if(state.photo) "Choose another photo" else "Choose another document") }
     else TextButton(onClick=send,enabled=enabled && !state.busy && (state.ready || state.uploadPrepared)) {
         Text(if(state.uploadPrepared) "Retry upload" else "Send")
     }

@@ -17,18 +17,22 @@ internal fun photoException(failure: Throwable) = when(failure) {
     is RuntimeException -> PhotoException.RUNTIME
     else -> PhotoException.UNKNOWN
 }
-internal class PhotoTrace {
+internal class PhotoTrace(private val document: Boolean = false) {
     private var reported = false
     private var current = PhotoOperation.ACCESS_CHECK
     fun begin(operation: PhotoOperation) { current=operation }
-    fun ok(operation: PhotoOperation = current) { PhotoDiagnostics.stage(operation,true) }
+    fun ok(operation: PhotoOperation = current) {
+        if(document) DocumentDiagnostics.stage(operation,true) else PhotoDiagnostics.stage(operation,true)
+    }
     inline fun <T> step(operation: PhotoOperation, block: () -> T): T {
         begin(operation)
         return block().also { ok(operation) }
     }
     fun failed(failure: Throwable) {
         if(!reported && failure !is java.util.concurrent.CancellationException) {
-            reported=true; PhotoDiagnostics.stageFailure(current,photoException(failure))
+            reported=true
+            if(document) DocumentDiagnostics.stageFailure(current,photoException(failure))
+            else PhotoDiagnostics.stageFailure(current,photoException(failure))
         }
     }
 }

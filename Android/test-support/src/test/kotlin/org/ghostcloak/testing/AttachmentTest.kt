@@ -15,6 +15,33 @@ import java.nio.file.Files
 import java.time.*
 
 class AttachmentTest {
+    @Test fun sameVersionPeersNeedIncomingTextNotJustOutgoingDelivery()=runBlocking {
+        Fixture().use { f ->
+            val a=f.person("alice"); val b=f.person("bob")
+            NetworkAccount(a.client,a.state).connect("bob",a.engine)
+            val ar=LocalRepository(a.records); val br=LocalRepository(b.records)
+            ar.save(Contact("synthetic-contact",b.registration.accountId,"bob",b.registration.deviceId))
+            val sender=ConversationService(a.engine,ar); sender.open()
+            val receiver=ConversationService(b.engine,br); receiver.open()
+            val outbox=DurableOutbox(a.records,a.engine,NetworkMailboxTransport(a.client,a.state))
+            sender.sendNetwork(b.registration.deviceId,"Hi",outbox)
+            val text=b.client.call(ApiRequest.Fetch(includeSenders=true)).deliveries.single()
+            text.sender?.let(b.state::remember)
+            receiver.acceptNetwork(EnvelopeCodec.decode(text.encryptedEnvelope),text.sender)
+            b.client.call(ApiRequest.Ack(listOf(text.serverMessageId)))
+            // The ACK proves delivery, not the recipient application's attachment support.
+            assertFalse(sender.attachmentPeer(b.registration.deviceId))
+            receiver.acceptRequest(a.registration.deviceId)
+            assertTrue(receiver.attachmentPeer(a.registration.deviceId))
+            val replyOutbox=DurableOutbox(b.records,b.engine,NetworkMailboxTransport(b.client,b.state))
+            receiver.sendNetwork(a.registration.deviceId,"Hi back",replyOutbox)
+            val reply=a.client.call(ApiRequest.Fetch(includeSenders=true)).deliveries.single()
+            sender.acceptNetwork(EnvelopeCodec.decode(reply.encryptedEnvelope),reply.sender)
+            assertTrue(sender.attachmentPeer(b.registration.deviceId))
+            val reopened=ConversationService(a.engine,LocalRepository(a.records)); reopened.open()
+            assertTrue(reopened.attachmentPeer(b.registration.deviceId))
+        }
+    }
     @Test fun authenticatedPaddingEstablishesSupportAndAttachmentUiDoesNotExposeRequestMetadata()=runBlocking {
         Fixture().use { f ->
             val a=f.person("alice");val b=f.person("bob")

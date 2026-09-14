@@ -20,6 +20,7 @@ data class MediaUi(val conversation: String = "", val message: String? = null,
 
 /** One foreground presentation owner; no credential or descriptor enters Compose state. */
 class AttachmentPresentation(private val app: GhostApplication) {
+    private val supportNotConfirmed = "Attachment support hasn't been confirmed yet. Ask this contact to send you a short text from their updated Ghost Cloak app, then try again. Sending them a text is not enough."
     private val scope = CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
     private val mutable = MutableStateFlow(MediaUi())
     val state = mutable.asStateFlow()
@@ -128,7 +129,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
         launch(trace) { expected ->
             trace?.begin(PhotoOperation.ELIGIBILITY_CHECK)
             if (!app.runtime.supportsAttachments(conversation)) {
-                mutable.value=mutable.value.copy(busy=false,error="This contact needs a newer Ghost Cloak version to receive attachments. Exchange a text message after updating.")
+                mutable.value=mutable.value.copy(busy=false,error=supportNotConfirmed)
                 return@launch
             }
             trace?.ok(PhotoOperation.ELIGIBILITY_CHECK)
@@ -191,7 +192,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
         mutable.value=before.copy(busy=true,error=null,sending=before.photo)
         launch { expected ->
             if(!app.runtime.supportsAttachments(before.conversation)) {
-                mutable.value=mutable.value.copy(busy=false,error="This contact needs a newer Ghost Cloak version to receive attachments. Exchange a short text after updating.")
+                mutable.value=mutable.value.copy(busy=false,error=supportNotConfirmed)
                 return@launch
             }
             if(blob==null) {

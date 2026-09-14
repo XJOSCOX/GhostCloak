@@ -323,3 +323,8 @@ correction, regression coverage, and physical Photo/Document retest steps.
 See [photo preparation compatibility and physical retest](PHOTO_PREPARATION_DIAGNOSTIC.md). Debug Logcat filter: `tag:GhostCloakPhoto`. Only fixed categories are emitted; release diagnostics are disabled. Supported still inputs become fresh SDR JPEG, with 50 MiB source / 10 MiB output caps and bounded 4096-long-edge decoding.
 
 For a `PHOTO_PREP_START` / immediate failure, the [normalization follow-up](PHOTO_PREPARATION_DIAGNOSTIC.md#follow-up-start-immediately-followed-by-normalize-failure) explains the foreground-readiness correction and new fixed stage/exception diagnostics. Photo selection waits for RESUMED; the composer shows Preparing photo… while IO work runs. Re-test the same selected photo and retain only GhostCloakPhoto category lines.
+
+## Attachment support confirmation
+
+Installing the same app version on both phones does not itself confirm peer attachment support. Support is learned from an incoming authenticated short text (or supported control payload), not an outgoing text's delivery ACK. Before sending the first attachment, have the other phone reply with a short text from the updated app; accept any message request first. Once that reply arrives, retry Photo or Document. For attachments in both directions, exchange short texts both ways. The UI now describes unconfirmed support instead of claiming that the peer must be outdated. No account reset or reconnect is needed. The existing capability gate, encryption and delivery semantics are unchanged.
+

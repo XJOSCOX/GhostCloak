@@ -34,6 +34,9 @@ class AppRuntime internal constructor(
     private var notificationLedger: NotificationLedger? = null
     private var attachments: org.ghostcloak.attachments.AttachmentStore? = null
     @Volatile private var attachmentContacts:Set<String> = emptySet()
+    private class AttachmentUiAccess(val accountEligible: Boolean = false,
+        val messages: Map<Pair<String,String>,ExpiryDeadline?> = emptyMap())
+    @Volatile private var attachmentUiAccess = AttachmentUiAccess()
     private val notificationGate = Any()
     @Volatile private var activityVisible = false
     val syncActive get() = network?.syncActive == true
@@ -58,7 +61,8 @@ class AppRuntime internal constructor(
     }
     internal fun revokeAttachmentAccess() { attachments?.invalidate() }
     private fun attachmentAllowed() = canAutoSync && foreground && activityVisible && attachmentAccess()
-    internal val attachmentTransfersAllowed get() = attachmentAllowed()
+    // UI predicates must never enter Room; transfer operations retain the live IO checks above.
+    internal val attachmentTransfersAllowed get() = attachmentUiAccess.accountEligible && !inDemo && foreground && activityVisible && attachmentAccess()
     private fun cancelNotificationSafely() { try { notifications.cancel() } catch (_: Exception) { } }
     private fun reconcileNotifications() {
         if (notifications === NoLocalNotifications) return
@@ -157,10 +161,10 @@ class AppRuntime internal constructor(
             if (local!!.reconcileExpiry() > 0) expiryChanges.value++
             try { block(demo?.service ?: local!!) } finally {
                 if (local!!.reconcileExpiry() > 0) expiryChanges.value++
+                // Publish atomically on IO before returning to Compose.
+                refreshAttachmentUiAccess()
                 reconcileBackground()
                 reconcileNotifications()
-                attachmentContacts=local!!.contacts().filter { !it.contact.blocked && !it.contact.request &&
-                    it.identity?.trustState!=org.ghostcloak.identity.IdentityTrustState.CHANGED }.map {it.contact.remoteDeviceId}.toSet()
                 attachments?.reconcileReferences(
                     store!!.transaction { store!!.keys("app/message/").map { it.removePrefix("app/message/") }.toSet() },
                     store!!.transaction { store!!.keys("outbox/").map { it.removePrefix("outbox/") }.toSet() })
@@ -212,12 +216,13 @@ class AppRuntime internal constructor(
     suspend fun addNetwork(username: String, service: ConversationService) { network!!.add(username, service) }
     suspend fun publishNetwork() { network!!.publish() }
     suspend fun logoutNetwork() {
+        attachmentUiAccess=AttachmentUiAccess()
         attachments?.invalidate()
         try { network!!.logout() }
         finally { notificationLedger?.suppressAll(); cancelNotificationSafely() }
     }
     /** Process owner closes only after all foreground operations have finished (also used by reopen tests). */
-    override fun close() { attachments?.invalidate(); attachments=null; store?.close(); store = null; local = null; network = null; notificationLedger = null; attached = false }
+    override fun close() { attachmentUiAccess=AttachmentUiAccess(); attachments?.invalidate(); attachments=null; store?.close(); store = null; local = null; network = null; notificationLedger = null; attached = false }
     /** Internal synthetic-file foundation only; no picker/recorder/UI entry point. */
     internal suspend fun prepareAttachment(source:java.io.InputStream,length:Long,kind:org.ghostcloak.attachments.AttachmentKind,seconds:Int,filename:String?=null):org.ghostcloak.attachments.AttachmentDescriptor {
         use { check(attachmentAllowed()) }
@@ -226,9 +231,26 @@ class AppRuntime internal constructor(
     internal suspend fun supportsAttachments(conversation:String):Boolean=use { it.attachmentPeer(conversation) }
     internal fun cachedAttachments(conversation:String?) = if(conversation==null) emptySet() else
         attachments?.cachedReferences().orEmpty().filter { it.substringBefore('/')==conversation }.map { it.substringAfter('/') }.toSet()
-    internal fun attachmentAvailableNow(conversation:String,message:String):Boolean = try {
-        canAutoSync && conversation in attachmentContacts && store?.let { LocalRepository(it,expiryClock).attachmentAvailable(conversation,message) } == true
-    } catch (_: Exception) { false }
+    internal fun attachmentAvailableNow(conversation:String,message:String):Boolean {
+        val access=attachmentUiAccess
+        val key=conversation to message
+        return !inDemo && access.accountEligible && access.messages.containsKey(key) &&
+            access.messages[key]?.reached(expiryClock.now()) != true
+    }
+    private suspend fun refreshAttachmentUiAccess() {
+        try {
+            val eligible=canAutoSync
+            val repository=LocalRepository(store!!,expiryClock)
+            val contacts=local!!.contacts().filter { !it.contact.blocked && !it.contact.request &&
+                it.identity?.trustState!=org.ghostcloak.identity.IdentityTrustState.CHANGED }.map {it.contact.remoteDeviceId}.toSet()
+            val messages=if(eligible) repository.attachmentAccessExpiries(contacts) else emptyMap()
+            attachmentContacts=contacts
+            attachmentUiAccess=AttachmentUiAccess(eligible,messages)
+        } catch(failure: Exception) {
+            attachmentUiAccess=AttachmentUiAccess()
+            throw failure
+        }
+    }
     internal suspend fun attachmentStillAvailable(conversation:String,message:String):Boolean=use { attachmentAvailableNow(conversation,message) }
     internal suspend fun attachmentDuration(conversation:String):Int=use { it.policies()[conversation] ?: 0 }
     internal suspend fun discardAttachment(id:String) { use { attachments?.entry(id)?.takeIf { it.references.isEmpty() }?.let { attachments?.remove(id) } } }

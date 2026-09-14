@@ -104,6 +104,20 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         }
     }
     fun hasAttachment(id:String,localId:String) = records.transaction { "app/attachment/$id/$localId" in records.keys("app/attachment/$id/") }
+    /** UI access metadata only; no attachment key, descriptor or message body leaves this read. */
+    fun attachmentAccessExpiries(allowedContacts:Set<String>):Map<Pair<String,String>,ExpiryDeadline?> = records.transaction {
+        buildMap {
+            records.keys("app/attachment/").forEach { key ->
+                val reference=key.removePrefix("app/attachment/")
+                val id=reference.substringBefore('/'); val localId=reference.substringAfter('/')
+                if(id in allowedContacts) {
+                    val message=read<Message>("app/message/$id/$localId")
+                    if(message!=null && message.activeExpiry?.reached(clock.now())!=true)
+                        put(id to localId,message.activeExpiry)
+                }
+            }
+        }
+    }
     fun attachmentAvailable(id:String,localId:String) = records.transaction {
         val message=read<Message>("app/message/$id/$localId")
         val contact=read<Contact>("app/contact/$id")

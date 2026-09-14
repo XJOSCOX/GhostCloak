@@ -69,3 +69,19 @@ Update in place, filter **tag:GhostCloakPhoto**, and select the **same failing p
 
 
 Follow-up validation: **162 JVM tests passed**; debug/release builds and strict dependency verification passed. **2 lifecycle tests and 18 synthetic photo tests passed on both the API 37 emulator and connected Android 16 Samsung phone**. Final emulator validation also passed **6 picker tests, 3 app-lock screen tests and all 18 photo tests**, including an asserted wide-gamut/hardware source decode followed by software SDR normalization. No original private camera photo was selected by the tests; repeat the physical steps above for the reported failure.
+
+## Confirmed access-check failure from the 19:28 physical trace
+
+The supplied trace now identifies `PHOTO_ACCESS_CHECK=FAILED`, `PHOTO_NORMALIZE_FAILED=OPEN`, `PHOTO_NORMALIZE_EXCEPTION=RUNTIME`, before INPUT_OPEN. No photo bytes were read. Auditing this exact predicate exposed the database/thread boundary defect:
+
+`AttachmentPresentation.check` on Dispatchers.Main → `allowed` → `AppRuntime.attachmentTransfersAllowed` → `attachmentAllowed` → `canAutoSync` → `NetworkController.canAutoSync` → `EndpointNetworkState.connectionState/read` → Room/SQLCipher transaction.
+
+Room prohibits that main-thread transaction and throws IllegalStateException, which the generic UI mapping called NORMALIZE. An isolated real-Room instrumentation test reproduces the exception on Main with a registered synthetic account; the same state is valid on IO. The earlier lifecycle correction did not remove this database read. This is an access-check failure, not an image-format or JPEG encoder rejection.
+
+UI access now reads a volatile, immutable snapshot published from AppRuntime's serialized IO work. It contains account eligibility and attachment reference/expiry metadata only, never token/key/descriptor/plaintext. Foreground/activity visibility and app-lock gates remain live. Logout and runtime close clear eligibility; failed snapshot refresh fails closed. Message access also previously queried Room on Main and silently returned false; it now reads the same snapshot and evaluates expiry against the current clock. Snapshot refresh scans attachment references, not all text history. Block/request/changed-identity restrictions are preserved.
+
+Upload/download authorization and storage reads remain live checks on IO; no allowMainThreadQueries, blocking runBlocking bridge, new identity, backend, database schema, encryption-format or cache-retention change was introduced. Core foreground synchronization still uses its existing live authentication checks. The fix only separates UI read predicates from database operations.
+
+Regression coverage uses isolated synthetic accounts and real encrypted stores: old live predicate throws on Main; new UI predicate works; lock/background/logout deny access; process recreation starts denied until IO initialization; registration is not repeated; attachment availability reflects commit, blocking, local deletion and expiry on Main without database reads.
+
+Validation of the Room/UI correction: 162 JVM tests; 2 real-Room access tests; 18 photo-preparation tests; 2 foreground-sync tests; 3 inline-photo lifecycle tests; debug/release builds and strict dependency verification all passed. Connected tests for this correction ran on the API 37 emulator only; the physical phone was no longer connected. Update in place and select the same photo: ACCESS_CHECK should pass before INPUT_OPEN and the remaining preparation stages.

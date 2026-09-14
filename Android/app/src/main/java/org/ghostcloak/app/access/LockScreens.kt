@@ -13,6 +13,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
@@ -34,7 +35,12 @@ val LocalAppLock = staticCompositionLocalOf<AppLockController?> { null }
 /** The private subtree is absent, not hidden behind an overlay. Never accepts private screen data. */
 @Composable fun AppLockGate(controller: AppLockController, content: @Composable () -> Unit) {
     val state by controller.state.collectAsState()
-    if (state.canShowContent) CompositionLocalProvider(LocalAppLock provides controller, content = content)
+    // Keep navigation and Activity Result registration keys while disposing private UI.
+    // Plaintext previews, drafts and PINs use remember, not saveable state.
+    val privateState = rememberSaveableStateHolder()
+    if (state.canShowContent) privateState.SaveableStateProvider("private-navigation") {
+        CompositionLocalProvider(LocalAppLock provides controller, content = content)
+    }
     else Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.TopCenter) {
             Box(Modifier.widthIn(max = GhostLayout.maxPageWidth).fillMaxSize()) {

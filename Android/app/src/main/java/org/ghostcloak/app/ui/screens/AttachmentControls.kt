@@ -30,10 +30,10 @@ import org.ghostcloak.messaging.Message
     val scope=rememberCoroutineScope()
     val pickerLifecycle=LocalLifecycleOwner.current.lifecycle
     val photo=rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if(uri!=null) scope.launch { awaitPhotoHost(pickerLifecycle) { owner.select(conversation,uri,true) } }
+        if(uri!=null) scope.launch { awaitAttachmentHost(pickerLifecycle) { owner.select(conversation,uri,true) } }
     }
     val document=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if(uri!=null) owner.select(conversation,uri,false)
+        if(uri!=null) scope.launch { awaitAttachmentHost(pickerLifecycle) { owner.select(conversation,uri,false) } }
     }
     DisposableEffect(conversation) { onDispose { owner.clear() } }
     Box {
@@ -105,6 +105,6 @@ import org.ghostcloak.messaging.Message
 }
 
 
-internal suspend fun awaitPhotoHost(lifecycle: androidx.lifecycle.Lifecycle, select: () -> Unit) {
+internal suspend fun awaitAttachmentHost(lifecycle: androidx.lifecycle.Lifecycle, select: () -> Unit) {
     lifecycle.withResumed { select() }
 }

@@ -3,6 +3,7 @@ package org.ghostcloak.app.ui.navigation
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.navigation.compose.*
@@ -32,7 +33,7 @@ import org.ghostcloak.app.ui.components.*
     }
     val nav = rememberNavController()
     val entry by nav.currentBackStackEntryAsState()
-    var handledChatsRequest by remember { mutableIntStateOf(0) }
+    var handledChatsRequest by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(chatsRequest, state.identity != null, entry != null) {
         // MainActivity's app-lock gate must allow this subtree before its graph is installed.
         if (chatsRequest > handledChatsRequest && state.identity != null && entry != null) {

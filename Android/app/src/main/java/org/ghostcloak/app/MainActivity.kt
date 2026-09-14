@@ -36,6 +36,7 @@ class MainActivity : FragmentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        chatsRequest = savedInstanceState?.getInt("chats-request", 0) ?: 0
         // Global policy: protects the first frame, PIN enrollment, grace periods and locked screens.
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
         lifecycleScope.launch { appLock.initialize() }
@@ -61,5 +62,9 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+    }
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt("chats-request", chatsRequest)
+        super.onSaveInstanceState(outState)
     }
 }

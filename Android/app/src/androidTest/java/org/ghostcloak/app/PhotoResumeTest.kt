@@ -8,7 +8,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.*
 import org.ghostcloak.app.application.GhostApplication
-import org.ghostcloak.app.ui.screens.awaitPhotoHost
+import org.ghostcloak.app.ui.screens.awaitAttachmentHost
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -47,12 +47,12 @@ class PhotoResumeTest {
             }
             val host=Host();host.registry.currentState=Lifecycle.State.STARTED
             var selections=0
-            val pending=launch(start=CoroutineStart.UNDISPATCHED) { awaitPhotoHost(host.lifecycle) {selections++} }
+            val pending=launch(start=CoroutineStart.UNDISPATCHED) { awaitAttachmentHost(host.lifecycle) {selections++} }
             assertEquals(0,selections)
             host.registry.currentState=Lifecycle.State.RESUMED;pending.join()
             assertEquals(1,selections)
             host.registry.currentState=Lifecycle.State.CREATED
-            val cancelled=launch(start=CoroutineStart.UNDISPATCHED) { awaitPhotoHost(host.lifecycle) {selections++} }
+            val cancelled=launch(start=CoroutineStart.UNDISPATCHED) { awaitAttachmentHost(host.lifecycle) {selections++} }
             host.registry.currentState=Lifecycle.State.DESTROYED;cancelled.join()
             assertEquals(1,selections)
         }

@@ -328,3 +328,13 @@ For a `PHOTO_PREP_START` / immediate failure, the [normalization follow-up](PHOT
 
 Installing the same app version on both phones does not itself confirm peer attachment support. Support is learned from an incoming authenticated short text (or supported control payload), not an outgoing text's delivery ACK. Before sending the first attachment, have the other phone reply with a short text from the updated app; accept any message request first. Once that reply arrives, retry Photo or Document. For attachments in both directions, exchange short texts both ways. The UI now describes unconfirmed support instead of claiming that the peer must be outdated. No account reset or reconnect is needed. The existing capability gate, encryption and delivery semantics are unchanged.
 
+
+## Document picker return regression
+
+The system document picker can STOP MainActivity. `LockSession.canShow` then becomes false even with lock mode OFF, so `AppLockGate` correctly disposes the private UI. Previously this also discarded the navigation controller and Compose Activity Result registration keys. Returning rebuilt the Chats start destination and could lose the pending document callback. The photo picker often does not stop the host, making the failure appear document-specific. Separately, only photo callbacks waited for RESUMED.
+
+The gate now retains saveable navigation/launcher state while keeping the private subtree absent during background/lock. No plaintext staging file, preview, draft or PIN is saved by this change. Both picker callbacks wait for RESUMED; pending results are registered again only after the lock gate permits content. The handled notification navigation request is saveable too, so an old notification does not redirect the restored conversation to Chats again. A new notification still requests Chats. Existing lock timing, transfer cancellation, credentials, backend and encryption are unchanged.
+
+Retest: open a conversation, choose + / Document, select a small PDF or text file and confirm the preparation dialog returns to that conversation; tap Send. Repeat with cancellation, then with Immediate app lock enabled and unlock on returning from the picker. Repeat Photo. Never clear app data for this test.
+
+Validation: 100 test-support JVM tests and app debug/release unit tests passed. API 37 emulator: two pending document/gate regression tests, two resume tests, six picker tests and three app-lock screen tests passed. Debug/release builds passed with strict dependency verification. Physical-device document selection/send still needs retesting; no physical data was reset.

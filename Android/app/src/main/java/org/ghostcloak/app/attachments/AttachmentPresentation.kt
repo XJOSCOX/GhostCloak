@@ -52,8 +52,13 @@ class AttachmentPresentation(private val app: GhostApplication) {
         } finally { target.delete() }
     }
     init { root.listFiles()?.filter { it.isFile }?.forEach { it.delete() } }
+    internal val presentationVisible get() = visible
     private fun allowed() = visible && app.appLock.state.value.canShowContent && app.runtime.attachmentTransfersAllowed
     private fun check(expected: Long) { check(expected == epoch && allowed()) { "attachment_unavailable" } }
+    private fun check(expected: Long, trace: PhotoTrace?) {
+        try { check(expected) }
+        catch(failure: Exception) { trace?.begin(PhotoOperation.ACCESS_CHECK);throw failure }
+    }
     private fun temporary() = File(root,AttachmentFormat.newId())
     fun start() { visible = true; session.value++; revokeLease() }
     private fun sweepPresentation() { root.listFiles()?.filter { it.isFile && it!=lease?.second }?.forEach { it.delete() } }
@@ -76,17 +81,19 @@ class AttachmentPresentation(private val app: GhostApplication) {
         clear()
         if (orphan != null) scope.launch { try { app.runtime.discardAttachment(orphan) } catch (_: Exception) {} }
     }
-    private fun launch(block: suspend (Long)->Unit) {
+    private fun launch(trace: PhotoTrace? = null, block: suspend (Long)->Unit) {
         job?.cancel()
         val expected = epoch
         job = scope.launch {
-            try { check(expected); block(expected) }
+            try { if(trace!=null) trace.step(PhotoOperation.ACCESS_CHECK) { check(expected) } else check(expected); block(expected) }
             catch (failure: CancellationException) { throw failure }
-            catch (_: OutOfMemoryError) {
+            catch (failure: OutOfMemoryError) {
+                trace?.failed(failure)
                 if(mutable.value.photo) PhotoDiagnostics.failed(PhotoFailureReason.MEMORY)
                 if(expected==epoch) { file?.delete();file=null;mutable.value=mutable.value.copy(busy=false,ready=false,preview=null,sending=mutable.value.uploadPrepared,error=PhotoFailureReason.MEMORY.userMessage) }
             }
             catch (failure: Exception) {
+                trace?.failed(failure)
                 if (expected == epoch && mutable.value.photo && mutable.value.message==null && blob==null) {
                     if(failure.message=="attachment_size") PhotoDiagnostics.emit(PhotoEvent.SIZE_OVER)
                     PhotoDiagnostics.failed(when {
@@ -117,16 +124,22 @@ class AttachmentPresentation(private val app: GhostApplication) {
         clear()
         mutable.value=MediaUi(conversation=conversation,photo=photo,busy=true)
         if(photo) PhotoDiagnostics.emit(PhotoEvent.START)
-        launch { expected ->
+        val trace=if(photo) PhotoTrace() else null
+        launch(trace) { expected ->
+            trace?.begin(PhotoOperation.ELIGIBILITY_CHECK)
             if (!app.runtime.supportsAttachments(conversation)) {
                 mutable.value=mutable.value.copy(busy=false,error="This contact needs a newer Ghost Cloak version to receive attachments. Exchange a text message after updating.")
                 return@launch
             }
+            trace?.ok(PhotoOperation.ELIGIBILITY_CHECK)
             val staged=temporary()
             var prepared: File? = null
             try {
                 val name = withContext(Dispatchers.IO) {
-                    check(expected)
+                    trace?.begin(PhotoOperation.ACCESS_CHECK)
+                    check(expected,trace)
+                    trace?.ok()
+                    trace?.begin(PhotoOperation.INPUT_OPEN)
                     require(uri.scheme == "content")
                     val label = if (photo) "Photo" else try {
                         app.contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use {
@@ -134,31 +147,34 @@ class AttachmentPresentation(private val app: GhostApplication) {
                         } ?: "Attachment"
                     } catch (_: Exception) { "Attachment" }
                     val signal=android.os.CancellationSignal()
-                    synchronized(inputGate) { check(expected);sourceSignal=signal }
+                    synchronized(inputGate) { check(expected,trace);sourceSignal=signal }
                     val descriptor=app.contentResolver.openFileDescriptor(uri,"r",signal)
                         ?: if(photo) throw PhotoFailure(PhotoFailureReason.READ) else error("attachment_missing")
                     val input=android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)
+                    trace?.ok(PhotoOperation.INPUT_OPEN)
+                    trace?.begin(PhotoOperation.INPUT_COPY)
                     try { input.use {
-                        synchronized(inputGate) { check(expected);activeInput=input }
+                        synchronized(inputGate) { check(expected,trace);activeInput=input }
                         staged.outputStream().use { output ->
-                        PhotoPreparation.boundedCopy(input,output,if(photo) PhotoPreparation.SOURCE_CAP else AttachmentKind.DOCUMENT.maximumBytes) { check(expected) }
+                        PhotoPreparation.boundedCopy(input,output,if(photo) PhotoPreparation.SOURCE_CAP else AttachmentKind.DOCUMENT.maximumBytes) { check(expected,trace) }
                     } } } finally {
                         synchronized(inputGate) {
                             if(activeInput===input) activeInput=null
                             if(sourceSignal===signal) sourceSignal=null
                         }
                     }
+                    trace?.ok(PhotoOperation.INPUT_COPY)
                     if (photo) {
                         prepared=temporary()
-                        PhotoPreparation.normalize(staged,prepared!!) { check(expected) }
+                        PhotoPreparation.normalizeTraced(staged,prepared!!,trace!!) { check(expected,trace) }
                         staged.delete()
                     } else prepared=staged
                     label
                 }
-                check(expected)
+                check(expected,trace)
                 file=prepared
-                val preview=if(photo) withContext(Dispatchers.IO) { PhotoPreparation.decode(prepared!!,512) } else null
-                check(expected)
+                val preview=if(photo) withContext(Dispatchers.IO) { PhotoPreparation.decodeTraced(prepared!!,512,trace!!) } else null
+                check(expected,trace)
                 mutable.value=mutable.value.copy(filename=name,bytes=prepared!!.length(),preview=preview,busy=false,ready=true)
                 if(photo) PhotoDiagnostics.emit(PhotoEvent.OK)
             } finally {

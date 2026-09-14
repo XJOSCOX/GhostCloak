@@ -13,6 +13,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 import kotlinx.coroutines.launch
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.withResumed
 import org.ghostcloak.app.application.GhostApplication
 import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.theme.GhostDimensions
@@ -26,8 +28,9 @@ import org.ghostcloak.messaging.Message
     var external by remember { mutableStateOf(false) }
     var viewerError by remember { mutableStateOf(false) }
     val scope=rememberCoroutineScope()
+    val pickerLifecycle=LocalLifecycleOwner.current.lifecycle
     val photo=rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if(uri!=null) owner.select(conversation,uri,true)
+        if(uri!=null) scope.launch { awaitPhotoHost(pickerLifecycle) { owner.select(conversation,uri,true) } }
     }
     val document=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if(uri!=null) owner.select(conversation,uri,false)
@@ -58,7 +61,7 @@ import org.ghostcloak.messaging.Message
             state.preview?.let { Image(it.asImageBitmap(),"Photo preview",Modifier.fillMaxWidth().heightIn(max=GhostDimensions.previewWidth)) }
             if(state.filename.isNotEmpty()) Text(state.filename)
             if(state.bytes>0) Text("${(state.bytes+1023)/1024} KiB",style=MaterialTheme.typography.bodySmall)
-            if(state.busy) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(if(state.message==null) "Preparing / uploading…" else "Downloading / verifying…") }
+            if(state.busy) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(if(state.message==null && state.photo && !state.uploadPrepared) "Preparing photo…" else if(state.message==null) "Preparing / uploading…" else "Downloading / verifying…") }
             state.error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
             if(!state.photo && state.message==null) Text("Documents keep embedded metadata. The complete file is encrypted before upload.",style=MaterialTheme.typography.bodySmall)
             if(viewerError) Text("No document viewer is available, or access has expired.",color=MaterialTheme.colorScheme.error)
@@ -99,4 +102,9 @@ import org.ghostcloak.messaging.Message
             Text(if(cached) { if(summary.photo) "View photo" else "Open document" } else "Download",color=LocalContentColor.current)
         } else Text(if(summary.supported) "Attachment unavailable until this conversation is accepted and secure." else "Unsupported attachment type.",style=MaterialTheme.typography.bodySmall)
     }
+}
+
+
+internal suspend fun awaitPhotoHost(lifecycle: androidx.lifecycle.Lifecycle, select: () -> Unit) {
+    lifecycle.withResumed { select() }
 }

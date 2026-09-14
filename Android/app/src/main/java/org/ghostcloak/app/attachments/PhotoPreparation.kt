@@ -30,17 +30,21 @@ object PhotoPreparation {
         } finally { buffer.fill(0) }
     }
 
-    private fun bounds(width: Int, height: Int) {
+    private fun bounds(width: Int, height: Int, trace: PhotoTrace? = null) {
+        trace?.begin(PhotoOperation.BOUNDS_VALID)
         if (width !in 1..AXIS_CAP || height !in 1..AXIS_CAP || width.toLong()*height > PIXEL_CAP) {
             PhotoDiagnostics.emit(PhotoEvent.PIXELS_OVER)
             PhotoDiagnostics.emit(PhotoEvent.BOUNDS_FAILED)
             throw PhotoFailure(PhotoFailureReason.BOUNDS)
         }
         PhotoDiagnostics.emit(PhotoEvent.PIXELS_OK)
+        trace?.ok(PhotoOperation.BOUNDS_VALID)
+        trace?.begin(PhotoOperation.BOUNDS_READ)
     }
 
     /** Container allowlist only. Android still validates/decompresses the image. */
-    fun inspect(file: File): Boolean {
+    fun inspect(file: File): Boolean = inspect(file,null)
+    private fun inspect(file: File, trace: PhotoTrace?): Boolean {
         if (file.length() > SOURCE_CAP) {
             PhotoDiagnostics.emit(PhotoEvent.SIZE_OVER)
             throw PhotoFailure(PhotoFailureReason.SOURCE_LIMIT)
@@ -62,7 +66,7 @@ object PhotoPreparation {
                         }
                         if (!header) {
                             require(type == "IHDR" && size == 13L)
-                            bounds(input.readInt(), input.readInt())
+                            bounds(input.readInt(), input.readInt(),trace)
                             input.skipBytes(5); header = true
                         } else input.seek(input.filePointer + size)
                         input.skipBytes(4)
@@ -82,7 +86,7 @@ object PhotoPreparation {
                         val end = input.filePointer + size
                         if (marker in 0xc0..0xcf && marker !in setOf(0xc4,0xc8,0xcc)) {
                             require(size >= 6); input.readUnsignedByte()
-                            val height = input.readUnsignedShort(); bounds(input.readUnsignedShort(),height)
+                            val height = input.readUnsignedShort(); bounds(input.readUnsignedShort(),height,trace)
                         }
                         // APP/EXIF/XMP/gain-map metadata is neither copied nor interpreted as a rejection string.
                         input.seek(end)
@@ -103,16 +107,19 @@ object PhotoPreparation {
                 } else PhotoDiagnostics.emit(PhotoEvent.UNKNOWN)
             }
         } catch (failure: PhotoFailure) { throw failure }
-        catch (_: Exception) { throw PhotoFailure(PhotoFailureReason.FORMAT) }
+        catch (failure: Exception) { trace?.failed(failure); throw PhotoFailure(PhotoFailureReason.FORMAT) }
         throw PhotoFailure(PhotoFailureReason.FORMAT)
     }
 
-    fun decode(file: File, maximumEdge: Int = LONG_EDGE): Bitmap {
+    fun decode(file: File, maximumEdge: Int = LONG_EDGE): Bitmap = decodeTraced(file,maximumEdge,PhotoTrace())
+    internal fun decodeTraced(file: File, maximumEdge: Int, trace: PhotoTrace): Bitmap {
         require(maximumEdge in 1..LONG_EDGE)
-        inspect(file)
         try {
+            trace.step(PhotoOperation.BOUNDS_READ) { inspect(file,trace) }
+            trace.begin(PhotoOperation.BOUNDS_READ)
             return ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
-                bounds(info.size.width,info.size.height)
+                trace.ok(PhotoOperation.BOUNDS_READ)
+                trace.step(PhotoOperation.BOUNDS_VALID) { bounds(info.size.width,info.size.height) }
                 PhotoDiagnostics.emit(PhotoEvent.BOUNDS_OK)
                 if (info.isAnimated) {
                     PhotoDiagnostics.emit(PhotoEvent.ANIMATED)
@@ -120,40 +127,57 @@ object PhotoPreparation {
                 }
                 PhotoDiagnostics.emit(PhotoEvent.STILL)
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-                decoder.setTargetColorSpace(ColorSpace.get(ColorSpace.Named.SRGB))
+                trace.step(PhotoOperation.COLOR_CONVERT) { decoder.setTargetColorSpace(ColorSpace.get(ColorSpace.Named.SRGB)) }
+                trace.begin(PhotoOperation.SAMPLE_CALC)
                 val scale = minOf(1.0, maximumEdge.toDouble()/maxOf(info.size.width,info.size.height))
                 decoder.setTargetSize(maxOf(1,(info.size.width*scale).roundToInt()),maxOf(1,(info.size.height*scale).roundToInt()))
+                trace.ok(PhotoOperation.SAMPLE_CALC)
                 decoder.setOnPartialImageListener { false }
+                trace.begin(PhotoOperation.BITMAP_DECODE)
             }.also { bitmap ->
+                try {
+                trace.ok(PhotoOperation.BITMAP_DECODE)
+                // ImageDecoder performs orientation reading/application as part of native decode.
+                trace.ok(PhotoOperation.ORIENTATION_READ)
+                trace.ok(PhotoOperation.ORIENTATION_APPLY)
+                trace.begin(PhotoOperation.BOUNDS_VALID)
                 if (maxOf(bitmap.width,bitmap.height)>maximumEdge || bitmap.allocationByteCount.toLong()>maximumEdge.toLong()*maximumEdge*8) {
-                    bitmap.recycle(); throw PhotoFailure(PhotoFailureReason.BOUNDS)
+                    throw PhotoFailure(PhotoFailureReason.BOUNDS)
                 }
+                trace.ok(PhotoOperation.BOUNDS_VALID)
                 if (Build.VERSION.SDK_INT >= 34) {
                     PhotoDiagnostics.emit(if(bitmap.hasGainmap()) PhotoEvent.HDR else PhotoEvent.HDR_UNKNOWN)
                     // Ultra HDR's base image is SDR; do not carry its enhancement into the output.
-                    bitmap.setGainmap(null)
+                    trace.step(PhotoOperation.COLOR_CONVERT) { bitmap.setGainmap(null) }
                 } else PhotoDiagnostics.emit(PhotoEvent.HDR_UNKNOWN)
                 PhotoDiagnostics.emit(PhotoEvent.DECODE_OK)
+                } catch(failure: Throwable) { bitmap.recycle();throw failure }
             }
-        } catch (failure: PhotoFailure) { throw failure }
-        catch (_: OutOfMemoryError) { throw PhotoFailure(PhotoFailureReason.MEMORY) }
-        catch (_: Exception) {
+        } catch (failure: PhotoFailure) { trace.failed(failure); throw failure }
+        catch (failure: OutOfMemoryError) { trace.failed(failure); throw PhotoFailure(PhotoFailureReason.MEMORY) }
+        catch (failure: Exception) {
+            trace.failed(failure)
             PhotoDiagnostics.emit(PhotoEvent.DECODE_FAILED)
             throw PhotoFailure(PhotoFailureReason.DECODE)
         }
     }
 
-    fun normalize(source: File, destination: File, check: () -> Unit = {}) {
+    fun normalize(source: File, destination: File, check: () -> Unit = {}) = normalizeTraced(source,destination,PhotoTrace(),check)
+    internal fun normalizeTraced(source: File, destination: File, trace: PhotoTrace, check: () -> Unit = {}) {
         var decoded: Bitmap? = null
         var sdr: Bitmap? = null
         try {
-            check(); decoded = decode(source); check()
+            trace.step(PhotoOperation.ACCESS_CHECK) { check() }; decoded = decodeTraced(source,LONG_EDGE,trace); check()
             PhotoDiagnostics.emit(PhotoEvent.NORMALIZE_START)
+            trace.begin(PhotoOperation.BITMAP_CREATE)
             sdr = Bitmap.createBitmap(decoded.width,decoded.height,Bitmap.Config.ARGB_8888,false,
                 ColorSpace.get(ColorSpace.Named.SRGB))
-            Canvas(sdr).apply { drawColor(Color.WHITE); drawBitmap(decoded,0f,0f,null) }
+            trace.ok(PhotoOperation.BITMAP_CREATE)
+            trace.step(PhotoOperation.COLOR_CONVERT) { Canvas(sdr).apply { drawColor(Color.WHITE); drawBitmap(decoded,0f,0f,null) } }
             decoded.recycle(); decoded=null
+            trace.begin(PhotoOperation.OUTPUT_OPEN)
             FileOutputStream(destination).use { raw ->
+                trace.ok(PhotoOperation.OUTPUT_OPEN)
                 var total = 0L
                 var outputLimitExceeded = false
                 val bounded = object : OutputStream() {
@@ -168,15 +192,28 @@ object PhotoPreparation {
                         raw.write(bytes,offset,length)
                     }
                 }
+                trace.begin(PhotoOperation.ENCODE)
                 val encoded = sdr.compress(Bitmap.CompressFormat.JPEG,85,bounded)
                 // Some native encoders return false after a stream failure instead of propagating it.
                 if(outputLimitExceeded) throw PhotoFailure(PhotoFailureReason.OUTPUT_LIMIT)
                 if(!encoded) throw PhotoFailure(PhotoFailureReason.NORMALIZE)
-                check(); raw.fd.sync()
+                trace.ok(PhotoOperation.ENCODE)
+                trace.step(PhotoOperation.OUTPUT_FLUSH) { check(); raw.flush(); raw.fd.sync() }
+            }
+            trace.begin(PhotoOperation.OUTPUT_REOPEN)
+            FileInputStream(destination).use { input ->
+                trace.ok(PhotoOperation.OUTPUT_REOPEN)
+                trace.step(PhotoOperation.OUTPUT_VALIDATE) {
+                    require(destination.length() in 1..OUTPUT_CAP)
+                    val options=BitmapFactory.Options().apply { inJustDecodeBounds=true }
+                    BitmapFactory.decodeStream(input,null,options)
+                    require(options.outMimeType=="image/jpeg" && options.outWidth in 1..LONG_EDGE && options.outHeight in 1..LONG_EDGE)
+                }
             }
             PhotoDiagnostics.emit(PhotoEvent.OUTPUT_OK)
             PhotoDiagnostics.emit(PhotoEvent.NORMALIZE_OK)
         } catch (failure: Throwable) {
+            trace.failed(failure)
             destination.delete(); PhotoDiagnostics.emit(PhotoEvent.NORMALIZE_FAILED)
             if(failure is OutOfMemoryError) throw PhotoFailure(PhotoFailureReason.MEMORY)
             if(failure is IOException) throw PhotoFailure(PhotoFailureReason.NORMALIZE)

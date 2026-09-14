@@ -229,4 +229,52 @@ class PhotoPreparationTest {
         val failure=assertThrows(org.ghostcloak.app.attachments.PhotoFailure::class.java) { PhotoPreparation.normalize(source,output) }
         assertEquals(org.ghostcloak.app.attachments.PhotoFailureReason.OUTPUT_LIMIT,failure.reason)
         assertFalse(output.exists())
+    }    @Test fun contentProviderPipeIsCopiedOnceThenDecodedFromPrivateFile()=fixture { root ->
+        PhotoPipeProvider.opens.set(0)
+        PhotoPipeProvider.payload=InstrumentationRegistry.getInstrumentation().context.assets.open("photo-fixtures/progressive.jpg").use {it.readBytes()}
+        try {
+            val uri=Uri.parse("content://${context.packageName}.photo-pipe-test/synthetic")
+            assertEquals("application/octet-stream",context.contentResolver.getType(uri))
+            val source=File(root,"staged")
+            val descriptor=context.contentResolver.openFileDescriptor(uri,"r")!!
+            assertEquals(-1L,descriptor.statSize)
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+                source.outputStream().use { output -> PhotoPreparation.boundedCopy(input,output,PhotoPreparation.SOURCE_CAP) }
+            }
+            PhotoPreparation.normalize(source,File(root,"output"))
+            assertEquals(1,PhotoPipeProvider.opens.get())
+        } finally {PhotoPipeProvider.payload.fill(0);PhotoPipeProvider.payload=byteArrayOf()}
+    }
+    @Test fun wideGamutSoftwareNormalizationReopensAsSdrJpegOffMain()=fixture { root ->
+        val source=File(root,"source")
+        val bitmap=Bitmap.createBitmap(96,48,Bitmap.Config.RGBA_F16,true,android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.DISPLAY_P3))
+        try { bitmap.eraseColor(Color.RED);source.outputStream().use {assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG,100,it))} }
+        finally {bitmap.recycle()}
+        val platform=android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(source)) { decoder,info,_ ->
+            assertTrue(info.colorSpace!!.isWideGamut)
+            decoder.allocator=android.graphics.ImageDecoder.ALLOCATOR_HARDWARE
+        }
+        try { assertEquals(Bitmap.Config.HARDWARE,platform.config) } finally {platform.recycle()}
+        val output=File(root,"output")
+        kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                PhotoPreparation.normalize(source,output) { assertNotSame(android.os.Looper.getMainLooper(),android.os.Looper.myLooper()) }
+            }
+        }
+        val decoded=PhotoPreparation.decode(output)
+        try { assertNotEquals(Bitmap.Config.HARDWARE,decoded.config);assertFalse(decoded.colorSpace!!.isWideGamut);assertFalse(decoded.hasAlpha()) }
+        finally {decoded.recycle()}
+        assertFalse(PhotoPreparation.inspect(output))
+    }
+    @Test fun malformedOptionalExifDoesNotRejectOtherwiseDecodableJpeg()=fixture { root ->
+        val source=File(root,"source");picture(source)
+        val original=source.readBytes()
+        val app="Exif\u0000\u0000invalid-optional-tiff".toByteArray()
+        source.outputStream().use { raw ->
+            raw.write(original,0,2)
+            DataOutputStream(raw).apply {writeShort(0xffe1);writeShort(app.size+2);write(app)}
+            raw.write(original,2,original.size-2)
+        }
+        val output=File(root,"output");PhotoPreparation.normalize(source,output)
+        assertFalse(output.readBytes().toString(Charsets.ISO_8859_1).contains("invalid-optional"))
     }}

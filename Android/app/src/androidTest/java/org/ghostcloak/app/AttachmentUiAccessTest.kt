@@ -23,14 +23,22 @@ class AttachmentUiAccessTest {
             withContext(Dispatchers.Main) {
                 // Reproduce the old predicate's exact underlying failure using real Room/SQLCipher.
                 assertThrows(IllegalStateException::class.java) { runtime.canAutoSync }
-                runtime.foregroundStarted();runtime.notificationActivityVisible(true)
+                // Picker result may arrive before the polling coroutine starts.
+                runtime.notificationActivityVisible(true)
                 assertTrue(runtime.attachmentTransfersAllowed)
+                runtime.foregroundStarted()
                 unlocked=false;assertFalse(runtime.attachmentTransfersAllowed)
                 unlocked=true;assertTrue(runtime.attachmentTransfersAllowed)
-                runtime.foregroundStopped();assertFalse(runtime.attachmentTransfersAllowed)
-                runtime.foregroundStarted();runtime.notificationActivityVisible(false)
+                // Late cancellation of the previous polling loop must not revoke visible UI.
+                runtime.foregroundStopped();assertTrue(runtime.attachmentTransfersAllowed)
+                runtime.notificationActivityVisible(false)
                 assertFalse(runtime.attachmentTransfersAllowed)
+                runtime.foregroundStarted();assertFalse(runtime.attachmentTransfersAllowed)
+                runtime.foregroundStopped();runtime.notificationActivityVisible(true)
             }
+            // Exercise the live IO predicate as well as its Main-thread snapshot, with polling stopped.
+            val prepared=runtime.prepareAttachment(byteArrayOf(1,2,3).inputStream(),3,AttachmentKind.DOCUMENT,0,"fixture.txt")
+            runtime.discardAttachment(prepared.id)
             runtime.close()
             runtime=AppRuntime(context,"https://fixture.invalid",endpoint,api,attachmentAccess={unlocked})
             withContext(Dispatchers.Main) {assertFalse(runtime.attachmentTransfersAllowed)}

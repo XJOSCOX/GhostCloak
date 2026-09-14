@@ -53,16 +53,18 @@ class AppRuntime internal constructor(
     @Volatile private var foreground = false
     private var scheduledEligibility: Boolean? = null
     fun foregroundStarted() = synchronized(notificationGate) { foreground = true; cancelNotificationSafely() }
-    fun foregroundStopped() = synchronized(notificationGate) { foreground = false; attachments?.invalidate() }
+    fun foregroundStopped() = synchronized(notificationGate) { foreground = false }
     fun notificationActivityVisible(visible: Boolean) = synchronized(notificationGate) {
         activityVisible = visible
         if (!visible) attachments?.invalidate()
         if (visible) cancelNotificationSafely()
     }
     internal fun revokeAttachmentAccess() { attachments?.invalidate() }
-    private fun attachmentAllowed() = canAutoSync && foreground && activityVisible && attachmentAccess()
+    // Polling is a coroutine, not the Activity lifecycle. Its cancellation/restart may lag
+    // a picker result. Activity stop and app lock independently revoke attachment access.
+    private fun attachmentAllowed() = canAutoSync && activityVisible && attachmentAccess()
     // UI predicates must never enter Room; transfer operations retain the live IO checks above.
-    internal val attachmentTransfersAllowed get() = attachmentUiAccess.accountEligible && !inDemo && foreground && activityVisible && attachmentAccess()
+    internal val attachmentTransfersAllowed get() = attachmentUiAccess.accountEligible && !inDemo && activityVisible && attachmentAccess()
     private fun cancelNotificationSafely() { try { notifications.cancel() } catch (_: Exception) { } }
     private fun reconcileNotifications() {
         if (notifications === NoLocalNotifications) return

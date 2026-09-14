@@ -106,7 +106,7 @@ internal class SyntheticNetwork : GhostCloakTransport {
                         val sender = accounts.values.single { a -> a.deviceId == EnvelopeCodec.decode(d.encryptedEnvelope).senderDeviceId }
                         Delivery(d.serverMessageId, d.encryptedEnvelope, d.receivedAt, d.expiresAt,
                             if (r.includeSenders) SenderProfile(sender.accountId, sender.deviceId, sender.routingId, sender.username) else null)
-                    }, statuses = r.submissionIds.map { id ->
+                    }, serverTime = if (r.retention) System.currentTimeMillis() else null, statuses = r.submissionIds.map { id ->
                         val serverId = submissions[me.deviceId + id] ?: throw ApiFailure(404, "not_found")
                         DeliveryStatus(id, serverId in acknowledged)
                     })

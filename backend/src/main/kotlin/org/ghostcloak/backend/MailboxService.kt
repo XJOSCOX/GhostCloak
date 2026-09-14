@@ -26,7 +26,7 @@ class DevelopmentRateLimiter(private val limit: Int = 60) : RateLimiter {
 enum class ServerResult { OK, REJECTED, INTERNAL }
 fun interface ServerLogger { fun record(operation: ServerOperation, result: ServerResult) }
 class BackendPolicy(val audience: String = "ghostcloak.local", val challengeTtl: Long = 60000,
-    val sessionTtl: Long = 300000, val mailboxTtl: Long = 86400000, val dedupeTtl: Long = 604800000) {
+    val sessionTtl: Long = 300000, val mailboxTtl: Long = 604800000, val dedupeTtl: Long = 2592000000) {
     init { require(audience.matches(Regex("[a-z0-9.-]{1,100}"))); require(challengeTtl in 1000..120000 && sessionTtl in 1000..900000 && mailboxTtl in 1000..604800000 && dedupeTtl in mailboxTtl..2592000000) }
 }
 class MailboxService(private val db: BackendDatabase, private val clock: Clock = Clock.systemUTC(),
@@ -81,8 +81,8 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         val time = now()
         db.challenges.all().filter { it.challenge.expiresAt <= time }.forEach { db.challenges.remove(it.challenge.id) }
         db.sessions.all().filter { it.expiresAt <= time }.forEach { db.sessions.remove(it.hash) }
-        db.mailbox.all().filter { it.expiresAt <= time }.forEach { db.mailbox.remove(it.id) }
-        db.submissions.all().filter { it.expiresAt <= time }.forEach { db.submissions.remove(it.id) }
+        db.expireMailbox(time)
+        // Small bounded receipt/idempotency tombstones survive payload deletion and sender downtime.
     }
     private fun consume(id: String): Challenge = db.transaction {
         requireApi(RandomIdentifiers.valid(id))
@@ -219,10 +219,10 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
                 // Prefix lookup discloses only the caller's submissions; unknown/foreign IDs fail identically.
                 val statuses = r.submissionIds.map { id ->
                     val row = db.submissions.get(device.id + "/" + id) ?: throw ApiFailure(404, "not_found")
-                    DeliveryStatus(id, row.acknowledged)
+                    DeliveryStatus(id, row.acknowledged, r.retention && !row.acknowledged && row.mailboxExpiresAt <= now())
                 }
                 requireApi(r.skipMessageIds.size <= 128 && r.skipMessageIds.all(RandomIdentifiers::valid))
-                val owned = db.mailbox.all().filter { it.recipientRoutingId == device.routingId }
+                val owned = db.mailbox.all().filter { it.recipientRoutingId == device.routingId && it.expiresAt > now() }
                     .sortedWith(compareBy<MailboxRow> { it.receivedAt }.thenBy { it.id })
                 val deliveries = owned.filter { it.id !in r.skipMessageIds }.take(NetworkLimits.BATCH).map {
                         val sender = if (r.includeSenders) {
@@ -231,16 +231,16 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
                         } else null
                         Delivery(it.id, it.encryptedEnvelope.copyOf(), it.receivedAt, it.expiresAt, sender)
                     }
-                ApiResponse(deliveries = deliveries, statuses = statuses)
+                ApiResponse(deliveries = deliveries, statuses = statuses, serverTime=if(r.retention) now() else null)
             }
             is ApiRequest.Ack -> {
                 requireApi(r.serverMessageIds.size in 1..NetworkLimits.BATCH && r.serverMessageIds.all(RandomIdentifiers::valid))
                 requireApi(r.serverMessageIds.none { id -> db.mailbox.get(id)?.let { it.recipientRoutingId != device.routingId } == true }, "forbidden", 403)
                 r.serverMessageIds.forEach { id ->
                     // Only a still-owned mailbox row can produce an ACK receipt. Expiry is not delivery.
-                    if (db.mailbox.get(id) != null) {
+                    if (db.mailbox.get(id)?.expiresAt?.let {it>now()} == true) {
                         db.submissions.all().filter { it.serverId == id }.forEach { row ->
-                            db.submissions.put(row.id, SubmissionRow(row.id, row.sender, row.digest, row.serverId, row.expiresAt, true))
+                            db.submissions.put(row.id, SubmissionRow(row.id, row.sender, row.digest, row.serverId, row.expiresAt, true,row.mailboxExpiresAt))
                         }
                         db.mailbox.remove(id)
                     }
@@ -265,7 +265,7 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         requireApi(db.submissions.all().count { it.sender == sender.id } < 1024 && db.submissions.size() < 10000, "submission_capacity", 429)
         val serverId = RandomIdentifiers.create()
         db.mailbox.put(serverId, MailboxRow(serverId, target.routingId, r.encryptedEnvelope.copyOf(), now(), now() + policy.mailboxTtl))
-        db.submissions.put(id, SubmissionRow(id, sender.id, digest, serverId, now() + policy.dedupeTtl))
+        db.submissions.put(id, SubmissionRow(id, sender.id, digest, serverId, now() + policy.dedupeTtl,mailboxExpiresAt=now()+policy.mailboxTtl))
         return ApiResponse(serverMessageId = serverId)
     }
 }

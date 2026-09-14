@@ -64,8 +64,8 @@ class AttachmentTest {
             sender.sendAttachment(b.registration.deviceId,descriptor,outbox,true)
             val attachment=b.client.call(ApiRequest.Fetch(includeSenders=true)).deliveries.single()
             receiver.acceptNetwork(EnvelopeCodec.decode(attachment.encryptedEnvelope),attachment.sender)
-            val before=receiver.messagesForUi(a.registration.deviceId).last()
-            assertEquals("Attachment",before.attachment!!.filename);assertEquals(0L,before.attachment!!.bytes)
+            val before=receiver.messages(a.registration.deviceId).last()
+            assertTrue(receiver.messagesForUi(a.registration.deviceId).isEmpty())
             try { receiver.attachment(a.registration.deviceId,before.localId);fail() } catch (_:AppFailure) {}
             receiver.acceptRequest(a.registration.deviceId)
             val reopened=ConversationService(b.engine,LocalRepository(b.records));reopened.open()

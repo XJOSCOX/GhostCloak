@@ -20,6 +20,67 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         try { records.write(key, bytes) } finally { bytes.fill(0) }
     }
     fun hasIdentity() = records.transaction { records.read("local/device") != null }
+    fun requireRequestConfirmation():Boolean=records.transaction {read<Boolean>("app/request-privacy") ?: true}
+    fun requireRequestConfirmation(value:Boolean)=records.transaction {
+        // Freeze old request presentation before changing the default.
+        contacts().filter {it.request}.forEach {request(it.remoteDeviceId)}
+        put("app/request-privacy",value)
+    }
+    fun serverReference(time:Long)=records.transaction {
+        require(time>0)
+        val now=clock.now(); val previous=serverNow()
+        put("app/server-reference",ServerReference(maxOf(time,previous ?: time),now.elapsed,now.boot))
+        contacts().filter {it.request}.forEach { contact ->
+            val key="app/request/${contact.remoteDeviceId}"
+            read<RequestRecord>(key)?.takeIf {it.acceptedAt==null}?.let { r ->
+                val elapsedAge=if(now.boot==r.grace.boot) (REQUEST_WINDOW-(r.grace.elapsed-now.elapsed)).coerceIn(0,REQUEST_WINDOW) else 0
+                put(key,r.copy(acceptedAt=serverNow()!!-elapsedAge))
+            }
+        }
+    }
+    fun serverNow():Long?=records.transaction {
+        val now=clock.now();val ref=read<ServerReference>("app/server-reference")
+        ref?.takeIf {it.boot==now.boot && now.elapsed>=it.elapsed}?.let {it.time+now.elapsed-it.elapsed}
+    }
+    fun request(id:String):RequestRecord=records.transaction {
+        read<RequestRecord>("app/request/$id") ?: RequestRecord(
+            hidden=true,acceptedAt=serverNow(),grace=clock.now().let {ExpiryDeadline(it.wall+REQUEST_WINDOW,it.elapsed+REQUEST_WINDOW,it.boot)})
+            .also {put("app/request/$id",it)}
+    }
+    fun startRequest(id:String,acceptedAt:Long?)=records.transaction {
+        put("app/request/$id",RequestRecord(hidden=requireRequestConfirmation(),acceptedAt=acceptedAt,
+            grace=clock.now().let {ExpiryDeadline(it.wall+REQUEST_WINDOW,it.elapsed+REQUEST_WINDOW,it.boot)},lastEnvelopeAt=acceptedAt))
+    }
+    fun requestExpired(id:String):Boolean=records.transaction {
+        val r=request(id);val now=clock.now();val server=serverNow()
+        r.state==RequestState.EXPIRED || if(r.acceptedAt!=null && server!=null) server-r.acceptedAt>=REQUEST_WINDOW
+            else now.boot==r.grace.boot && now.elapsed>=r.grace.elapsed
+    }
+    fun requestHidden(id:String)=records.transaction {contact(id).request && request(id).hidden}
+    fun requestActive(id:String)=records.transaction {request(id).state==RequestState.PENDING && !requestExpired(id)}
+    fun finishRequest(id:String,state:RequestState)=records.transaction {
+        val r=request(id); put("app/request/$id",r.copy(state=state,lastEnvelopeAt=serverNow() ?: r.lastEnvelopeAt))
+        if(state!=RequestState.ACCEPTED) clear(id)
+    }
+    fun restartRequestIfEligible(id:String,acceptedAt:Long?)=records.transaction {
+        val r=request(id);val server=serverNow()
+        if(r.state in setOf(RequestState.REJECTED,RequestState.EXPIRED) && acceptedAt!=null && server!=null &&
+            r.lastEnvelopeAt!=null && acceptedAt-r.lastEnvelopeAt>3600000L && server-acceptedAt<REQUEST_WINDOW)
+            startRequest(id,acceptedAt)
+    }
+    fun expireRequests():Int=records.transaction {
+        val expired=contacts().filter {it.request && request(it.remoteDeviceId).state==RequestState.PENDING && requestExpired(it.remoteDeviceId)}
+        expired.forEach {finishRequest(it.remoteDeviceId,RequestState.EXPIRED)}
+        expired.size
+    }
+    fun acceptRequest(id:String)=records.transaction {
+        expireRequests()
+        val r=request(id)
+        require(r.state==RequestState.PENDING && !requestExpired(id)) {"request_expired"}
+        // After reboot, a known server deadline requires a fresh server reference before reveal.
+        require(r.acceptedAt==null || serverNow()!=null) {"request_time_unavailable"}
+        save(contact(id).copy(request=false));finishRequest(id,RequestState.ACCEPTED)
+    }
     fun attachmentPeer(id: String): Boolean = records.transaction { records.read("app/attachment-peer/$id")?.contentEquals(byteArrayOf(1)) == true }
     fun attachmentPeer(id: String, supported: Boolean) = records.transaction {
         if (supported) records.write("app/attachment-peer/$id", byteArrayOf(1)) else records.remove("app/attachment-peer/$id")
@@ -48,11 +109,11 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                     message.copy(expiry = null).also(::save) else message
             }.filter { it.activeExpiry?.reached(now) == true }
         expired.forEach { delete(it.conversationId, it.localId) }
-        expired.size
+        expired.size + expireRequests()
     }
     fun acceptedOutgoing(id: String, localId: String) = records.transaction {
         val message = read<Message>("app/message/$id/$localId") ?: return@transaction
-        if (message.direction != Direction.OUTGOING || message.state == MessageState.DELIVERED) return@transaction
+        if (message.direction != Direction.OUTGOING || message.state in setOf(MessageState.DELIVERED,MessageState.EXPIRED_UNDELIVERED)) return@transaction
         save(message.copy(state = MessageState.SERVER_ACCEPTED, expiry = null))
     }
     fun deliveredOutgoing(id: String, localId: String) = records.transaction {
@@ -61,6 +122,11 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         // A queued deadline from the previous implementation is not a delivery deadline.
         save(message.copy(state = MessageState.DELIVERED, expiry = if (!message.policyEvent && message.disappearingSeconds > 0)
             ExpiryDeadline.start(message.disappearingSeconds, clock.now()) else null))
+    }
+    fun expiredOutgoing(id:String,localId:String)=records.transaction {
+        val message=read<Message>("app/message/$id/$localId") ?: return@transaction
+        if(message.direction==Direction.OUTGOING && message.state==MessageState.SERVER_ACCEPTED)
+            save(message.copy(state=MessageState.EXPIRED_UNDELIVERED,expiry=null))
     }
     fun unreadCount(id: String): Int = records.transaction {
         val seen = read<List<String>>("app/read/$id").orEmpty().toSet()

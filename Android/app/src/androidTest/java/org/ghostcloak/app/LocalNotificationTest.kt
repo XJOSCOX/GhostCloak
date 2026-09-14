@@ -92,7 +92,7 @@ class LocalNotificationTest {
             assertTrue(p.posts.isEmpty()); assertEquals(1, b.use { it.messages(aid).size })
             b.notificationActivityVisible(false); b.backgroundSync(); assertTrue(p.posts.isEmpty())
             a.use { a.send(it, bid, "read first") }
-            b.use { b.syncNetwork(it); it.markRead(aid) }
+            b.use { b.syncNetwork(it); it.acceptRequest(aid); it.markRead(aid) }
             assertTrue(p.posts.isEmpty()); assertEquals(2, b.use { it.messages(aid).size })
         } finally { a.close(); b.close() }
     }

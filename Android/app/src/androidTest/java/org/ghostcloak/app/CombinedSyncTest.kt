@@ -27,7 +27,7 @@ class CombinedSyncTest {
             val result = api.execute(request)
             if (r is ApiRequest.Fetch && invalidStatuses) {
                 val response = NetworkCodec.decode<ApiResponse>(result.body)
-                return TransportResponse(200, NetworkLimits.CONTENT_TYPE, NetworkCodec.encode(ApiResponse(deliveries = response.deliveries, statuses = listOf(DeliveryStatus(RandomIdentifiers.create(), true)))))
+                return TransportResponse(200, NetworkLimits.CONTENT_TYPE, NetworkCodec.encode(ApiResponse(serverTime = response.serverTime, deliveries = response.deliveries, statuses = listOf(DeliveryStatus(RandomIdentifiers.create(), true)))))
             }
             return result
         }

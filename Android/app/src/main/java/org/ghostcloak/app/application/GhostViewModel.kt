@@ -14,6 +14,7 @@ import org.ghostcloak.messaging.*
 import org.ghostcloak.transport.TransportFailure
 
 data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? = null,
+    val requireRequestConfirmation:Boolean=true,
     val cachedAttachments: Set<String> = emptySet(),
     val disappearingPolicies: Map<String, Int> = emptyMap(),
     val unreadExpiries: Map<String, List<ExpiryDeadline>> = emptyMap(),
@@ -61,6 +62,7 @@ class GhostViewModel internal constructor(application: Application, private val 
                     selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.markRead(it) }
                     val unread = if (identity != null) active.unreadCounts() else emptyMap()
                     mutable.value = mutable.value.copy(identity = identity, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
+                        requireRequestConfirmation=active.requireRequestConfirmation(),
                         cachedAttachments = runtime.cachedAttachments(selected),
                         disappearingPolicies = if (identity != null) active.policies() else emptyMap(),
                         unreadExpiries = if (identity != null) active.unreadExpiries() else emptyMap(),
@@ -115,6 +117,7 @@ class GhostViewModel internal constructor(application: Application, private val 
             }
         } finally { runtime.foregroundStopped(); foregroundMutex.unlock() }
     }
+    fun requestPrivacy(required:Boolean)=run {it.requireRequestConfirmation(required);null}
     fun acceptRequest(id: String) = run { it.acceptRequest(id); null }
     fun deleteRequest(id: String) = run { it.deleteRequest(id); null }
     fun refresh() = run()

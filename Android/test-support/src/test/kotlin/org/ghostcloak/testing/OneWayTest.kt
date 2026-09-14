@@ -90,7 +90,7 @@ object OneWayProbe {
         b.service.acceptNetwork(EnvelopeCodec.decode(later.encryptedEnvelope), later.sender)
         assertEquals("charlie", b.service.contacts().single { it.contact.request }.contact.displayName)
         b.service.deleteRequest(c.registration.deviceId)
-        assertTrue(b.service.contacts().single { it.contact.request }.contact.blocked)
+        assertTrue(b.service.contacts().none { it.contact.remoteDeviceId==c.registration.deviceId })
         assertTrue(b.service.messages(c.registration.deviceId).isEmpty())
     }
 }

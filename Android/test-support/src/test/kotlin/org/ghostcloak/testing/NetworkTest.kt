@@ -175,7 +175,7 @@ class NetworkTest {
                 f.call(a, ApiRequest.Send(RandomIdentifiers.create(), b.registration.routingId, EnvelopeCodec.encode(large)))
             }
             assertEquals(NetworkLimits.BATCH, NetworkMailboxTransport(f.client(b), b.state).fetch().size)
-            f.time.time += 86400001; f.service.cleanup()
+            f.time.time += 604800001; f.service.cleanup()
             assertEquals(0, f.database.transaction { f.database.mailbox.size() })
             // Expired unacknowledged ciphertext cannot be inferred as delivered.
             assertEquals(1, f.database.transaction { f.database.submissions.all().count { it.acknowledged } })

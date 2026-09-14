@@ -21,7 +21,7 @@ import org.ghostcloak.messaging.*
 import org.ghostcloak.protocol.EnvelopeCodec
 
 @Composable fun ConversationScreen(state: AppState, status: ContactStatus, back: () -> Unit,
-    security: () -> Unit, send: (String, () -> Unit) -> Unit, delete: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, accept: () -> Unit = {}, reject: () -> Unit = {}, clear: () -> Unit = {}, disappearing: (Int) -> Unit = {}, refresh: () -> Unit = {}) {
+    security: () -> Unit, send: (String, () -> Unit) -> Unit, delete: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, accept: () -> Unit = {}, reject: () -> Unit = {}, clear: () -> Unit = {}, disappearing: (Int) -> Unit = {}, refresh: () -> Unit = {}, block:()->Unit={}) {
     var draft by remember(status.contact.remoteDeviceId) { mutableStateOf("") }
     var rejectedPaste by remember { mutableStateOf(false) }
     var actions by remember { mutableStateOf(false) }
@@ -48,7 +48,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
                     if (state.networkConfigured && !state.demo)
                         DropdownMenuItem(text = { Text("Sync") }, onClick = { actions = false; sync() })
                     DropdownMenuItem(text = { Text("Clear conversation") }, onClick = { actions = false; clearing = true })
-                    if (state.networkConfigured && !state.demo)
+                    if (state.networkConfigured && !state.demo && !status.contact.request)
                         DropdownMenuItem(text = { Text("Disappearing messages · ${DisappearingTimer.from(state.disappearingPolicies[status.contact.remoteDeviceId] ?: 0).label}") },
                             enabled = active && !state.loading, onClick = { actions = false; timerSelector = true })
                 }
@@ -59,7 +59,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
         if (changed) TextButton(onClick = security, modifier = Modifier.fillMaxWidth()) { Text("! Review changed identity before sending", color = MaterialTheme.colorScheme.error) }
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = PaddingValues(horizontal = GhostLayout.pageInset, vertical = GhostLayout.dividerGap), verticalArrangement = Arrangement.spacedBy(GhostDimensions.compact)) {
-            if (state.messages.isEmpty()) item { InfoPanel("A conversation starts here", if (state.networkConfigured && !state.demo) "End-to-end encrypted. Messages arrive automatically while Ghost Cloak is open." else "Messages are encrypted before local transport. This prototype cannot deliver to another device over a network.") }
+            if (state.messages.isEmpty()) item { InfoPanel(if(status.contact.request) "New message request" else "A conversation starts here", if(status.contact.request) "Inspect this identity before accepting. Hidden content is revealed only after acceptance." else if (state.networkConfigured && !state.demo) "End-to-end encrypted. Messages arrive automatically while Ghost Cloak is open." else "Messages are encrypted before local transport. This prototype cannot deliver to another device over a network.") }
             itemsIndexed(state.messages, key = { _, message -> message.localId }) { index, message ->
                 val date = Instant.ofEpochMilli(message.timestamp).atZone(ZoneId.systemDefault()).toLocalDate()
                 val previous = state.messages.getOrNull(index-1)?.let { Instant.ofEpochMilli(it.timestamp).atZone(ZoneId.systemDefault()).toLocalDate() }
@@ -86,11 +86,13 @@ import org.ghostcloak.protocol.EnvelopeCodec
         SendingPhoto(status.contact.remoteDeviceId,refresh)
         if (status.contact.request && !status.contact.blocked) {
             Column(Modifier.padding(GhostLayout.pageInset), verticalArrangement = Arrangement.spacedBy(GhostDimensions.compact)) {
-                Text("Accept this conversation?", style = MaterialTheme.typography.titleMedium)
+                Text("New message request", style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick=security) {Text("View identity / Verify")}
                 Text("This sender is not in your contacts. Accepting lets you reply; it does not verify their identity.", style = MaterialTheme.typography.bodyMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(GhostDimensions.medium)) {
                     Button(onClick = accept, enabled = !state.loading) { Text("Accept") }
-                    TextButton(onClick = reject, enabled = !state.loading) { Text("Block & delete") }
+                    TextButton(onClick = reject, enabled = !state.loading) { Text("Delete") }
+                    TextButton(onClick = block, enabled = !state.loading) { Text("Block") }
                 }
             }
         }

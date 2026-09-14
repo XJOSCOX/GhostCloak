@@ -40,6 +40,7 @@ import java.time.format.DateTimeFormatter
             MessageState.SENT_TO_TRANSPORT -> "Sent locally"; MessageState.DELIVERED_LOCAL_SIMULATION -> "Delivered locally"
             MessageState.FAILED -> "Not delivered"; MessageState.SERVER_ACCEPTED -> "Queued on server"
             MessageState.DELIVERED -> "Delivered"; MessageState.RECEIVED -> "Received"
+            MessageState.EXPIRED_UNDELIVERED -> "Expired before delivery"
         },Modifier.padding(top=GhostDimensions.tiny,end=GhostDimensions.tiny),style=MaterialTheme.typography.labelSmall,
             color=if(message.state==MessageState.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
     }

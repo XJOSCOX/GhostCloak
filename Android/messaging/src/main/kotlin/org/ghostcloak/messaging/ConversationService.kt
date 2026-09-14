@@ -65,11 +65,14 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         Contact(RandomIdentifiers.create(), card.userId, card.username, card.deviceId).also(repository::save)
     }
     suspend fun contacts(): List<ContactStatus> = action {
-        repository.contacts().map { ContactStatus(it, engine.getRemoteIdentityStatus(it.remoteDeviceId), engine.getSessionLifecycle(it.remoteDeviceId)) }
+        repository.expireRequests()
+        repository.contacts().filter { !it.request || repository.requestActive(it.remoteDeviceId) }
+            .map { ContactStatus(it, engine.getRemoteIdentityStatus(it.remoteDeviceId), engine.getSessionLifecycle(it.remoteDeviceId)) }
     }
     suspend fun messages(id: String) = action { repository.contact(id); repository.messages(id) }
     suspend fun messagesForUi(id:String) = action {
         val contact = repository.contact(id)
+        if(contact.request && (!repository.requestActive(id) || repository.requestHidden(id) || (repository.request(id).acceptedAt!=null && repository.serverNow()==null))) return@action emptyList<Message>()
         repository.messages(id).map { message ->
             repository.attachment(id,message.localId)?.let { descriptor ->
                 val summary = if (contact.request) AttachmentSummary(false,"Attachment",0)
@@ -78,7 +81,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                         descriptor.plaintextLength, descriptor.kind in setOf(org.ghostcloak.attachments.AttachmentKind.IMAGE,org.ghostcloak.attachments.AttachmentKind.DOCUMENT))
                 message.copy(body = if (contact.request) "Attachment" else if (summary.photo) "Photo" else summary.filename, attachment = summary)
             } ?: message
-        }
+        }.map { if(contact.request) it.copy(disappearingSeconds=0,expiry=null) else it }
     }
     suspend fun attachmentPeer(id: String) = action { networkAllowed(id); repository.attachmentPeer(id) }
     suspend fun sendNetwork(id:String,body:String,outbox:DurableOutbox):Message=action {
@@ -112,7 +115,10 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     suspend fun setDisappearing(id: String, seconds: Int, outbox: DurableOutbox): Message = action {
         enqueueNetwork(id, "", seconds, true, outbox)
     }
-    suspend fun policies() = action { repository.contacts().associate { it.remoteDeviceId to repository.policy(it.remoteDeviceId) } }
+    suspend fun policies() = action { repository.contacts().filter {!it.request}.associate { it.remoteDeviceId to repository.policy(it.remoteDeviceId) } }
+    suspend fun requireRequestConfirmation()=action {repository.requireRequestConfirmation()}
+    suspend fun requireRequestConfirmation(value:Boolean)=action {repository.requireRequestConfirmation(value)}
+    suspend fun serverReference(time:Long)=action {repository.serverReference(time);repository.expireRequests()}
     suspend fun reconcileExpiry() = action { repository.expire() }
     private suspend fun enqueueNetwork(id: String, body: String, seconds: Int, control: Boolean, outbox: DurableOutbox): Message {
         networkAllowed(id)
@@ -139,6 +145,9 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     suspend fun retryNetwork(outbox:DurableOutbox)=action {
         for(id in outbox.pendingIds()) {
             val entry=outbox.get(id)
+            if(repository.messages(entry.deviceId).any {it.localId==id && it.state==MessageState.EXPIRED_UNDELIVERED}) {
+                outbox.removeExpired(id);continue
+            }
             try { networkAllowed(entry.deviceId) }
             catch (e: AppFailure) { if (e.error == AppError.BLOCKED) continue else throw e }
             catch (e: CryptoFailure) {
@@ -152,7 +161,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             if(result.state in setOf(OutboxState.SERVER_ACCEPTED,OutboxState.FAILED)) outbox.removeFinished(id)
         }
     }
-    suspend fun acceptNetwork(envelope:EncryptedEnvelope, sender:SenderProfile? = null)=action {
+    suspend fun acceptNetwork(envelope:EncryptedEnvelope, sender:SenderProfile? = null, serverAcceptedAt:Long?=null)=action {
         val hash=org.ghostcloak.protocol.DeviceAuth.digest(org.ghostcloak.protocol.EnvelopeCodec.encode(envelope))
         if(repository.accepted(envelope.senderDeviceId,envelope.envelopeId,hash)) return@action
         val contacts = repository.contacts()
@@ -173,6 +182,9 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             if (content.control && (contacts.none { it.remoteDeviceId == contact.remoteDeviceId } || contact.request))
                 throw AppFailure(AppError.BLOCKED)
             repository.save(contact)
+            if(contact.request && contacts.none {it.remoteDeviceId==contact.remoteDeviceId})
+                repository.startRequest(contact.remoteDeviceId,serverAcceptedAt)
+            else if(contact.request) repository.restartRequestIfEligible(contact.remoteDeviceId,serverAcceptedAt)
             // A later legacy message withdraws the claim (for example after a downgrade).
             if (content.attachment == null) repository.attachmentPeer(contact.remoteDeviceId,content.supportsAttachments)
             val now = repository.clock.now()
@@ -185,36 +197,44 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 try { repository.attachment(contact.remoteDeviceId,envelope.envelopeId,encoded) }
                 finally { encoded.fill(0) }
             }
+            if(contact.request) {
+                val r=repository.request(contact.remoteDeviceId)
+                if(r.state!=RequestState.PENDING || repository.requestExpired(contact.remoteDeviceId)) {
+                    repository.finishRequest(contact.remoteDeviceId,if(r.state==RequestState.PENDING) RequestState.EXPIRED else r.state)
+                }
+            }
         }
     }
     suspend fun acceptRequest(id: String) = action {
         val contact = repository.contact(id)
         if (contact.blocked) throw AppFailure(AppError.BLOCKED)
-        repository.save(contact.copy(request = false))
+        if(contact.request) repository.acceptRequest(id)
     }
     suspend fun deleteRequest(id: String) = action {
         val contact = repository.contact(id)
         require(contact.request)
-        // Retain a blocked identity tombstone so polling cannot recreate the request.
-        repository.save(contact.copy(blocked = true))
-        repository.clear(id)
+        repository.finishRequest(id,RequestState.REJECTED)
     }
-    suspend fun unreadCounts() = action { repository.contacts().filter { !it.blocked }.associate { it.remoteDeviceId to repository.unreadCount(it.remoteDeviceId) } }
+    suspend fun unreadCounts() = action { repository.contacts().filter { !it.blocked && (!it.request || repository.requestActive(it.remoteDeviceId)) }.associate { it.remoteDeviceId to repository.unreadCount(it.remoteDeviceId) } }
     suspend fun unreadCount() = unreadCounts().values.sum()
     suspend fun unreadExpiries() = action {
-        repository.contacts().filter { !it.blocked }.associate { contact ->
+        repository.contacts().filter { !it.blocked && !it.request }.associate { contact ->
             val unread = repository.unreadMessageIds(contact.remoteDeviceId)
             contact.remoteDeviceId to repository.messages(contact.remoteDeviceId).filter { it.localId in unread }.mapNotNull { it.expiry }
         }
     }
-    suspend fun markRead(id: String) = action { repository.markRead(id) }
+    suspend fun markRead(id: String) = action { if(!repository.contact(id).request) repository.markRead(id) }
     suspend fun queuedSubmissions() = action {
         repository.contacts().flatMap { repository.messages(it.remoteDeviceId) }
-            .filter { it.state == MessageState.SERVER_ACCEPTED && System.currentTimeMillis() - it.timestamp < 604800000 }
+            .filter { it.state == MessageState.SERVER_ACCEPTED }
             .map { it.localId }
     }
     suspend fun deliveryStatuses(statuses: List<DeliveryStatus>) = action {
         val delivered = statuses.filter { it.acknowledged }.map { it.submissionId }.toSet()
+        require(statuses.none {it.acknowledged && it.expired})
+        val expired=statuses.filter {it.expired}.map {it.submissionId}.toSet()
+        repository.contacts().forEach { contact -> repository.messages(contact.remoteDeviceId)
+            .filter {it.localId in expired}.forEach {repository.expiredOutgoing(it.conversationId,it.localId)} }
         repository.contacts().forEach { contact -> repository.messages(contact.remoteDeviceId)
             .filter { it.direction == Direction.OUTGOING && it.state == MessageState.SERVER_ACCEPTED && it.localId in delivered }
             .forEach { repository.deliveredOutgoing(it.conversationId, it.localId) } }
@@ -233,7 +253,10 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         engine.reestablishSession(ContactCardCodec.decode(pending).bundle(), expected)
         repository.card(id, pending); repository.clearPending(id)
     }
-    suspend fun block(id: String, blocked: Boolean) = action { repository.save(repository.contact(id).copy(blocked = blocked)) }
+    suspend fun block(id: String, blocked: Boolean) = action {
+        val contact=repository.contact(id);repository.save(contact.copy(blocked = blocked))
+        if(contact.request && blocked) repository.finishRequest(id,RequestState.BLOCKED)
+    }
     suspend fun delete(id: String, localId: String) = action { repository.contact(id); repository.delete(id, localId) }
     suspend fun clearConversation(id: String) = action { repository.contact(id); repository.clear(id) }
     suspend fun send(id: String, body: String): Message = action {

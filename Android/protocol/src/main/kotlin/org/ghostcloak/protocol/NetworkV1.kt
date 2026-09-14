@@ -61,7 +61,8 @@ class DirectoryEntry(val accountId: String, val deviceId: String, val routingId:
 @Serializable
 class SenderProfile(val accountId: String, val deviceId: String, val routingId: String, val username: String)
 @Serializable
-class DeliveryStatus(val submissionId: String, val acknowledged: Boolean)
+class DeliveryStatus(val submissionId: String, val acknowledged: Boolean,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val expired: Boolean = false)
 @Serializable
 class Delivery(val serverMessageId: String, val encryptedEnvelope: ByteArray, val receivedAt: Long, val expiresAt: Long, @EncodeDefault(EncodeDefault.Mode.NEVER) val sender: SenderProfile? = null) {
     override fun toString() = "Delivery(<opaque>)"
@@ -84,7 +85,8 @@ sealed class ApiRequest {
     @Serializable @SerialName("send") class Send(val submissionId: String, val recipientRoutingId: String, val encryptedEnvelope: ByteArray, override val version: Int = 1) : ApiRequest()
     @Serializable @SerialName("fetch") class Fetch(override val version: Int = 1, @EncodeDefault(EncodeDefault.Mode.NEVER) val includeSenders: Boolean = false,
         @EncodeDefault(EncodeDefault.Mode.NEVER) val submissionIds: List<String> = emptyList(),
-        @EncodeDefault(EncodeDefault.Mode.NEVER) val skipMessageIds: List<String> = emptyList()) : ApiRequest()
+        @EncodeDefault(EncodeDefault.Mode.NEVER) val skipMessageIds: List<String> = emptyList(),
+        @EncodeDefault(EncodeDefault.Mode.NEVER) val retention: Boolean = false) : ApiRequest()
     @Serializable @SerialName("ack") class Ack(val serverMessageIds: List<String>, override val version: Int = 1) : ApiRequest()
 }
 @Serializable
@@ -92,7 +94,8 @@ class ApiResponse(val version: Int = 1, val challenge: Challenge? = null, val se
     val directory: DirectoryEntry? = null, val deliveries: List<Delivery> = emptyList(), val serverMessageId: String? = null,
     val error: String? = null, @EncodeDefault(EncodeDefault.Mode.NEVER) val statuses: List<DeliveryStatus> = emptyList(),
     @EncodeDefault(EncodeDefault.Mode.NEVER) val recovered:RecoveredBinding?=null,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) val prekeyInventory:PrekeyPool?=null) { override fun toString() = "ApiResponse(<redacted>)" }
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val prekeyInventory:PrekeyPool?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val serverTime:Long?=null) { override fun toString() = "ApiResponse(<redacted>)" }
 
 @Serializable class PrekeyPool(val available: Int, val acceptedIds: List<Int> = emptyList())
 

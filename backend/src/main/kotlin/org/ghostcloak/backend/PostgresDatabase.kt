@@ -46,8 +46,19 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
                 execute("INSERT INTO schema_history VALUES (4,?)",recoveryChecksum)
             }
             check(query("SELECT checksum FROM schema_history WHERE version=4") {it.getString(1)}.singleOrNull()==recoveryChecksum) {"Migration validation failed"}
-            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 4) { "Unknown schema version" }
+            val retentionMigration=javaClass.getResourceAsStream("/db/V005__mailbox_retention.sql")!!.use {it.readBytes()}
+            val retentionChecksum=DeviceAuth.digest(retentionMigration).joinToString("") {"%02x".format(it)}
+            if(migrate && query("SELECT version FROM schema_history WHERE version=5") {it.getInt(1)}.isEmpty()) {
+                retentionMigration.toString(Charsets.UTF_8).split(';').filter {it.isNotBlank()}.forEach {execute(it)}
+                execute("INSERT INTO schema_history VALUES (5,?)",retentionChecksum)
+            }
+            check(query("SELECT checksum FROM schema_history WHERE version=5") {it.getString(1)}.singleOrNull()==retentionChecksum) {"Migration validation failed"}
+            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 5) { "Unknown schema version" }
         }
+    }
+    override fun expireMailbox(now:Long,limit:Int) {
+        require(limit in 1..128)
+        execute("DELETE FROM mailbox_messages WHERE id IN (SELECT id FROM mailbox_messages WHERE expires_at<=? ORDER BY expires_at,id LIMIT ?)",now,limit)
     }
     override fun <T> transaction(block: () -> T): T {
         if (local.get() != null) return block()
@@ -95,7 +106,7 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
     }
     override val sessions=rows("access_sessions","token_hash",read={SessionRow(it.getString("token_hash"),it.getString("device_id"),it.getLong("expires_at"))}) { _,r -> execute("INSERT INTO access_sessions VALUES (?,?,?)",r.hash,r.deviceId,r.expiresAt) }
     override val mailbox=rows("mailbox_messages",read={MailboxRow(it.getString("id"),it.getString("recipient_routing_id"),it.getBytes("encrypted_envelope"),it.getLong("received_at"),it.getLong("expires_at"))}) { _,r -> execute("INSERT INTO mailbox_messages VALUES (?,?,?,?,?)",r.id,r.recipientRoutingId,r.encryptedEnvelope,r.receivedAt,r.expiresAt) }
-    override val submissions=rows("message_deduplication",read={SubmissionRow(it.getString("id"),it.getString("sender_device_id"),it.getBytes("payload_hash"),it.getString("server_message_id"),it.getLong("expires_at"),it.getBoolean("acknowledged"))}) { _,r -> execute("INSERT INTO message_deduplication VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET acknowledged=excluded.acknowledged",r.id,r.sender,r.digest,r.serverId,r.expiresAt,r.acknowledged) }
+    override val submissions=rows("message_deduplication",read={SubmissionRow(it.getString("id"),it.getString("sender_device_id"),it.getBytes("payload_hash"),it.getString("server_message_id"),it.getLong("expires_at"),it.getBoolean("acknowledged"),it.getLong("mailbox_expires_at"))}) { _,r -> execute("INSERT INTO message_deduplication (id,sender_device_id,payload_hash,server_message_id,expires_at,acknowledged,mailbox_expires_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET acknowledged=excluded.acknowledged",r.id,r.sender,r.digest,r.serverId,r.expiresAt,r.acknowledged,r.mailboxExpiresAt) }
     override val prekeys=object:Rows<PrekeyRow> {
         override fun get(id:String):PrekeyRow? {
             val device=devices.get(id) ?: return null

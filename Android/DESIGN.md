@@ -151,3 +151,7 @@ Expiration is independent local enforcement by each endpoint, not remote delete/
 
 
 On upgrade, still-present outgoing non-DELIVERED records with acceptance-based deadlines have those deadlines cleared before expiry cleanup. UI filtering also ignores legacy queued deadlines. Already-DELIVERED deadlines are preserved through restart and repeated polling. Previously deleted records cannot be recovered. Clear/delete remain local-only; a queued item may still reach its recipient.
+
+## Phase 1J request privacy and retention
+
+See [REQUEST_PRIVACY_DESIGN.md](REQUEST_PRIVACY_DESIGN.md) for default hidden requests, 72-hour local request expiry, seven-day opaque mailbox retention, separate ACK/acceptance states, private Delete/Block behavior and V005 deployment requirements.

@@ -81,7 +81,7 @@ class DisappearingRuntimeTest {
             a.use { a.send(it, bid, "request with own duration") }; b.backgroundSync()
             b.use { assertTrue(it.contacts().single().contact.request)
                 assertEquals(30, it.messages(aid).single().disappearingSeconds)
-                assertEquals(0, it.policies()[aid]); it.acceptRequest(aid) }
+                assertNull(it.policies()[aid]); it.acceptRequest(aid) }
             b.backgroundSync(); b.use { assertEquals(30, it.policies()[aid]) }
         } finally { a.close(); b.close() }
     }

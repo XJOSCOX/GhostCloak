@@ -204,13 +204,14 @@ class NetworkController(
             for (page in 0 until 16) {
                 val receiptIds = if (page == 0) ids else emptyList()
                 var receiptsExpired = false
-                val request = ApiRequest.Fetch(includeSenders = true, skipMessageIds = seen.toList(), submissionIds = receiptIds)
+                val request = ApiRequest.Fetch(includeSenders = true, skipMessageIds = seen.toList(), submissionIds = receiptIds, retention=true)
                 val response = try { client.call(request) } catch (e: ApiFailure) {
                     if (e.status != 404 || receiptIds.isEmpty()) throw e
                     // Retention can remove a receipt and reject the entire combined response.
                     receiptsExpired = true
-                    client.call(ApiRequest.Fetch(includeSenders = true, skipMessageIds = seen.toList()))
+                    client.call(ApiRequest.Fetch(includeSenders = true, skipMessageIds = seen.toList(), retention=true))
                 }
+                response.serverTime?.let {service.serverReference(it)}
                 if (response.deliveries.isNotEmpty()) syncActive = true
                 requireApi(response.deliveries.size <= NetworkLimits.BATCH, "invalid_response", 502)
                 for (delivery in response.deliveries) {
@@ -221,7 +222,7 @@ class NetworkController(
                         requireApi(it.deviceId == envelope.senderDeviceId, "sender_mismatch")
                         state.remember(it)
                     }
-                    try { service.acceptNetwork(envelope, delivery.sender) }
+                    try { service.acceptNetwork(envelope, delivery.sender,delivery.receivedAt) }
                     catch (e: AppFailure) { continue }
                     catch (e: CryptoFailure) { if (e.error == CryptoError.StorageFailure) throw e else continue }
                     transport.acknowledgeAccepted(listOf(delivery.serverMessageId))

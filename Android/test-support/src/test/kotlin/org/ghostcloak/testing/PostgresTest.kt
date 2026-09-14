@@ -16,6 +16,32 @@ import java.util.concurrent.Executors
 import java.time.*
 
 class PostgresTest {
+    @Test fun v005BackfillsQueuedDeadlineWithoutChangingExistingIdentityOrPayload()=runBlocking {
+        Fixture().use {f->
+            val a=register(f.service(),"alice");val r=a.registration
+            val id=RandomIdentifiers.create();val submission=r.deviceId+"/"+RandomIdentifiers.create()
+            val accepted=System.currentTimeMillis();val payload=byteArrayOf(1,2,3)
+            f.db.transaction {
+                f.db.mailbox.put(id,MailboxRow(id,r.routingId,payload,accepted,accepted+86400000))
+                f.db.submissions.put(submission,SubmissionRow(submission,r.deviceId,DeviceAuth.digest(payload),id,accepted+604800000))
+            }
+            f.source.connection.use {c->c.createStatement().use {
+                it.execute("ALTER TABLE message_deduplication DROP COLUMN mailbox_expires_at")
+                it.execute("DROP INDEX mailbox_expiry_cleanup_idx")
+                it.execute("DELETE FROM schema_history WHERE version=5")
+            }}
+            assertThrows(IllegalStateException::class.java) {PostgresDatabase(f.source)}
+            val upgraded=PostgresDatabase(f.source,true)
+            upgraded.transaction {
+                assertEquals(r.deviceId,upgraded.accounts.get(r.accountId)!!.deviceId)
+                assertArrayEquals(payload,upgraded.mailbox.get(id)!!.encryptedEnvelope)
+                assertEquals(accepted+604800000,upgraded.mailbox.get(id)!!.expiresAt)
+                assertEquals(accepted+604800000,upgraded.submissions.get(submission)!!.mailboxExpiresAt)
+            }
+            assertTrue(PostgresDatabase(f.source,true).healthy())
+        }
+    }
+    @Test fun mailboxRetentionMigrationAndExpiry() { Fixture().use {f->RetentionProbe.exercise(f.db);PostgresDatabase(f.source)} }
     @Test fun exhaustedPrekeyPoolRefillsWithoutChangingIdentity()=runBlocking {
         Fixture().use { f -> PrekeyProbe.exercise(PostgresDatabase(f.source)) }
     }

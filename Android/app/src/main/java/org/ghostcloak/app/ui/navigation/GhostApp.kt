@@ -60,7 +60,7 @@ import org.ghostcloak.app.ui.components.*
                     composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
                     composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard, {name->model.addNetwork(name) {nav.popBackStack()}}) { text -> model.importCard(text) { nav.popBackStack() } } }
                     composable("profiles") { ProfilesScreen(state, model::rename) }
-                    composable("settings") { SettingsScreen(state, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork, { nav.navigate("app-lock") }) }
+                    composable("settings") { SettingsScreen(state, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork, { nav.navigate("app-lock") },model::requestPrivacy) }
                     composable("app-lock") {
                         org.ghostcloak.app.access.LocalAppLock.current?.let { controller ->
                             org.ghostcloak.app.access.AppLockSettingsScreen(controller) { nav.popBackStack() }
@@ -81,7 +81,7 @@ import org.ghostcloak.app.ui.components.*
                         ConversationScreen(state, contact, { nav.popBackStack() }, { nav.navigate("security/$id") },
                             { text, success -> model.send(id, text, success) }, { model.delete(id, it) }, model::connectNetwork, model::syncNetwork,
                             { model.acceptRequest(id) }, { model.deleteRequest(id); nav.popBackStack() }, { model.clearConversation(id) },
-                            { model.setDisappearing(id, it) }, { model.refresh() })
+                            { model.setDisappearing(id, it) }, { model.refresh() }, { model.block(id,true);nav.popBackStack() })
                     }
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable

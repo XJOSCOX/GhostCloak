@@ -13,6 +13,9 @@ interface MailboxRepository : DedupeRepository { val mailbox: Rows<MailboxRow> }
 interface ChallengeRepository { val challenges: Rows<ChallengeRow> }
 interface SessionRepository { val sessions: Rows<SessionRow> }
 interface BackendDatabase : AccountRepository, DeviceRepository, PreKeyRepository, MailboxRepository, ChallengeRepository, SessionRepository {
+    fun expireMailbox(now:Long, limit:Int=128) {
+        mailbox.all().filter { it.expiresAt<=now }.sortedBy {it.expiresAt}.take(limit).forEach { mailbox.remove(it.id) }
+    }
     val blobs: Rows<BlobRow>
     val blobBudgets: Rows<BlobBudget>
     fun <T> transaction(block: () -> T): T
@@ -32,7 +35,8 @@ interface BackendDatabase : AccountRepository, DeviceRepository, PreKeyRepositor
 @Serializable class ChallengeRow(val challenge: Challenge)
 @Serializable class SessionRow(val hash: String, val deviceId: String, val expiresAt: Long)
 @Serializable class MailboxRow(val id: String, val recipientRoutingId: String, val encryptedEnvelope: ByteArray, val receivedAt: Long, val expiresAt: Long)
-@Serializable class SubmissionRow(val id: String, val sender: String, val digest: ByteArray, val serverId: String, val expiresAt: Long, val acknowledged: Boolean = false)
+@Serializable class SubmissionRow(val id: String, val sender: String, val digest: ByteArray, val serverId: String, val expiresAt: Long, val acknowledged: Boolean = false,
+    val mailboxExpiresAt:Long=0)
 @Serializable private class DatabaseState(
     val accounts: MutableMap<String, AccountRow> = mutableMapOf(), val devices: MutableMap<String, DeviceRow> = mutableMapOf(),
     val prekeys: MutableMap<String, PrekeyRow> = mutableMapOf(), val challenges: MutableMap<String, ChallengeRow> = mutableMapOf(),

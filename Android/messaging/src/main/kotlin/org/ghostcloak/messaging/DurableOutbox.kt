@@ -30,6 +30,8 @@ class DurableOutbox(private val records: EndpointRecords, private val engine: Se
     private fun put(e: OutboxEntry) = records.write(key(e.submissionId), NetworkCodec.encode(e))
     fun get(id: String): OutboxEntry = records.transaction { NetworkCodec.decode(records.read(key(id)) ?: throw ApiFailure(404, "outbox_missing")) }
     fun pendingIds(): List<String> = records.transaction { records.keys("outbox/").map { it.removePrefix("outbox/") } }
+    /** Caller must hold authenticated terminal expiry evidence for this exact submission. */
+    fun removeExpired(id:String)=records.transaction {records.remove(key(id))}
     suspend fun enqueue(deviceId: String, plaintext: ByteArray, committed: (String) -> Unit = {}): String = withContext(Dispatchers.IO) { mutex.withLock {
         requireApi(RandomIdentifiers.valid(deviceId) && plaintext.size in 1..EnvelopeCodec.MAX_BODY)
         val id = RandomIdentifiers.create()

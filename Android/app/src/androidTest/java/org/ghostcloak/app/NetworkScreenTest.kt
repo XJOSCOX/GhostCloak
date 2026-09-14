@@ -2,11 +2,15 @@ package org.ghostcloak.app
 
 import android.app.Application
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.semantics.SemanticsActions
 import java.io.File
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.runBlocking
 import androidx.test.platform.app.InstrumentationRegistry
 import org.ghostcloak.app.application.*
 import org.ghostcloak.app.ui.components.NetworkActions
@@ -38,13 +42,14 @@ class NetworkScreenTest {
         val runtime = AppRuntime(context, "https://fixture.invalid", "ui-${RandomIdentifiers.create()}", api)
         lateinit var model: GhostViewModel
         val owner = ViewModelStore()
+        val attached = mutableStateOf(true)
         instrumentation.runOnMainSync {
             model = GhostViewModel(context.applicationContext as Application, runtime)
             assertTrue(model.state.value.networkConfigured)
             owner.put("network", model)
         }
         try {
-            compose.setContent { GhostCloakTheme { GhostApp(model) } }
+            compose.setContent { GhostCloakTheme { if(attached.value) GhostApp(model) } }
             compose.waitUntil(20000) { model.state.value.ready && !model.state.value.loading }
             compose.onNodeWithText("Create local identity").assertDoesNotExist()
             compose.onRoot().captureToImage().asAndroidBitmap().let { bitmap ->
@@ -52,7 +57,9 @@ class NetworkScreenTest {
             }
             compose.onNodeWithText("Encrypted messaging via Ghost Cloak staging", substring = true).performScrollTo().assertIsDisplayed()
             compose.onNodeWithText("Username").performScrollTo().performTextInput("alice")
-            compose.onNodeWithText("Create identity").performScrollTo().performClick()
+            // Avoid a moving IME/scroll coordinate on the compact disposable AVD.
+            compose.onNodeWithText("Create identity").performScrollTo().assertIsEnabled()
+                .performSemanticsAction(SemanticsActions.OnClick) { it() }
             compose.waitUntil(20000) { model.state.value.identity != null && !model.state.value.loading }
             val original = model.state.value.identity!!
             compose.onNodeWithText("Offline · Try Sync").assertIsDisplayed()
@@ -71,7 +78,15 @@ class NetworkScreenTest {
             compose.onNodeWithText("Sync").performScrollTo().performClick()
             compose.waitUntil(20000) { !model.state.value.loading }
             assertNull(model.state.value.error)
-        } finally { instrumentation.runOnMainSync { owner.clear() }; runtime.close() }
+        } finally {
+            // Dispose lifecycle polling before closing its encrypted runtime.
+            compose.runOnIdle { attached.value=false }
+            compose.waitForIdle()
+            val job=model.viewModelScope.coroutineContext[Job]
+            instrumentation.runOnMainSync { owner.clear() }
+            runBlocking { job?.join(); runtime.use {} }
+            runtime.close()
+        }
     }
     @Test fun usernameLookupIsPrimaryEvenBeforeReconnection() {
         var lookedUp: String? = null

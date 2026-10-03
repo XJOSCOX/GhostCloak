@@ -92,7 +92,7 @@ class NetworkScreenTest {
         var lookedUp: String? = null
         compose.setContent { GhostCloakTheme { AddContactScreen(
             AppState(loading = false, ready = true, networkConfigured = true, networkStatus = NetworkStatus.NEEDS_CONNECT),
-            {}, {}, { lookedUp = it }, {}) } }
+            {}, {}, { lookedUp = it }, import={}) } }
         compose.onNodeWithText("Exact username").performTextInput("bob")
         compose.onNodeWithText("Find and add contact").performClick()
         assertEquals("bob", lookedUp)

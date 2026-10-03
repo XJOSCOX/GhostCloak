@@ -161,16 +161,20 @@ class NetworkController(
             throw ApiFailure(401,"recovery_failed")
         }
     }
-    suspend fun add(username: String, service: ConversationService) = operation(NetworkOperation.LOOKUP) {
+    suspend fun add(username: String, service: ConversationService) {
         val normalized = Usernames.normalize(username)
-        val (e,time) = capabilities.lookup(normalized)
-        val b = e.bundle
-        requireApi(e.deviceId == b.deviceId && e.username == normalized, "directory_mismatch")
-        val card = ContactCard(1, e.accountId, e.username, e.deviceId, b.registrationId, b.identity, b.preKeyId, b.preKey,
-            b.signedId, b.signedKey, b.signature, b.kyberId, b.kyberKey, b.kyberSignature)
-        service.importCard(ContactCardCodec.encode(card)); state.remember(e)
-        capabilities.accept(e,time,service)
-        status = NetworkStatus.CONNECTED
+        if(service.blockedContacts().any {it.displayName.equals(normalized,ignoreCase=true)})
+            throw AppFailure(AppError.BLOCKED)
+        operation(NetworkOperation.LOOKUP) {
+            val (e,time) = capabilities.lookup(normalized)
+            val b = e.bundle
+            requireApi(e.deviceId == b.deviceId && e.username == normalized, "directory_mismatch")
+            val card = ContactCard(1, e.accountId, e.username, e.deviceId, b.registrationId, b.identity, b.preKeyId, b.preKey,
+                b.signedId, b.signedKey, b.signature, b.kyberId, b.kyberKey, b.kyberSignature)
+            service.importCard(ContactCardCodec.encode(card)); state.remember(e)
+            capabilities.accept(e,time,service)
+            status = NetworkStatus.CONNECTED
+        }
     }
     suspend fun send(service: ConversationService, id: String, text: String): Message = operation(NetworkOperation.SEND) {
         requireApi(state.registered(), "connect_required", 401)

@@ -12,12 +12,13 @@ import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 
 @Composable fun SettingsScreen(state: AppState, developerAvailable: Boolean,
-    demo: () -> Unit, leave: () -> Unit, connect:()->Unit={}, sync:()->Unit={}, publish:()->Unit={}, logout:()->Unit={}, appLock:()->Unit={}, requestPrivacy:(Boolean)->Unit={}) {
+    demo: () -> Unit, leave: () -> Unit, connect:()->Unit={}, sync:()->Unit={}, publish:()->Unit={}, logout:()->Unit={}, appLock:()->Unit={}, requestPrivacy:(Boolean)->Unit={}, blockedContacts:()->Unit={}) {
     var advanced by remember { mutableStateOf(false) }
     PageContent("Settings") {
         ErrorNotice(state.error, important = state.errorImportant)
         SettingsGroup("Appearance") { AppearanceSelector() }
         SettingsGroup("Privacy") {
+            OutlinedButton(onClick=blockedContacts,enabled=!state.loading) {Text("Blocked contacts")}
             Text("Message request privacy",style=MaterialTheme.typography.titleMedium)
             Text("Require confirmation hides message content and attachments until you accept the request.")
             Row(verticalAlignment=Alignment.CenterVertically) {

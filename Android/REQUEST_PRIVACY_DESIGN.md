@@ -46,6 +46,45 @@ Incoming disappearing expiry still starts on authenticated durable commit. A req
 
 ## Delete, Block and later requests
 
+### Phase 1J.2 blocked-contact management
+
+Settings → Privacy → Blocked contacts lists the same encrypted `Contact.blocked`
+flag used by authenticated incoming suppression. There is no second block list,
+lookup to populate names, timestamp/history, server block state or schema change.
+Locally retained display names are sorted alphabetically using Locale.ROOT with a
+stable internal tie-break; internal IDs never appear in UI. Blank labels display
+`Blocked contact`; an empty list displays `No blocked contacts`. Settings itself
+does not show names. The route is inside the existing app-lock private subtree;
+locking removes the list and confirmation dialog from accessibility/presentation.
+Existing FLAG_SECURE/task-preview and generic notification policies are unchanged.
+
+Unblock requires `Unblock this contact?` / `They can send you new message requests
+again.` with Cancel/Unblock, including the existing contact-security action and
+New Chat shortcut. It calls the same transactional repository transition as
+incoming suppression. Failed commits leave both the blocked flag and request
+tombstone unchanged; successful refresh immediately removes the list entry.
+There is no direct network request, peer notification, telemetry or work input
+containing block state. Independently scheduled normal mailbox polling may still
+run and ACK valid envelopes, as before.
+
+An unaccepted blocked identity becomes REJECTED / DORMANT_UNACCEPTED on unblock;
+no conversation or accepted membership is created. A genuinely new envelope starts
+the usual hidden request. Exact old blocked envelopes remain replay/dedup receipts
+only and cannot restore plaintext, attachment descriptors, cache, unread or alerts.
+The user can also explicitly Add/initiate after unblock using the corrected retained
+relationship path, without duplicate contact/session rows or ghost-contact errors.
+Known local blocked names in New Chat offer explicit Unblock rather than Add;
+the repository still rejects Add/import for a blocked identity resolved through
+directory/card identity, so stale names cannot bypass suppression.
+
+Accepted contacts retain `request=false` during Block. Existing accepted-contact
+rows/history remain available for local security management with sending disabled;
+unblock restores only that provable accepted relationship. It never restores
+incoming content discarded during Block. Pins, verification/change warnings,
+Signal ratchets/sessions and replay evidence survive unblock unchanged. A changed
+identity still requires the normal explicit security review. No identity-reset or
+ratchet rewind is performed. No claim of guaranteed RAM erasure is made.
+
 Delete sets REJECTED, removes content and the active request, and does not set blocked. A genuinely new authenticated envelope can immediately start a fresh request with the current privacy preference regardless of its queue age. Existing accepted-envelope hashes and Signal replay evidence prevent old envelopes from restoring content. After reboot, missing trusted time withholds reveal/Accept. Expiry and acceptance are transactional: at evaluation time `now >= deadline`, expiry wins and failed Accept does not roll back cleanup; acceptance before the deadline protects the accepted history from subsequent request expiry. Delete and repeated expiry remain idempotent.
 
 Block stores the private blocked contact state and BLOCKED request tombstone, removes request content, and prevents future presentation from that identity. Valid blocked envelopes now pass the existing authenticated E2EE path, commit only durable replay/security evidence, and receive a normal recipient-device ACK. No plaintext message, attachment descriptor, unread state or notification entry is retained. Delivered proves device-level envelope processing only, never reading, acceptance, display, attachment viewing or absence of blocking. Offline blocked recipients still receive no fabricated ACK and use the same ordinary seven-day TTL. Timing remains observable; this is not perfect traffic-analysis resistance. Existing directory lookup still discloses valid usernames with available prekeys; nonexistent and exhausted identities retain the same generic contact-unavailable response. This phase does not claim username enumeration has been eliminated.

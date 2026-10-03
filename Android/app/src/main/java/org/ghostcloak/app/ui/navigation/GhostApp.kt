@@ -58,9 +58,10 @@ import org.ghostcloak.app.ui.components.*
                 else NavHost(nav, startDestination = "contacts") {
                     composable("contacts") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork) }
                     composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
-                    composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard, {name->model.addNetwork(name) {nav.popBackStack()}}) { text -> model.importCard(text) { nav.popBackStack() } } }
+                    composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard, {name->model.addNetwork(name) {nav.popBackStack()}},model::unblock,{nav.navigate("blocked")}) { text -> model.importCard(text) { nav.popBackStack() } } }
                     composable("profiles") { ProfilesScreen(state, model::rename) }
-                    composable("settings") { SettingsScreen(state, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork, { nav.navigate("app-lock") },model::requestPrivacy) }
+                    composable("settings") { SettingsScreen(state, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork, { nav.navigate("app-lock") },model::requestPrivacy,{nav.navigate("blocked")}) }
+                    composable("blocked") {BlockedContactsScreen(state,{nav.popBackStack()},model::unblock)}
                     composable("app-lock") {
                         org.ghostcloak.app.access.LocalAppLock.current?.let { controller ->
                             org.ghostcloak.app.access.AppLockSettingsScreen(controller) { nav.popBackStack() }

@@ -81,6 +81,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         }
             .map { ContactStatus(it, engine.getRemoteIdentityStatus(it.remoteDeviceId), engine.getSessionLifecycle(it.remoteDeviceId)) }
     }
+    suspend fun blockedContacts():List<Contact> = action {repository.listBlocked()}
+    suspend fun unblock(id:String) = action {repository.unblock(id)}
     suspend fun messages(id: String) = action { repository.contact(id); repository.messages(id) }
     suspend fun messagesForUi(id:String) = action {
         val contact = repository.contact(id)

@@ -15,6 +15,7 @@ import org.ghostcloak.transport.TransportFailure
 
 data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? = null,
     val requireRequestConfirmation:Boolean=true,
+    val blockedContacts:List<Contact> = emptyList(),
     val cachedAttachments: Set<String> = emptySet(),
     val disappearingPolicies: Map<String, Int> = emptyMap(),
     val unreadExpiries: Map<String, List<ExpiryDeadline>> = emptyMap(),
@@ -63,6 +64,7 @@ class GhostViewModel internal constructor(application: Application, private val 
                     val unread = if (identity != null) active.unreadCounts() else emptyMap()
                     mutable.value = mutable.value.copy(identity = identity, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
                         requireRequestConfirmation=active.requireRequestConfirmation(),
+                        blockedContacts=if(identity!=null) active.blockedContacts() else emptyList(),
                         cachedAttachments = runtime.cachedAttachments(selected),
                         disappearingPolicies = if (identity != null) active.policies() else emptyMap(),
                         unreadExpiries = if (identity != null) active.unreadExpiries() else emptyMap(),
@@ -147,6 +149,7 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun verify(id: String, expected: String) = run { it.verify(id, expected); null }
     fun trust(id: String, expected: String) = run { it.trustReplacement(id, expected); null }
     fun block(id: String, blocked: Boolean) = run { it.block(id, blocked); null }
+    fun unblock(id:String)=run {it.unblock(id);null}
     fun delete(id: String, localId: String) = run { it.delete(id, localId); null }
     fun clearConversation(id: String) = run { it.clearConversation(id); null }
     fun setDisappearing(id: String, seconds: Int) = run {

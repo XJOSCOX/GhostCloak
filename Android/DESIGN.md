@@ -1,5 +1,16 @@
 # Messenger design
 
+## Blocked contacts (Phase 1J.2)
+
+Settings → Privacy → Blocked contacts uses the shared header, page spacing, theme
+and existing app-lock private subtree. It reads only encrypted local Contact.blocked
+state and retained names, without directory refreshes or identifier fallbacks.
+Unblock requires confirmation, removes the committed entry immediately, preserves
+pins/session/replay state and performs no network request. Unaccepted identities
+remain dormant until a fresh request or explicit Add; accepted relationships retain
+their existing acceptance metadata. Discarded messages/attachments never return.
+See [request privacy](REQUEST_PRIVACY_DESIGN.md#phase-1j2-blocked-contact-management).
+
 ## Inline photo presentation (Phase 1I.3.1)
 
 Accepted, unlocked foreground conversation photos auto-fetch through the existing

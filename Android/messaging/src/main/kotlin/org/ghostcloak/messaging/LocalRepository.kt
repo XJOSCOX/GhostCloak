@@ -108,6 +108,13 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         if(c.request && !blocked && request(id).state==RequestState.BLOCKED)
             finishRequest(id,RequestState.REJECTED)
     }
+    fun isBlocked(id:String)=records.transaction {contact(id).blocked}
+    fun listBlocked()=records.transaction {
+        contacts().filter {it.blocked}.sortedWith(compareBy<Contact> {
+            it.displayName.lowercase(java.util.Locale.ROOT)
+        }.thenBy {it.remoteDeviceId})
+    }
+    fun unblock(id:String)=block(id,false)
     fun restartRequestIfEligible(id:String,acceptedAt:Long?)=records.transaction {
         val r=request(id)
         // Called only inside authenticated new-envelope commit, after accepted-envelope replay checks.

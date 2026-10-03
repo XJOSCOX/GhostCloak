@@ -13,9 +13,11 @@ import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.privacy.copySensitive
 import org.ghostcloak.messaging.ContactCardCodec
 
-@Composable fun AddContactScreen(state: AppState, back: () -> Unit, export: () -> Unit, lookup:((String)->Unit)?=null, import: (String) -> Unit) {
+@Composable fun AddContactScreen(state: AppState, back: () -> Unit, export: () -> Unit, lookup:((String)->Unit)?=null,
+    unblock:(String)->Unit={}, manageBlocked:()->Unit={}, import: (String) -> Unit) {
     var draft by remember { mutableStateOf("") }; var tooLarge by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
+    var unblockTarget by remember {mutableStateOf<String?>(null)}
     val context = LocalContext.current
     PageContent("New chat", if (state.networkConfigured && !state.demo) "Find someone on Ghost Cloak." else "Exchange a public contact card.", back) {
         if(state.networkConfigured && !state.demo && lookup!=null) {
@@ -24,10 +26,15 @@ import org.ghostcloak.messaging.ContactCardCodec
                 Box(Modifier.fillMaxWidth().padding(GhostDimensions.heroInset),contentAlignment=androidx.compose.ui.Alignment.Center) { AppIcon(Glyph.PERSON,modifier=Modifier.size(GhostDimensions.touchTarget),tint=MaterialTheme.colorScheme.primary) }
             }
             OutlinedTextField(username,{if(it.length<=24) username=it},label={Text("Exact username")},singleLine=true,modifier=Modifier.fillMaxWidth())
-            FullButton("Find and add contact",!state.loading && username.isNotBlank()) {lookup(username)}
+            val blocked=state.blockedContacts.firstOrNull {it.displayName.equals(username.trim(),ignoreCase=true)}
+            if(blocked!=null) {
+                Text("This contact is blocked.")
+                FullButton("Unblock",!state.loading) {unblockTarget=blocked.remoteDeviceId}
+            } else FullButton("Find and add contact",!state.loading && username.isNotBlank()) {lookup(username)}
             Text("Your first message arrives as a request. Safety-number verification is optional; use it to confirm who you are talking to.",style=MaterialTheme.typography.bodyMedium)
         }
         ErrorNotice(state.error, important = state.errorImportant)
+        if(state.error=="This contact is blocked on this device.") TextButton(onClick=manageBlocked){Text("Blocked contacts")}
         if (!state.networkConfigured || state.demo) {
             InfoPanel("Exchange public material", "Cards contain public identity and prekeys only. Share through a trusted channel, then compare your safety number.")
             SectionLabel("IMPORT THEIR CARD")
@@ -49,4 +56,5 @@ import org.ghostcloak.messaging.ContactCardCodec
             Text("Copying is optional. Clipboard content may be accessible to your keyboard, other software or synced devices.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+    unblockTarget?.let {id->UnblockConfirmation({unblockTarget=null}) {unblockTarget=null;unblock(id)}}
 }

@@ -20,6 +20,7 @@ import org.ghostcloak.messaging.ContactStatus
     val changed = contact.identity?.trustState == IdentityTrustState.CHANGED
     val previouslyVerified = contact.identity?.previousTrustState == IdentityTrustState.VERIFIED
     var confirmation by remember { mutableStateOf<String?>(null) }
+    var confirmUnblock by remember {mutableStateOf(false)}
     LaunchedEffect(contact.contact.remoteDeviceId, changed) { load(changed) }
     PageContent("Contact security", "Verify the person behind the name.", back) {
         Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.spacedBy(GhostDimensions.regular),verticalAlignment=Alignment.CenterVertically) {
@@ -44,8 +45,8 @@ import org.ghostcloak.messaging.ContactStatus
         ErrorNotice(state.error, important = state.errorImportant)
         HorizontalDivider()
         SectionLabel("LOCAL CONTROLS")
-        Text("Blocking stops local conversation delivery. It keeps the contact and cryptographic identity.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedButton(onClick = { block(!contact.contact.blocked) }, enabled = !state.loading, modifier = Modifier.fillMaxWidth().heightIn(min = GhostDimensions.avatar)) {
+        Text("Blocking hides new incoming messages on this device. It preserves the contact and cryptographic identity.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedButton(onClick = { if(contact.contact.blocked) confirmUnblock=true else block(true) }, enabled = !state.loading, modifier = Modifier.fillMaxWidth().heightIn(min = GhostDimensions.avatar)) {
             Text(if (contact.contact.blocked) "Unblock contact" else "Block on this device")
         }
     }
@@ -56,4 +57,5 @@ import org.ghostcloak.messaging.ContactStatus
             confirmButton = { TextButton(onClick = { confirmation = null; if (changed) trust(expected) else verify(expected) }) { Text(if (changed) "Trust new identity" else "I compared it · Verify") } },
             dismissButton = { TextButton(onClick = { confirmation = null }) { Text("Cancel") } })
     }
+    if(confirmUnblock) UnblockConfirmation({confirmUnblock=false}) {confirmUnblock=false;block(false)}
 }

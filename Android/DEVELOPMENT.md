@@ -357,6 +357,50 @@ The Room-backed regression is updated to cover a visible Activity before polling
 
 ## Current Phase 1J deployment requirement
 
+### Phase 1J.2 — private blocked-contact management
+
+Settings → Privacy → Blocked contacts is entirely local, using the encrypted
+Contact.blocked flag already used by receive suppression. Unblock requires
+confirmation and sends no request or notification to the peer/server. Existing
+independent polling continues normally. No backend deployment, server DB migration,
+Android DB migration, API change or new permission is required. Update Android in
+place; do not uninstall, clear data, recreate accounts or reset keys.
+
+Validation (2026-10-03): 135 JVM messaging tests, four attachment JVM tests,
+33 debug and 26 release app unit tests passed. Debug/release builds and strict
+dependency verification passed, including `verifyIdeSources`. On the dedicated
+disposable API 37 AVD, all 135 app and 10 encrypted-storage instrumentation tests
+passed, including four new blocked-contact UI/runtime tests. The first run exposed
+a corrected JUnit return-type declaration and two existing UI timing failures;
+both existing tests passed in the complete final rerun without product changes.
+No physical-phone instrumentation, server access or deployment was performed.
+Validation used the existing local Gradle/AGP tooling; unrelated tooling and
+launcher-artwork edits are excluded from this phase's commit.
+
+Physical two-phone retest (user-run, no physical instrumentation):
+
+1. With A not accepted by B, A sends a request. B chooses Block. Open Settings →
+   Privacy → Blocked contacts on B: A appears exactly once. Cancel Unblock and
+   confirm A remains blocked.
+2. A sends text and a photo/document while blocked. B sees no content or alert;
+   A eventually sees Delivered after B processes/ACKs. Confirm Unblock on B:
+   A disappears from the list; none of the discarded messages/attachments returns.
+   A sends a genuinely new message: B gets a generic hidden request; Accept reveals
+   only new retained content.
+3. Block A again, then New Chat → search A on B. It shows blocked/explicit Unblock,
+   never silently adds or gives a ghost already-in-contacts result. Cancel leaves
+   blocked state unchanged. Confirm, then explicitly Find and add/initiate. There
+   is one relationship and the existing identity continuity remains.
+4. Block A, restart B without clearing data: A remains listed. Unblock, restart:
+   A stays unblocked; old discarded content remains absent.
+5. Open the blocked list, lock/background B with Immediate app lock, then return:
+   no names/actions are exposed while locked or in Recents. Unlock restores the
+   normal private route. Notifications remain generic.
+6. For an already accepted test contact, Block preserves the accepted relationship
+   metadata/history but suppresses new incoming presentation. Unblock restores
+   that acceptance, never discarded content. Identity-change warnings must still
+   require the existing explicit security review.
+
 [Request privacy and retention](REQUEST_PRIVACY_DESIGN.md) requires the matching backend and existing migrations BEFORE updated Android clients. Default request content is hidden until acceptance; pending requests expire at 72 hours from recipient secure commit, and general queued envelopes expire seven days from server enqueue. See the design for clock/legacy limitations, retained receipt capacity and physical retest. No remote rollout is performed automatically. Android tests use only a dedicated disposable AVD, never account-bearing phones or emulators.
 
 Reject/expired request relationship correction: see [RELATIONSHIP_REGRESSION.md](RELATIONSHIP_REGRESSION.md) for retained security records, explicit Add, replay/Block behavior and the four physical retests. This correction requires an Android update only; no backend deployment or migration.

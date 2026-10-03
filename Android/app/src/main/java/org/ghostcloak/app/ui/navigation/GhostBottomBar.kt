@@ -34,7 +34,8 @@ import org.ghostcloak.app.ui.theme.GhostLayout
                     val color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     Box(Modifier.weight(if (selected) 1.7f else 1f)
                         .heightIn(min = GhostLayout.touchTarget).clip(MaterialTheme.shapes.large)
-                        .selectable(selected = selected, role = Role.Tab, onClick = { onNavigate(destination) })
+                        .selectable(selected = selected, interactionSource = null, indication = null,
+                            role = Role.Tab, onClick = { onNavigate(destination) })
                         .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
                         Row(Modifier.then(if (selected) Modifier.background(MaterialTheme.colorScheme.primaryContainer,
                                 MaterialTheme.shapes.large) else Modifier)

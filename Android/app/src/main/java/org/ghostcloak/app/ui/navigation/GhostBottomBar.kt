@@ -42,7 +42,7 @@ import org.ghostcloak.app.ui.theme.GhostLayout
                             .padding(horizontal = GhostDimensions.medium, vertical = GhostDimensions.controlGap),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(GhostDimensions.small)) {
-                            AppIcon(glyph, modifier = Modifier.size(GhostLayout.headerIcon), tint = color)
+                            AppIcon(glyph, modifier = Modifier.size(GhostLayout.navigationIcon), tint = color)
                             if (selected) Text(label, color = color, style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }

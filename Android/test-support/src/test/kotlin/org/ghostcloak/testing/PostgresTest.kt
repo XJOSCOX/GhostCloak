@@ -16,6 +16,9 @@ import java.util.concurrent.Executors
 import java.time.*
 
 class PostgresTest {
+    @Test fun exactMailboxDeadlinesRepositoryReopenAndContendingFetchAckCleanup() {
+        Fixture().use {f->MailboxDeadlineProbe.exercise(f.db) {PostgresDatabase(f.source)}}
+    }
     @Test fun v006ProofMigrationDurabilityConsumptionAndRefill()=runBlocking {
         Fixture().use {f ->
             val old=register(f.service(),"original").registration

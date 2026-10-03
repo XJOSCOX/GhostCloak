@@ -2,14 +2,11 @@
 
 ## Final validation status (2026-10-02)
 
-**Not signed off.** [Final validation findings](PHASE_1J_FINAL_VALIDATION.md)
-identify two discrepancies against the latest requirements: the implemented
-72-hour window starts at server enqueue rather than recipient secure commit, and
-new server enqueues can persist different mailbox/receipt expiry deadlines because
-they sample the clock separately. Validation stopped at the explicitly requested
-backend-correctness gate. The sections below describe current behavior, not a
-claim that the latest recipient-commit or exact seven-day semantics passed.
-No fix, backend deployment or new migration was performed.
+The historical [validation findings](PHASE_1J_FINAL_VALIDATION.md) stopped at two
+correctness discrepancies. The approved correction now anchors requests to local
+secure commit and uses one shared backend mailbox/receipt deadline. See
+[correction and validation](REQUEST_CLOCK_CORRECTION.md) for the clock algorithm,
+upgrade policy, race semantics, validation evidence and deployment requirements.
 
 ## Implemented behavior
 
@@ -27,7 +24,7 @@ No new server-visible request flag, acceptance state, privacy preference, block 
 
 ## State and local storage
 
-Encrypted `app/request/<device>` records contain PENDING / ACCEPTED / REJECTED / BLOCKED / EXPIRED, a frozen hidden-content preference, the initial server acceptance time when available, a boot/monotonic grace deadline and a legacy last-envelope watermark (no longer an eligibility gate). The device key is an existing encrypted local namespace, not a WorkManager identifier or log field. Existing contact.request/blocked values remain for compatibility and are updated with the explicit lifecycle record.
+Encrypted `app/request/<device>` records contain PENDING / ACCEPTED / REJECTED / BLOCKED / EXPIRED, a frozen hidden-content preference, the projected server time at secure recipient commit when available (historical field name `acceptedAt`), a boot/elapsed commit deadline, a clock-version marker and a legacy last-envelope watermark (no longer an eligibility gate). The device key is an existing encrypted local namespace, not a WorkManager identifier or log field. Existing contact.request/blocked values remain for compatibility and are updated with the explicit lifecycle record.
 
 Payload authentication/decrypt, accepted-envelope replay evidence, message commit, request state and expiry cleanup happen inside the existing engine commit transaction. Unaccepted control messages continue to be rejected by the existing control gate. Text/attachment requests can be authenticated and stored without presentation. Expired old content retains replay evidence and is removed before UI presentation. A genuinely new eligible envelope can establish a fresh request after Reject/expiry. Acceptance rechecks expiry transactionally and cannot revive EXPIRED records.
 
@@ -35,11 +32,11 @@ Local deletion removes messages/descriptors/read records and notification ledger
 
 ## 72-hour request window and trusted time
 
-For newly fetched requests, start = `Delivery.receivedAt`, the server mailbox acceptance timestamp of the initial envelope, not the time the phone eventually downloads it. Deadline = start + 72 hours. Subsequent messages do not extend a pending window. If the first fetch occurs after that deadline, authenticated processing records replay evidence, removes content and produces no active request or notification. Existing ACK semantics remain: committed incoming processing can ACK even when its local content immediately expires.
+For new requests, T0 is the successful authenticated local commit through `SignalProtocolEngine.decryptAndCommit`: ratchet/session, replay evidence, encrypted message/descriptor and request timing commit together in the endpoint transaction. A single local clock sample is staged at the end of that transaction; rollback leaves no timer or request. Deadline is commit + 259200000 ms. Server enqueue time, FETCH arrival, UI opening and notification creation do not start this window. Subsequent messages do not extend a pending window. A request first received after 60 hours or six days queued on the server receives a full local 72-hour decision window, independently of its former mailbox deadline.
 
-An opt-in FETCH returns serverTime. Android persists this reference alongside boot count and elapsed realtime, then projects it using monotonic elapsed time. Device wall-clock forward/backward changes do not alter this request projection. Process recreation on the same boot preserves it. After reboot, a server-timed request cannot be accepted until a fresh reference arrives. Cleanup resumes on sync. This deliberately prefers withholding stale content to granting a new 72-hour window.
+An opt-in FETCH returns serverTime. Android persists the reference with boot count and elapsed realtime, and projects it at commit. On the commit boot, expiry uses only `elapsedRealtime >= persistedElapsedDeadline`; wall-clock forward/backward changes and later server samples cannot shorten/extend that window. Process recreation preserves it. After reboot, expiry uses a fresh projected server reference `>= persistedCommitReference + 259200000`; without that reference, reveal/Accept is withheld. The original commit reference is never reset. The server is trusted for time; a lying or unstable server clock remains a threat.
 
-Legacy requests with no reliable server acceptance timestamp receive a one-time 72-hour migration grace measured with elapsed time. The first fresh server reference binds the remaining grace to server time; if reboot happened before that first reference, the binding grants at most one server-timed 72-hour grace. Offline reboot before any server reference can defer cleanup; content remains hidden by default. This is an explicit legacy limitation, not a claim that arrival timestamps are authoritative. New server-timed requests do not use that migration path.
+The old implementation already stored a commit-relative elapsed deadline. Runtime clock-version migration recovers this deadline for pending requests on the same boot and derives the commit reference from its remaining lifetime. After reboot, it conservatively retains the old server-enqueue reference because wall time cannot reconstruct the lost monotonic origin safely. Terminal requests are never revived. Untimed requests bind their remaining elapsed lifetime to the first server reference on the same boot; an untimed reboot expires them instead of granting another window. Very old contacts lacking any request record receive a bounded hidden compatibility record on first access. See the correction document for limitations and downgrade constraints. No SQL schema migration is involved.
 
 UI/background cleanup is best effort when Android executes the app. There is no exact alarm. Request acceptance and UI queries recheck expiry, so a delayed scheduler does not authorize stale content. Server-clock stability is assumed; monotonic projection avoids extending time when a later server sample moves backward. Network transit can delay the local projection slightly. These are retention timers, not cryptographic proof of time.
 
@@ -49,7 +46,7 @@ Incoming disappearing expiry still starts on authenticated durable commit. A req
 
 ## Delete, Block and later requests
 
-Delete sets REJECTED, removes content and the active request, and does not set blocked. A genuinely new authenticated envelope can immediately start a fresh request with the current privacy preference. Existing accepted-envelope hashes and Signal replay evidence prevent old envelopes from restoring content. A server-timed envelope already 72 hours old cannot restart a request. Missing trusted time continues to withhold server-timed content until a fresh reference; untimed legacy messages retain the existing bounded grace policy.
+Delete sets REJECTED, removes content and the active request, and does not set blocked. A genuinely new authenticated envelope can immediately start a fresh request with the current privacy preference regardless of its queue age. Existing accepted-envelope hashes and Signal replay evidence prevent old envelopes from restoring content. After reboot, missing trusted time withholds reveal/Accept. Expiry and acceptance are transactional: at evaluation time `now >= deadline`, expiry wins and failed Accept does not roll back cleanup; acceptance before the deadline protects the accepted history from subsequent request expiry. Delete and repeated expiry remain idempotent.
 
 Block stores the private blocked contact state and BLOCKED request tombstone, removes request content, and prevents future presentation from that identity. Valid blocked envelopes now pass the existing authenticated E2EE path, commit only durable replay/security evidence, and receive a normal recipient-device ACK. No plaintext message, attachment descriptor, unread state or notification entry is retained. Delivered proves device-level envelope processing only, never reading, acceptance, display, attachment viewing or absence of blocking. Offline blocked recipients still receive no fabricated ACK and use the same ordinary seven-day TTL. Timing remains observable; this is not perfect traffic-analysis resistance. Existing directory lookup still discloses valid usernames with available prekeys; nonexistent and exhausted identities retain the same generic contact-unavailable response. This phase does not claim username enumeration has been eliminated.
 
@@ -59,7 +56,7 @@ The existing 60-operation/minute/principal server limit, 128 queued envelopes / 
 
 The production policy is now seven days from original server mailbox acceptance. Default was previously one day. V005 updates still-queued legacy rows to received_at + seven days. New server rows use the same deadline. FETCH always excludes expired ciphertext, even when a bounded cleanup pass has not deleted every expired row yet. ACK only succeeds as a delivery receipt while the owned row is still unexpired. The existing database transaction/advisory lock serializes ACK, fetch and cleanup; at the expiry boundary an ACK cannot convert an expired envelope into Delivered.
 
-The server does not classify request-init envelopes. They use seven days too. Android's 72-hour policy is stricter and can discard an offline request on arrival. This explicitly chooses relationship privacy over separate server request TTLs, as allowed by the phase requirements.
+The server does not classify request-init envelopes. They use seven days too. If B receives/commits at enqueue + six days, its normal ACK removes the envelope; its local decision window ends at enqueue + six days + 72 hours. The former server deadline does not cap a securely committed local request.
 
 The existing 30-second retention worker invokes indexed, bounded mailbox deletion (maximum 128 rows per pass). Opportunistic cleanup uses the same method. Deletion is transactional, idempotent and crash-safe. Existing bounded challenge/session cleanup remains. No full mailbox scan is performed to select cleanup candidates in PostgreSQL. Existing fetch/quota queries and in-memory fixtures retain the prototype's hard table caps.
 
@@ -75,9 +72,9 @@ Legacy receipts already deleted by an earlier backend cannot be reconstructed: c
 
 No E2EE framing, bulk encryption format or Signal keys change. Existing FETCH request encoding is unchanged unless retention is explicitly enabled. Legacy callers receive the old status shape and no serverTime; updated backend supports them. Updated Android must be deployed AFTER the matching backend: older strict decoders reject the new opt-in request field. Existing endpoints are reused; no nginx/Cloudflare route is added.
 
-Required migration: **V005__mailbox_retention.sql**. It adds message_deduplication.mailbox_expires_at, backfills from remaining mailbox rows, changes remaining mailbox deadlines to seven days from acceptance, and creates the expiry cleanup index. Missing legacy payloads get zero expiry; acknowledged still takes precedence. V001–V004 are unchanged and checksummed. Startup requires schema version 5; running the old backend after migration is not a supported rollback.
+Historical retention migration: **V005__mailbox_retention.sql** added message_deduplication.mailbox_expires_at, backfilled from remaining mailbox rows, changed remaining mailbox deadlines to seven days from acceptance, and created the expiry cleanup index. Missing legacy payloads get zero expiry; acknowledged still takes precedence. V001–V006 remain unchanged and checksummed. Current startup requires schema version 6. With V006 already deployed, this clock correction requires a backend release only, no migration or nginx changes; do not replay or edit V005.
 
-Deployment (not executed by this change):
+Historical initial V005 deployment procedure (not needed for this correction, not executed here):
 
 1. Build the immutable backend distribution with `./gradlew :backend:installDist --dependency-verification strict` from Android/.
 2. Follow infrastructure/DEPLOYMENT.md for private backup and release ownership. Stop the existing ghostcloak service for the schema change; keep credentials in the existing protected environment.
@@ -87,7 +84,7 @@ Deployment (not executed by this change):
 
 ## Validation and physical retest
 
-Host suites cover request hiding and reveal, captured preference, legacy grace, monotonic time, reboot/reference requirements, Delete/new-request transitions, blocking, replay, independent disappearing semantics, seven-day boundary, ACK/expiry ordering, duplicate cleanup, restart, idempotent resend and new-envelope delivery. The same retention probe runs against PostgreSQL V005. Existing attachment tests now expect no pre-acceptance UI payload; the old Delete-as-Block expectation is replaced with a hidden rejected request.
+Current validation evidence is in [REQUEST_CLOCK_CORRECTION.md](REQUEST_CLOCK_CORRECTION.md). The following counts/procedure record the historical initial Phase 1J implementation rather than the current correction. Host suites cover hiding/reveal, Delete/new-request transitions, blocking, replay, disappearing semantics, retention and non-resurrection.
 
 Android testing MUST use a fresh disposable AVD. This phase uses GhostCloak_Phase1J_Disposable on emulator-5564 with no account data copied from any other AVD/phone. Never run connected tests on an account-bearing installation, even an emulator. JVM/test builds do not authorize physical device cleanup.
 

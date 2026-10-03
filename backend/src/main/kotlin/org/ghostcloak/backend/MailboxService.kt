@@ -294,8 +294,12 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         requireApi(records.size < 128 && records.sumOf { it.encryptedEnvelope.size.toLong() } + r.encryptedEnvelope.size <= 8L * 1024 * 1024 && db.mailbox.size() < 2048, "mailbox_full", 429)
         requireApi(db.submissions.all().count { it.sender == sender.id } < 1024 && db.submissions.size() < 10000, "submission_capacity", 429)
         val serverId = RandomIdentifiers.create()
-        db.mailbox.put(serverId, MailboxRow(serverId, target.routingId, r.encryptedEnvelope.copyOf(), now(), now() + policy.mailboxTtl))
-        db.submissions.put(id, SubmissionRow(id, sender.id, digest, serverId, now() + policy.dedupeTtl,mailboxExpiresAt=now()+policy.mailboxTtl))
+        // One authoritative millisecond sample/deadline for payload and sender receipt.
+        val receivedAt = now()
+        val expiresAt = Math.addExact(receivedAt, policy.mailboxTtl)
+        val dedupeExpiresAt = Math.addExact(receivedAt, policy.dedupeTtl)
+        db.mailbox.put(serverId, MailboxRow(serverId, target.routingId, r.encryptedEnvelope.copyOf(), receivedAt, expiresAt))
+        db.submissions.put(id, SubmissionRow(id, sender.id, digest, serverId, dedupeExpiresAt,mailboxExpiresAt=expiresAt))
         return ApiResponse(serverMessageId = serverId)
     }
 }

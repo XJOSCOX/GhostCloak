@@ -28,7 +28,12 @@ class ErrorNoticeTest {
             assertFalse(model.state.value.errorImportant)
             api.offline = false
             loop = launch(Dispatchers.Main) { model.foregroundSync() }
-            withTimeout(5000) { while (model.state.value.error != null) delay(25) }
+            // Error clearing can precede completion of the successful sync. Await its
+            // terminal state, not an intermediate publication still showing OFFLINE.
+            withTimeout(5000) {
+                while (model.state.value.error != null ||
+                    model.state.value.networkStatus != org.ghostcloak.app.application.NetworkStatus.CONNECTED) delay(25)
+            }
             assertFalse(model.state.value.errorTransient)
             assertEquals(org.ghostcloak.app.application.NetworkStatus.CONNECTED, model.state.value.networkStatus)
         } finally {

@@ -1,6 +1,6 @@
-plugins { alias(libs.plugins.kotlin.jvm) }
+plugins { alias(libs.plugins.kotlin.jvm); alias(libs.plugins.kotlin.serialization) }
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21) } }
-dependencies { testImplementation(project(":crypto")); testImplementation(project(":messaging")); testImplementation(project(":transport")); testImplementation(project(":backend")); testImplementation(libs.junit); testImplementation(libs.signal.client); testImplementation("org.postgresql:postgresql:42.7.11") }
+dependencies { testImplementation(project(":crypto")); testImplementation(project(":messaging")); testImplementation(project(":transport")); testImplementation(project(":backend")); testImplementation(libs.junit); testImplementation(libs.signal.client); testImplementation(libs.cbor); testImplementation("org.postgresql:postgresql:42.7.11") }
 tasks.test {
     exclude("**/PostgresTest*")
     exclude("**/StagingTest*")

@@ -357,17 +357,14 @@ The Room-backed regression is updated to cover a visible Activity before polling
 
 ## Current Phase 1J deployment requirement
 
-[Request privacy and retention](REQUEST_PRIVACY_DESIGN.md) requires the matching backend and V005__mailbox_retention.sql BEFORE updated Android clients. Default request content is hidden until acceptance; pending requests expire at 72 hours from server acceptance, and general queued envelopes expire after seven days. See the design for clock/legacy limitations, retained receipt capacity, exact migration order and physical retest. No remote rollout is performed automatically. Android tests use only the new disposable GhostCloak_Phase1J_Disposable AVD, never account-bearing phones or emulators.
+[Request privacy and retention](REQUEST_PRIVACY_DESIGN.md) requires the matching backend and existing migrations BEFORE updated Android clients. Default request content is hidden until acceptance; pending requests expire at 72 hours from recipient secure commit, and general queued envelopes expire seven days from server enqueue. See the design for clock/legacy limitations, retained receipt capacity and physical retest. No remote rollout is performed automatically. Android tests use only a dedicated disposable AVD, never account-bearing phones or emulators.
 
 Reject/expired request relationship correction: see [RELATIONSHIP_REGRESSION.md](RELATIONSHIP_REGRESSION.md) for retained security records, explicit Add, replay/Block behavior and the four physical retests. This correction requires an Android update only; no backend deployment or migration.
 
 Blocked envelope ACK hardening: [BLOCKED_ENVELOPE_PRIVACY.md](BLOCKED_ENVELOPE_PRIVACY.md). Android update only; no backend deployment or database migration. Validate with JVM tests and a disposable AVD; do not run instrumentation on physical accounts.
 
-Phase 1J final TTL validation: [PHASE_1J_FINAL_VALIDATION.md](PHASE_1J_FINAL_VALIDATION.md).
-Sign-off is stopped pending approval of a backend correction: independent SEND
-clock samples produce different mailbox and receipt deadlines. The latest
-recipient-commit-based 72-hour requirement also differs from the currently
-implemented server-enqueue-based window. Fourteen focused JVM checks (including a
-temporary diagnostic probe) passed with strict dependency verification; they
-confirmed the discrepancies rather than validating the requested new semantics.
-No server/physical-device access, runtime fix, deployment or migration was made.
+The historical [TTL validation blockers](PHASE_1J_FINAL_VALIDATION.md) are corrected
+by [REQUEST_CLOCK_CORRECTION.md](REQUEST_CLOCK_CORRECTION.md). Deploy the corrected
+backend release, then update Android in place. Existing V006 remains current: no
+V007, DB migration or nginx changes. Never clear data/recreate identity or run
+expiry tests against production. No deployment is performed by this task.

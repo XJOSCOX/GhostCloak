@@ -32,29 +32,50 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         put("app/server-reference",ServerReference(maxOf(time,previous ?: time),now.elapsed,now.boot))
         contacts().filter {it.request}.forEach { contact ->
             val key="app/request/${contact.remoteDeviceId}"
-            read<RequestRecord>(key)?.takeIf {it.acceptedAt==null}?.let { r ->
-                val elapsedAge=if(now.boot==r.grace.boot) (REQUEST_WINDOW-(r.grace.elapsed-now.elapsed)).coerceIn(0,REQUEST_WINDOW) else 0
+            request(contact.remoteDeviceId).takeIf {it.acceptedAt==null && it.grace.boot==now.boot}?.let { r ->
+                val elapsedAge=(REQUEST_WINDOW-(r.grace.elapsed-now.elapsed)).coerceAtLeast(0)
                 put(key,r.copy(acceptedAt=serverNow()!!-elapsedAge))
             }
         }
     }
     fun serverNow():Long?=records.transaction {
-        val now=clock.now();val ref=read<ServerReference>("app/server-reference")
-        ref?.takeIf {it.boot==now.boot && now.elapsed>=it.elapsed}?.let {it.time+now.elapsed-it.elapsed}
+        projectedServerTime(clock.now())
+    }
+    private fun projectedServerTime(now:ExpiryMoment):Long? {
+        val ref=read<ServerReference>("app/server-reference")
+        return ref?.takeIf {it.boot==now.boot && now.elapsed>=it.elapsed}?.let {it.time+now.elapsed-it.elapsed}
     }
     fun request(id:String):RequestRecord=records.transaction {
-        read<RequestRecord>("app/request/$id") ?: RequestRecord(
-            hidden=true,acceptedAt=serverNow(),grace=clock.now().let {ExpiryDeadline(it.wall+REQUEST_WINDOW,it.elapsed+REQUEST_WINDOW,it.boot)})
-            .also {put("app/request/$id",it)}
+        val key="app/request/$id"
+        val old=read<RequestRecord>(key)
+        if(old==null) {
+            RequestRecord(hidden=true,acceptedAt=serverNow(),grace=requestDeadline(),clockVersion=1)
+                .also {put(key,it)}
+        } else if(old.clockVersion==0) {
+            // Old code already persisted a commit-relative elapsed deadline. Recover it on
+            // the same boot; after reboot retain the earlier server deadline conservatively.
+            val now=clock.now()
+            val anchor=if(old.state==RequestState.PENDING && old.grace.boot==now.boot)
+                serverNow()?.let {it-(REQUEST_WINDOW-(old.grace.elapsed-now.elapsed)).coerceAtLeast(0)}
+            else old.acceptedAt
+            old.copy(acceptedAt=anchor,clockVersion=1).also {put(key,it)}
+        } else old
     }
-    fun startRequest(id:String,acceptedAt:Long?)=records.transaction {
-        put("app/request/$id",RequestRecord(hidden=requireRequestConfirmation(),acceptedAt=acceptedAt,
-            grace=clock.now().let {ExpiryDeadline(it.wall+REQUEST_WINDOW,it.elapsed+REQUEST_WINDOW,it.boot)},lastEnvelopeAt=acceptedAt))
+    private fun requestDeadline(now:ExpiryMoment=clock.now())=now.let {
+        ExpiryDeadline(Math.addExact(it.wall,REQUEST_WINDOW),Math.addExact(it.elapsed,REQUEST_WINDOW),it.boot)
+    }
+    fun startRequest(id:String,serverEnqueuedAt:Long?)=records.transaction {
+        // Staged at the end of authenticated decryptAndCommit; visible only after its
+        // enclosing ratchet/replay/message transaction durably succeeds.
+        val commit=clock.now()
+        put("app/request/$id",RequestRecord(hidden=requireRequestConfirmation(),acceptedAt=projectedServerTime(commit),
+            grace=requestDeadline(commit),lastEnvelopeAt=serverEnqueuedAt,clockVersion=1))
     }
     fun requestExpired(id:String):Boolean=records.transaction {
         val r=request(id);val now=clock.now();val server=serverNow()
-        r.state==RequestState.EXPIRED || if(r.acceptedAt!=null && server!=null) server-r.acceptedAt>=REQUEST_WINDOW
-            else now.boot==r.grace.boot && now.elapsed>=r.grace.elapsed
+        r.state==RequestState.EXPIRED || if(now.boot==r.grace.boot) now.elapsed>=r.grace.elapsed
+            else if(r.acceptedAt!=null && server!=null) server>=Math.addExact(r.acceptedAt,REQUEST_WINDOW)
+            else r.acceptedAt==null // Untimed reboot fails closed; never grants a fresh window.
     }
     fun requestHidden(id:String)=records.transaction {contact(id).request && request(id).hidden}
     fun requestActive(id:String)=records.transaction {request(id).state==RequestState.PENDING && !requestExpired(id)}
@@ -88,11 +109,10 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
             finishRequest(id,RequestState.REJECTED)
     }
     fun restartRequestIfEligible(id:String,acceptedAt:Long?)=records.transaction {
-        val r=request(id);val server=serverNow()
+        val r=request(id)
         // Called only inside authenticated new-envelope commit, after accepted-envelope replay checks.
-        // An old offline envelope cannot revive an expired request; no sender-level Reject cooldown.
-        if(!contact(id).blocked && r.state in setOf(RequestState.REJECTED,RequestState.EXPIRED) &&
-            (acceptedAt==null || server==null || server-acceptedAt<REQUEST_WINDOW))
+        // Queue age does not shorten a newly committed recipient decision window.
+        if(!contact(id).blocked && r.state in setOf(RequestState.REJECTED,RequestState.EXPIRED))
             startRequest(id,acceptedAt)
     }
     fun expireRequests():Int=records.transaction {
@@ -100,13 +120,18 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         expired.forEach {finishRequest(it.remoteDeviceId,RequestState.EXPIRED)}
         expired.size
     }
-    fun acceptRequest(id:String)=records.transaction {
-        expireRequests()
-        val r=request(id)
-        require(r.state==RequestState.PENDING && !requestExpired(id)) {"request_expired"}
-        // After reboot, a known server deadline requires a fresh server reference before reveal.
-        require(r.acceptedAt==null || serverNow()!=null) {"request_time_unavailable"}
-        save(contact(id).copy(request=false));finishRequest(id,RequestState.ACCEPTED)
+    fun acceptRequest(id:String) {
+        val failure=records.transaction {
+            expireRequests()
+            val r=request(id)
+            when {
+                r.state!=RequestState.PENDING || requestExpired(id) -> "request_expired"
+                r.grace.boot!=clock.now().boot && serverNow()==null -> "request_time_unavailable"
+                else -> {save(contact(id).copy(request=false));finishRequest(id,RequestState.ACCEPTED);null}
+            }
+        }
+        // Throw outside the transaction so rejecting Accept cannot roll back expiry cleanup.
+        require(failure==null) {failure!!}
     }
     fun attachmentPeer(id: String): Boolean = records.transaction {
         records.read("app/attachment-peer/$id")?.contentEquals(byteArrayOf(1)) == true ||

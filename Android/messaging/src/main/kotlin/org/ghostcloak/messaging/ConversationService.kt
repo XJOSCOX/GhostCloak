@@ -210,9 +210,6 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 throw AppFailure(AppError.BLOCKED)
             repository.expireRequests()
             repository.save(contact)
-            if(contact.request && contacts.none {it.remoteDeviceId==contact.remoteDeviceId})
-                repository.startRequest(contact.remoteDeviceId,serverAcceptedAt)
-            else if(contact.request) repository.restartRequestIfEligible(contact.remoteDeviceId,serverAcceptedAt)
             // A later legacy message withdraws the claim (for example after a downgrade).
             if (content.attachment == null) repository.attachmentPeer(contact.remoteDeviceId,content.supportsAttachments)
             val now = repository.clock.now()
@@ -226,6 +223,9 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 finally { encoded.fill(0) }
             }
             if(contact.request) {
+                if(contacts.none {it.remoteDeviceId==contact.remoteDeviceId})
+                    repository.startRequest(contact.remoteDeviceId,serverAcceptedAt)
+                else repository.restartRequestIfEligible(contact.remoteDeviceId,serverAcceptedAt)
                 val r=repository.request(contact.remoteDeviceId)
                 if(r.state!=RequestState.PENDING || repository.requestExpired(contact.remoteDeviceId)) {
                     repository.finishRequest(contact.remoteDeviceId,if(r.state==RequestState.PENDING) RequestState.EXPIRED else r.state)

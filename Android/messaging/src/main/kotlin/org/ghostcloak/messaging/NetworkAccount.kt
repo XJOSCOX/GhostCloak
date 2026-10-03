@@ -83,6 +83,8 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
         records.remove(prefix+"recovery-required"); records.remove(prefix+"logged-out")
     }
     fun accountId():String=records.transaction {records.read(prefix+"account")?.decodeToString() ?: throw ApiFailure(401,"credential_missing")}
+    fun ownRouting():String=records.transaction {records.read(prefix+"routing")?.decodeToString() ?: throw ApiFailure(401,"credential_missing")}
+    fun ownDevice():String=records.transaction {records.read("local/device")?.decodeToString() ?: throw ApiFailure(401,"credential_missing")}
     fun connectionState():AccountConnectionState=records.transaction {
         when {
             records.read(prefix+"logged-out")!=null -> AccountConnectionState.LOGGED_OUT

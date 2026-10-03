@@ -230,7 +230,7 @@ class AppRuntime internal constructor(
         use { check(attachmentAllowed()) }
         return attachments!!.prepare(source,length,kind,seconds,filename,::attachmentAllowed)
     }
-    internal suspend fun supportsAttachments(conversation:String):Boolean=use { it.attachmentPeer(conversation) }
+    internal suspend fun supportsAttachments(conversation:String):Boolean=use { network?.supportsAttachments(it,conversation) ?: it.attachmentPeer(conversation) }
     internal fun cachedAttachments(conversation:String?) = if(conversation==null) emptySet() else
         attachments?.cachedReferences().orEmpty().filter { it.substringBefore('/')==conversation }.map { it.substringAfter('/') }.toSet()
     internal fun attachmentAvailableNow(conversation:String,message:String):Boolean {

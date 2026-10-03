@@ -16,6 +16,30 @@ import java.util.concurrent.Executors
 import java.time.*
 
 class PostgresTest {
+    @Test fun v006ProofMigrationDurabilityConsumptionAndRefill()=runBlocking {
+        Fixture().use {f ->
+            val old=register(f.service(),"original").registration
+            val queued=RandomIdentifiers.create();val payload=byteArrayOf(1,2,3)
+            f.db.transaction {f.db.mailbox.put(queued,MailboxRow(queued,old.routingId,payload,System.currentTimeMillis(),System.currentTimeMillis()+100000))}
+            f.source.connection.use {c -> c.createStatement().use {
+                it.execute("ALTER TABLE prekey_bundles DROP COLUMN attachment_capability")
+                it.execute("DELETE FROM schema_history WHERE version=6")
+            }}
+            assertThrows(IllegalStateException::class.java) {PostgresDatabase(f.source)}
+            val upgraded=PostgresDatabase(f.source,true)
+            upgraded.transaction {
+                assertArrayEquals(old.bundles.first().identity,upgraded.devices.get(old.deviceId)!!.identity)
+                assertArrayEquals(payload,upgraded.mailbox.get(queued)!!.encryptedEnvelope)
+                assertNull(upgraded.prekeys.get(old.deviceId)!!.pool.first().capability)
+            }
+            CapabilityProbe.exercise(upgraded)
+            val restarted=PostgresDatabase(f.source,true)
+            restarted.transaction {assertTrue(restarted.prekeys.all().any {it.pool.any {b -> b.capability!=null}})}
+            f.source.connection.use {c -> c.createStatement().use {s ->
+                try {s.execute("UPDATE prekey_bundles SET attachment_capability=decode(repeat('00',513),'hex')");fail()}catch(_:java.sql.SQLException){}
+            }}
+        }
+    }
     @Test fun v005BackfillsQueuedDeadlineWithoutChangingExistingIdentityOrPayload()=runBlocking {
         Fixture().use {f->
             val a=register(f.service(),"alice");val r=a.registration

@@ -20,6 +20,10 @@ interface SecureSessionEngine {
     val events: Flow<SecurityEvent>
     suspend fun createIdentity(username: String): DeviceIdentity
     suspend fun publicBundle(): RemoteKeyBundle
+    suspend fun signAttachmentCapability(audience: String, account: String, routing: String,
+        bundle: org.ghostcloak.protocol.PublicBundle, time: Long): org.ghostcloak.protocol.AttachmentCapability
+    suspend fun verifyAttachmentCapability(audience: String, entry: org.ghostcloak.protocol.DirectoryEntry,
+        time: Long): Boolean
     suspend fun establishSession(remote: RemoteKeyBundle)
     suspend fun encrypt(remoteDeviceId: String, plaintext: ByteArray): EncryptedEnvelope
     suspend fun decrypt(envelope: EncryptedEnvelope): ByteArray

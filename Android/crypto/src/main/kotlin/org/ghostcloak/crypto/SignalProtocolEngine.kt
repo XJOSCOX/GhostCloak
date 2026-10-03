@@ -8,6 +8,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.ghostcloak.identity.*
 import org.ghostcloak.protocol.*
+import org.ghostcloak.capabilities.CapabilitySignatures
 import org.signal.libsignal.protocol.*
 import org.signal.libsignal.protocol.ecc.ECPublicKey
 import org.signal.libsignal.protocol.kem.KEMPublicKey
@@ -107,6 +108,23 @@ class SignalProtocolEngine(private val records: EndpointRecords,
         identity()
     }
     override suspend fun publicBundle(): RemoteKeyBundle = preKeys.createPublicationBundle()
+    override suspend fun signAttachmentCapability(audience: String, account: String, routing: String,
+        bundle: PublicBundle, time: Long): AttachmentCapability = operation {
+        bundle.validate()
+        requireApi(bundle.deviceId == local().name && bundle.identity.contentEquals(identity().publicKey), "capability_binding")
+        val localTime=System.currentTimeMillis()
+        requireApi(time in (localTime-300000L)..(localTime+300000L),"capability_time")
+        val proof = AttachmentCapability(issuedAt=time, expiresAt=Math.addExact(time, AttachmentCapabilities.LIFETIME),
+            bundleDigest=AttachmentCapabilities.digest(bundle), signature=byteArrayOf())
+        AttachmentCapability(issuedAt=proof.issuedAt, expiresAt=proof.expiresAt, bundleDigest=proof.bundleDigest,
+            signature=store.identityKeyPair.privateKey.calculateSignature(AttachmentCapabilities.statement(audience, account, routing, bundle, proof)))
+    }
+    override suspend fun verifyAttachmentCapability(audience: String, entry: DirectoryEntry, time: Long): Boolean = operation {
+        trust.ensureUsable(entry.deviceId)
+        val pin = trust.pin(entry.deviceId) ?: return@operation false
+        if (!pin.serialize().contentEquals(entry.bundle.identity)) return@operation false
+        CapabilitySignatures.verify(audience, entry.accountId, entry.routingId, entry.bundle, time)
+    }
 
     private fun lifecycle(id: String): SessionLifecycle? {
         val stored = records.read("lifecycle/$id")?.decodeToString()

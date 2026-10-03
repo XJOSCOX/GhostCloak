@@ -326,7 +326,7 @@ For a `PHOTO_PREP_START` / immediate failure, the [normalization follow-up](PHOT
 
 ## Attachment support confirmation
 
-Installing the same app version on both phones does not itself confirm peer attachment support. Support is learned from an incoming authenticated short text (or supported control payload), not an outgoing text's delivery ACK. Before sending the first attachment, have the other phone reply with a short text from the updated app; accept any message request first. Once that reply arrives, retry Photo or Document. For attachments in both directions, exchange short texts both ways. The UI now describes unconfirmed support instead of claiming that the peer must be outdated. No account reset or reconnect is needed. The existing capability gate, encryption and delivery semantics are unchanged.
+With the matching V006 backend, updated devices publish identity-signed ATTACHMENT_V1 proof for existing unused prekeys when connected/syncing. Lookup discovers support without an incoming reply; preparing an attachment refreshes unknown contacts without consuming another prekey. Let the recipient connect before a first photo/document. Hidden requests expose/download nothing until Accept; accepted photos follow existing automatic display, documents require Download/Open. Old backend/peer support stays conservative: text works and an authenticated incoming short-text advertisement remains a fallback. Delivery ACK alone never proves support. Never clear data or reset identities. See [ATTACHMENT_CAPABILITY_DESIGN.md](ATTACHMENT_CAPABILITY_DESIGN.md) for migration/deployment/rollback and owner two-phone retest. Connected tests must explicitly target only a disposable AVD.
 
 
 ## Document picker return regression

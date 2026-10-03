@@ -53,7 +53,14 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
                 execute("INSERT INTO schema_history VALUES (5,?)",retentionChecksum)
             }
             check(query("SELECT checksum FROM schema_history WHERE version=5") {it.getString(1)}.singleOrNull()==retentionChecksum) {"Migration validation failed"}
-            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 5) { "Unknown schema version" }
+            val capabilityMigration=javaClass.getResourceAsStream("/db/V006__attachment_capabilities.sql")!!.use {it.readBytes()}
+            val capabilityChecksum=DeviceAuth.digest(capabilityMigration).joinToString("") {"%02x".format(it)}
+            if(migrate && query("SELECT version FROM schema_history WHERE version=6") {it.getInt(1)}.isEmpty()) {
+                capabilityMigration.toString(Charsets.UTF_8).split(';').filter {it.isNotBlank()}.forEach {execute(it)}
+                execute("INSERT INTO schema_history VALUES (6,?)",capabilityChecksum)
+            }
+            check(query("SELECT checksum FROM schema_history WHERE version=6") {it.getString(1)}.singleOrNull()==capabilityChecksum) {"Migration validation failed"}
+            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 6) { "Unknown schema version" }
         }
     }
     override fun expireMailbox(now:Long,limit:Int) {
@@ -117,7 +124,8 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
                 JOIN one_time_prekeys e ON e.device_id=b.device_id AND e.key_id=b.ec_id
                 JOIN pq_prekeys p ON p.device_id=b.device_id AND p.key_id=b.pq_id WHERE b.device_id=? ORDER BY position""",id) {
                 val s=signed.getValue(it.getInt("signed_id"))
-                PublicBundle(id,it.getInt("registration_id"),device.identity,it.getInt("ec_id"),it.getBytes("ec_key"),it.getInt("signed_id"),s.copyOfRange(0,33),s.copyOfRange(33,97),it.getInt("pq_id"),it.getBytes("pq_key"),it.getBytes("pq_signature"))
+                PublicBundle(id,it.getInt("registration_id"),device.identity,it.getInt("ec_id"),it.getBytes("ec_key"),it.getInt("signed_id"),s.copyOfRange(0,33),s.copyOfRange(33,97),it.getInt("pq_id"),it.getBytes("pq_key"),it.getBytes("pq_signature"),
+                    it.getBytes("attachment_capability")?.let {bytes -> NetworkCodec.decode<AttachmentCapability>(bytes,AttachmentCapabilities.MAX_PROOF_BYTES)})
             }
             return PrekeyRow(id,pool,ec,pq,signed)
         }
@@ -131,7 +139,7 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
             row.pool.forEachIndexed { index,b ->
                 execute("UPDATE one_time_prekeys SET public_key=? WHERE device_id=? AND key_id=?",b.preKey,id,b.preKeyId)
                 execute("UPDATE pq_prekeys SET public_key=?,signature=? WHERE device_id=? AND key_id=?",b.kyberKey,b.kyberSignature,id,b.kyberId)
-                execute("INSERT INTO prekey_bundles VALUES (?,?,?,?,?,?)",id,b.preKeyId,b.kyberId,b.signedId,b.registrationId,index)
+                execute("INSERT INTO prekey_bundles (device_id,ec_id,pq_id,signed_id,registration_id,position,attachment_capability) VALUES (?,?,?,?,?,?,?)",id,b.preKeyId,b.kyberId,b.signedId,b.registrationId,index,b.capability?.let {NetworkCodec.encode(it)})
             }
         }
         override fun all()=devices.all().mapNotNull { get(it.id) }

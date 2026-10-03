@@ -49,3 +49,7 @@ Errors: 400 invalid request/schema/version/route/key material; 401 missing/expir
 From `Android/`: `./gradlew :backend:run --dependency-verification strict` (PowerShell: `.\gradlew.bat`). This starts ephemeral loopback storage on port 8787. Stopping it destroys account/session/mailbox state. Do not use real accounts or distribute this server.
 
 Integration: `.\gradlew.bat :test-support:test --tests org.ghostcloak.testing.NetworkTest --dependency-verification strict`. The fixture starts its own server on an ephemeral loopback port and uses actual HttpURLConnection requests and libsignal sessions. No external account, host or database is needed.
+
+## Phase 1J.1 opt-in attachment capability extension
+
+[ATTACHMENT_CAPABILITY_DESIGN.md](../Android/ATTACHMENT_CAPABILITY_DESIGN.md) specifies the signed transcript, 24-hour validity, shared rate buckets, legacy omission and V006 contract. `lookup.capabilities=true` opts into proof. `capabilities` at `/v1/devices/capabilities` inspects/publishes only the authenticated owner's unused bundle proofs. `capability_lookup` at `/v1/directory/capability` refreshes a pinned contact without consuming a prekey. All use authenticated POST/CBOR and the existing one-retry session boundary. No content, request acceptance or private preferences are advertised. Legacy requests/responses omit extension fields. Registration/prekey signatures and legacy schemas remain unchanged; proofs publish separately for exact existing bundles.

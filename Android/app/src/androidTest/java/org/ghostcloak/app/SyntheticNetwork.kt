@@ -86,7 +86,24 @@ internal class SyntheticNetwork : GhostCloakTransport {
                         lookedUp.add(r.username)
                         val target = accounts.values.singleOrNull { it.username == r.username } ?: throw ApiFailure(404, "not_found")
                         val bundle = prekeys[target.deviceId]!!.removeAt(0)
-                        ApiResponse(directory = DirectoryEntry(target.accountId, target.deviceId, target.routingId, target.username, bundle))
+                        ApiResponse(directory = DirectoryEntry(target.accountId, target.deviceId, target.routingId, target.username,
+                            if(r.capabilities) bundle else bundle.withCapability(null)),serverTime=if(r.capabilities) System.currentTimeMillis() else null)
+                    }
+                    is ApiRequest.Capabilities -> {
+                        val pool=prekeys[me.deviceId]!!
+                        if(r.advertisements.isEmpty()) ApiResponse(capabilityInventory=pool.toList(),serverTime=System.currentTimeMillis())
+                        else {
+                            r.advertisements.forEach { b ->
+                                val index=pool.indexOfFirst {it.preKeyId==b.preKeyId}
+                                requireApi(index>=0 && org.ghostcloak.capabilities.CapabilitySignatures.verify("fixture.invalid",me.accountId,me.routingId,b,System.currentTimeMillis()))
+                                pool[index]=b
+                            };ApiResponse()
+                        }
+                    }
+                    is ApiRequest.CapabilityLookup -> {
+                        val target=accounts.values.single {it.deviceId==r.deviceId}
+                        val b=prekeys[target.deviceId]!!.firstOrNull() ?: throw ApiFailure(404,"not_found")
+                        ApiResponse(directory=DirectoryEntry(target.accountId,target.deviceId,target.routingId,target.username,b),serverTime=System.currentTimeMillis())
                     }
                     is ApiRequest.Send -> {
                         sent.add(r.encryptedEnvelope.copyOf())

@@ -414,3 +414,7 @@ Actual VPS capacity/ingress behavior, Tink integration and peer-version negotiat
 Phase 1I.1 was design only; Phase 1I.2 implements only the foundation listed at the top. Still no user-facing picker/recording/player/attachment controls, new permissions, changed notification content, remote deletion, view-once, screenshot detection, calls/video calls/live streaming, cloud transcription, AI media processing, external storage/push, microphone service or weakened app lock/identity/crypto/session behavior. No indefinite availability, traffic anonymity or erasure of exported copies promised.
 
 Recommended order: **1I.2 encrypted blob foundation -> 1I.3 photos/documents -> 1I.4 direct voice notes -> 1I.5 video/resumability**, satisfying each gate before proceeding.
+
+## Phase 1J.1 implemented peer negotiation
+
+The earlier reply-only negotiation/audit gate is superseded by the approved [identity-signed ATTACHMENT_V1 implementation](ATTACHMENT_CAPABILITY_DESIGN.md). Matching backend/V006 deployment enables first photo/document requests without a recipient reply. Legacy incoming-message evidence remains supported; absent or invalid proof never grants support. Phase 1J hidden-request rendering/download/acceptance guarantees remain unchanged.

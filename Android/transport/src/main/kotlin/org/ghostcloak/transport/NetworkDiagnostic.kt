@@ -37,8 +37,8 @@ fun networkOperation(request: ApiRequest): NetworkOperation = when (request) {
     is ApiRequest.Send -> NetworkOperation.SEND
     is ApiRequest.Fetch -> if (request.includeSenders || request.submissionIds.isEmpty()) NetworkOperation.FETCH else NetworkOperation.RECEIPT_STATUS
     is ApiRequest.Ack -> NetworkOperation.ACK
-    is ApiRequest.Lookup -> NetworkOperation.LOOKUP
-    is ApiRequest.Prekeys -> NetworkOperation.PUBLISH
+    is ApiRequest.Lookup, is ApiRequest.CapabilityLookup -> NetworkOperation.LOOKUP
+    is ApiRequest.Prekeys, is ApiRequest.Capabilities -> NetworkOperation.PUBLISH
     else -> NetworkOperation.AUTH
 }
 

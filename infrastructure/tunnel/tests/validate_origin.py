@@ -75,7 +75,7 @@ try:
     health = request()
     assert health.returncode == 0 and health.stdout == '{"status":"ok"}\n200', health
     for path in ['/v1/auth/challenge', '/v1/auth/verify', '/v1/auth/revoke', '/v1/accounts', '/v1/accounts/username',
-                 '/v1/directory/lookup', '/v1/devices/prekeys', '/v1/messages', '/v1/messages/fetch', '/v1/messages/ack']:
+                 '/v1/directory/lookup', '/v1/directory/capability', '/v1/devices/prekeys', '/v1/devices/capabilities', '/v1/messages', '/v1/messages/fetch', '/v1/messages/ack']:
         extra = ['-H', 'Content-Type: application/cbor', '-H', 'Authorization: Bearer synthetic-fixture', '--data-binary', 'abc']
         for header in headers: extra += ['-H', f'{header}: {ip}']
         response = request(path, 'POST', extra=extra)

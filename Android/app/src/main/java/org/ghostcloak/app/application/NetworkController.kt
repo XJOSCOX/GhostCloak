@@ -35,6 +35,8 @@ class NetworkController(
         { client.call(it, reportTransientFailure=false) }, { canAutoSync && cooldown.remainingMillis == 0L },
         diagnostic = PrekeyDiagnostics::emit) }
     private val renewalMutex = Mutex()
+    private val capabilities by lazy { CapabilityDiscovery(engine,state,URI(origin).host,client,
+        {canAutoSync && cooldown.remainingMillis==0L}) }
     private val renewalBlockKey = "app/renewal-blocked/${URI(origin).host}"
     @Volatile private var renewalBlockCache = records.transaction { records.read(renewalBlockKey) != null }
     private var renewalBlocked:Boolean
@@ -126,6 +128,7 @@ class NetworkController(
         accountConnectionState=AccountConnectionState.REGISTERED
         renewalBlocked = false; status = NetworkStatus.CONNECTED
         prekeyRefill.maintain()
+        capabilities.publish()
     }
     suspend fun recover(allowed:()->Boolean)=renewalMutex.withLock {
         requireApi(configured && allowed() && !loggingOut,"recovery_failed",401)
@@ -160,12 +163,13 @@ class NetworkController(
     }
     suspend fun add(username: String, service: ConversationService) = operation(NetworkOperation.LOOKUP) {
         val normalized = Usernames.normalize(username)
-        val e = client.lookup(normalized)
+        val (e,time) = capabilities.lookup(normalized)
         val b = e.bundle
         requireApi(e.deviceId == b.deviceId && e.username == normalized, "directory_mismatch")
         val card = ContactCard(1, e.accountId, e.username, e.deviceId, b.registrationId, b.identity, b.preKeyId, b.preKey,
             b.signedId, b.signedKey, b.signature, b.kyberId, b.kyberKey, b.kyberSignature)
         service.importCard(ContactCardCodec.encode(card)); state.remember(e)
+        capabilities.accept(e,time,service)
         status = NetworkStatus.CONNECTED
     }
     suspend fun send(service: ConversationService, id: String, text: String): Message = operation(NetworkOperation.SEND) {
@@ -237,6 +241,7 @@ class NetworkController(
         exchange()
         status = NetworkStatus.CONNECTED
         prekeyRefill.maintain()
+        capabilities.publish()
     }
     suspend fun syncBackground(service: ConversationService) {
         backgroundFetches = 0
@@ -262,6 +267,7 @@ class NetworkController(
     }
     internal fun blobClient(allowed: () -> Boolean, checkpoint: () -> Unit) =
         org.ghostcloak.attachments.StreamingBlobClient(origin,client,{ canAutoSync && allowed() },checkpoint)
+    internal suspend fun supportsAttachments(service:ConversationService,id:String)=capabilities.refresh(id,service)
     internal suspend fun sendAttachment(service:ConversationService,id:String,descriptor:org.ghostcloak.attachments.AttachmentDescriptor,
         supported:Boolean,onEnqueued:(Message)->Unit):Message {
         requireApi(canAutoSync,"connect_required",401)

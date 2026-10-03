@@ -20,7 +20,7 @@ data class MediaUi(val conversation: String = "", val message: String? = null,
 
 /** One foreground presentation owner; no credential or descriptor enters Compose state. */
 class AttachmentPresentation(private val app: GhostApplication) {
-    private val supportNotConfirmed = "Attachment support hasn't been confirmed yet. Ask this contact to send you a short text from their updated Ghost Cloak app, then try again. Sending them a text is not enough."
+    private val supportNotConfirmed = "This contact hasn't advertised attachment support. Update their Ghost Cloak app and let it connect, then try again. Text messages still work."
     private val scope = CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
     private val mutable = MutableStateFlow(MediaUi())
     val state = mutable.asStateFlow()

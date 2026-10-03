@@ -31,7 +31,10 @@ object Usernames {
 @Serializable
 class PublicBundle(val deviceId: String, val registrationId: Int, val identity: ByteArray,
     val preKeyId: Int, val preKey: ByteArray, val signedId: Int, val signedKey: ByteArray,
-    val signature: ByteArray, val kyberId: Int, val kyberKey: ByteArray, val kyberSignature: ByteArray) {
+    val signature: ByteArray, val kyberId: Int, val kyberKey: ByteArray, val kyberSignature: ByteArray,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val capability: AttachmentCapability? = null) {
+    fun withCapability(proof: AttachmentCapability?) = PublicBundle(deviceId, registrationId, identity,
+        preKeyId, preKey, signedId, signedKey, signature, kyberId, kyberKey, kyberSignature, proof)
     fun validate() {
         requireApi(RandomIdentifiers.valid(deviceId) && registrationId in 1..16383)
         requireApi(listOf(preKeyId, signedId, kyberId).all { it > 0 })
@@ -78,7 +81,10 @@ sealed class ApiRequest {
     @Serializable @SerialName("verify") class Verify(val accountId: String, val deviceId: String, val challengeId: String, val signature: ByteArray, override val version: Int = 1) : ApiRequest()
     @Serializable @SerialName("revoke") class Revoke(override val version: Int = 1) : ApiRequest()
     @Serializable @SerialName("rename") class Rename(val username: String, override val version: Int = 1) : ApiRequest()
-    @Serializable @SerialName("lookup") class Lookup(val username: String, override val version: Int = 1) : ApiRequest()
+    @Serializable @SerialName("lookup") class Lookup(val username: String, override val version: Int = 1,
+        @EncodeDefault(EncodeDefault.Mode.NEVER) val capabilities: Boolean = false) : ApiRequest()
+    @Serializable @SerialName("capability_lookup") class CapabilityLookup(val deviceId: String, override val version: Int = 1) : ApiRequest()
+    @Serializable @SerialName("capabilities") class Capabilities(val advertisements: List<PublicBundle> = emptyList(), override val version: Int = 1) : ApiRequest()
     @Serializable @SerialName("prekeys") class Prekeys(val deviceId: String, val bundles: List<PublicBundle>, override val version: Int = 1,
         @EncodeDefault(EncodeDefault.Mode.NEVER) val inspect: Boolean = false,
         @EncodeDefault(EncodeDefault.Mode.NEVER) val probeIds: List<Int> = emptyList()) : ApiRequest()
@@ -95,7 +101,8 @@ class ApiResponse(val version: Int = 1, val challenge: Challenge? = null, val se
     val error: String? = null, @EncodeDefault(EncodeDefault.Mode.NEVER) val statuses: List<DeliveryStatus> = emptyList(),
     @EncodeDefault(EncodeDefault.Mode.NEVER) val recovered:RecoveredBinding?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val prekeyInventory:PrekeyPool?=null,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) val serverTime:Long?=null) { override fun toString() = "ApiResponse(<redacted>)" }
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val serverTime:Long?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val capabilityInventory:List<PublicBundle> = emptyList()) { override fun toString() = "ApiResponse(<redacted>)" }
 
 @Serializable class PrekeyPool(val available: Int, val acceptedIds: List<Int> = emptyList())
 
@@ -147,6 +154,8 @@ object ApiRoutes {
         is ApiRequest.Issue -> "/v1/auth/challenge"; is ApiRequest.Register -> "/v1/accounts"
         is ApiRequest.Verify -> "/v1/auth/verify"; is ApiRequest.Revoke -> "/v1/auth/revoke"
         is ApiRequest.Rename -> "/v1/accounts/username"; is ApiRequest.Lookup -> "/v1/directory/lookup"
+        is ApiRequest.CapabilityLookup -> "/v1/directory/capability"
+        is ApiRequest.Capabilities -> "/v1/devices/capabilities"
         is ApiRequest.Prekeys -> "/v1/devices/prekeys"; is ApiRequest.Send -> "/v1/messages"
         is ApiRequest.Fetch -> "/v1/messages/fetch"; is ApiRequest.Ack -> "/v1/messages/ack"
     }

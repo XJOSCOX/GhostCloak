@@ -84,6 +84,14 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         }.map { if(contact.request) it.copy(disappearingSeconds=0,expiry=null) else it }
     }
     suspend fun attachmentPeer(id: String) = action { networkAllowed(id); repository.attachmentPeer(id) }
+    suspend fun directoryCapability(entry: DirectoryEntry, time: Long, valid: Boolean) = action {
+        val contact=repository.contact(entry.deviceId)
+        requireApi(contact.publicUserId == entry.accountId,"capability_binding")
+        if(valid) {
+            val proof=entry.bundle.capability!!
+            repository.directoryCapability(entry.deviceId,proof.issuedAt,proof.expiresAt-time)
+        } else repository.clearDirectoryCapability(entry.deviceId)
+    }
     suspend fun sendNetwork(id:String,body:String,outbox:DurableOutbox):Message=action {
         enqueueNetwork(id, body, repository.policy(id), false, outbox)
     }
@@ -248,7 +256,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         repository.contact(id)
         val pending = repository.pending(id) ?: throw AppFailure(AppError.FRESH_CARD_REQUIRED)
         engine.trustNewIdentity(id, expected)
-        repository.attachmentPeer(id,false)
+        repository.resetCapabilities(id)
         // Explicit approval only. No auto-verification; the engine still validates the signed bundle.
         engine.reestablishSession(ContactCardCodec.decode(pending).bundle(), expected)
         repository.card(id, pending); repository.clearPending(id)

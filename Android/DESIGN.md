@@ -155,3 +155,7 @@ On upgrade, still-present outgoing non-DELIVERED records with acceptance-based d
 ## Phase 1J request privacy and retention
 
 See [REQUEST_PRIVACY_DESIGN.md](REQUEST_PRIVACY_DESIGN.md) for default hidden requests, 72-hour local request expiry, seven-day opaque mailbox retention, separate ACK/acceptance states, private Delete/Block behavior and V005 deployment requirements.
+
+## Phase 1J.1 attachment compatibility
+
+See [ATTACHMENT_CAPABILITY_DESIGN.md](ATTACHMENT_CAPABILITY_DESIGN.md) for implemented identity-signed ATTACHMENT_V1, opt-in discovery/refresh, V006, validity/replay limitations and owner deployment/rollback. Request acceptance remains local/private and is never inferred from compatibility or delivery ACK.

@@ -42,8 +42,8 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         is ApiRequest.RecoveryVerify -> ServerOperation.RECOVER_VERIFY
         is ApiRequest.Issue -> ServerOperation.CHALLENGE; is ApiRequest.Register -> ServerOperation.REGISTER
         is ApiRequest.Verify -> ServerOperation.VERIFY; is ApiRequest.Revoke -> ServerOperation.REVOKE
-        is ApiRequest.Rename -> ServerOperation.RENAME; is ApiRequest.Lookup -> ServerOperation.LOOKUP
-        is ApiRequest.Prekeys -> ServerOperation.PREKEYS; is ApiRequest.Send -> ServerOperation.SEND
+        is ApiRequest.Rename -> ServerOperation.RENAME; is ApiRequest.Lookup, is ApiRequest.CapabilityLookup -> ServerOperation.LOOKUP
+        is ApiRequest.Prekeys, is ApiRequest.Capabilities -> ServerOperation.PREKEYS; is ApiRequest.Send -> ServerOperation.SEND
         is ApiRequest.Fetch -> ServerOperation.FETCH; is ApiRequest.Ack -> ServerOperation.ACK
     }
     fun execute(request: ApiRequest, token: String? = null): ApiResponse {
@@ -133,7 +133,7 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         val ec = mutableSetOf<Int>(); val pq = mutableSetOf<Int>(); val signed = existing?.signed?.toMutableMap() ?: mutableMapOf()
         val identity = db.devices.get(deviceId)?.identity ?: bundles.first().identity
         bundles.forEach {
-            it.validate(); requireApi(it.deviceId == deviceId && it.identity.contentEquals(identity))
+            it.validate(); requireApi(it.capability == null && it.deviceId == deviceId && it.identity.contentEquals(identity))
             requireApi(ec.add(it.preKeyId) && pq.add(it.kyberId) && it.preKeyId !in (existing?.usedEc ?: emptySet()) && it.kyberId !in (existing?.usedPq ?: emptySet()), "duplicate_prekey", 409)
             val material = it.signedKey + it.signature
             requireApi(signed[it.signedId]?.contentEquals(material) != false, "signed_key_conflict", 409)
@@ -198,7 +198,37 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
                 val keys = db.prekeys.get(target.id)!!
                 val bundle = keys.pool.firstOrNull() ?: throw ApiFailure(404, "contact_unavailable")
                 db.prekeys.put(target.id, PrekeyRow(target.id, keys.pool.drop(1), keys.usedEc, keys.usedPq, keys.signed))
-                ApiResponse(directory = DirectoryEntry(account.id, target.id, target.routingId, name, bundle))
+                ApiResponse(directory = DirectoryEntry(account.id, target.id, target.routingId, name,
+                    if(r.capabilities) bundle else bundle.withCapability(null)), serverTime=if(r.capabilities) now() else null)
+            }
+            is ApiRequest.CapabilityLookup -> {
+                requireApi(RandomIdentifiers.valid(r.deviceId))
+                val target = db.devices.get(r.deviceId) ?: throw ApiFailure(404,"contact_unavailable")
+                val account = db.accounts.get(target.accountId)!!
+                // Refresh never consumes/resurrects a one-time key or establishes another session.
+                val bundle = db.prekeys.get(target.id)?.pool?.firstOrNull { it.capability != null }
+                    ?: db.prekeys.get(target.id)?.pool?.firstOrNull()
+                    ?: throw ApiFailure(404,"contact_unavailable")
+                ApiResponse(directory=DirectoryEntry(account.id,target.id,target.routingId,account.username,bundle),serverTime=now())
+            }
+            is ApiRequest.Capabilities -> {
+                requireApi(r.advertisements.size <= NetworkLimits.BUNDLES)
+                val keys = db.prekeys.get(device.id) ?: throw ApiFailure(404,"not_found")
+                if(r.advertisements.isEmpty()) {
+                    ApiResponse(capabilityInventory=keys.pool,serverTime=now())
+                } else {
+                    requireApi(r.advertisements.map {it.preKeyId}.distinct().size == r.advertisements.size)
+                    val replacements = r.advertisements.associateBy { it.preKeyId }
+                    r.advertisements.forEach { b ->
+                        val original = keys.pool.firstOrNull { it.preKeyId == b.preKeyId } ?: throw ApiFailure(409,"prekey_consumed")
+                        requireApi(b.deviceId == device.id && b.identity.contentEquals(device.identity) &&
+                            AttachmentCapabilities.digest(original).contentEquals(AttachmentCapabilities.digest(b)),"capability_binding")
+                        requireApi(org.ghostcloak.capabilities.CapabilitySignatures.verify(policy.audience,device.accountId,device.routingId,b,now()),"invalid_capability")
+                        requireApi((original.capability?.issuedAt ?: 0L) <= b.capability!!.issuedAt,"capability_rollback")
+                    }
+                    db.prekeys.put(device.id,PrekeyRow(device.id,keys.pool.map {replacements[it.preKeyId] ?: it},keys.usedEc,keys.usedPq,keys.signed))
+                    ApiResponse()
+                }
             }
             is ApiRequest.Prekeys -> {
                 requireApi(r.deviceId == device.id, "forbidden", 403)

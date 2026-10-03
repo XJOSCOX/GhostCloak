@@ -13,6 +13,12 @@ class ArchitectureTest {
         assertEquals("Vendor types outside crypto: ${leaks.map { it.relativeTo(root) }}", emptyList<File>(), leaks)
         assertFalse(File(root, "backend/build.gradle.kts").readText().contains("project(\":crypto\")"))
         assertFalse(File(root, "backend/build.gradle.kts").readText().contains("project(\":storage\")"))
+        // Public signature verification is a narrow shared boundary, never an endpoint engine.
+        val verifier=File(root,"Android/capabilities/src/main").walkTopDown().filter {it.isFile}.joinToString("\n") {it.readText()}
+        listOf("ECPrivateKey", "IdentityKeyPair", "EndpointRecords", "SessionBuilder", "SignalProtocolEngine")
+            .forEach {assertFalse("Private endpoint dependency in public verifier",verifier.contains(it))}
+        assertEquals(listOf("import org.signal.libsignal.protocol.ecc.ECPublicKey"),
+            verifier.lines().filter {it.startsWith("import org.signal.")})
     }
     @Test fun productionSourcesHaveNoDirectPayloadLogging() {
         val roots = listOf(File(root, "Android"), File(root, "backend"))

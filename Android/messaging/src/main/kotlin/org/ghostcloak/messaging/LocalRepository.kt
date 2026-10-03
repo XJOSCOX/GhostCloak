@@ -81,7 +81,30 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         require(r.acceptedAt==null || serverNow()!=null) {"request_time_unavailable"}
         save(contact(id).copy(request=false));finishRequest(id,RequestState.ACCEPTED)
     }
-    fun attachmentPeer(id: String): Boolean = records.transaction { records.read("app/attachment-peer/$id")?.contentEquals(byteArrayOf(1)) == true }
+    fun attachmentPeer(id: String): Boolean = records.transaction {
+        records.read("app/attachment-peer/$id")?.contentEquals(byteArrayOf(1)) == true ||
+            read<ExpiryDeadline>("app/directory-capability/$id")?.let { deadline ->
+                val now=clock.now(); deadline.boot==now.boot && !deadline.reached(now)
+            } == true
+    }
+    fun directoryCapability(id: String, issued: Long, remaining: Long) = records.transaction {
+        val floor = read<Long>("app/capability-floor/$id") ?: 0L
+        require(issued >= floor) { "capability_rollback" }
+        val now = clock.now()
+        val old=read<ExpiryDeadline>("app/capability-deadline/$id")
+        if(issued==floor && old!=null && old.boot==now.boot) {
+            put("app/directory-capability/$id",old); return@transaction
+        }
+        val wall=if(issued==floor && old!=null) minOf(old.wall,now.wall+remaining) else now.wall+remaining
+        put("app/capability-floor/$id", issued)
+        val deadline=ExpiryDeadline(wall,now.elapsed+(wall-now.wall).coerceAtLeast(0),now.boot)
+        put("app/directory-capability/$id",deadline);put("app/capability-deadline/$id",deadline)
+    }
+    fun clearDirectoryCapability(id:String)=records.transaction { records.remove("app/directory-capability/$id") }
+    fun resetCapabilities(id:String)=records.transaction {
+        attachmentPeer(id,false); clearDirectoryCapability(id); records.remove("app/capability-floor/$id")
+        records.remove("app/capability-deadline/$id")
+    }
     fun attachmentPeer(id: String, supported: Boolean) = records.transaction {
         if (supported) records.write("app/attachment-peer/$id", byteArrayOf(1)) else records.remove("app/attachment-peer/$id")
     }

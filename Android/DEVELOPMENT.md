@@ -362,3 +362,12 @@ The Room-backed regression is updated to cover a visible Activity before polling
 Reject/expired request relationship correction: see [RELATIONSHIP_REGRESSION.md](RELATIONSHIP_REGRESSION.md) for retained security records, explicit Add, replay/Block behavior and the four physical retests. This correction requires an Android update only; no backend deployment or migration.
 
 Blocked envelope ACK hardening: [BLOCKED_ENVELOPE_PRIVACY.md](BLOCKED_ENVELOPE_PRIVACY.md). Android update only; no backend deployment or database migration. Validate with JVM tests and a disposable AVD; do not run instrumentation on physical accounts.
+
+Phase 1J final TTL validation: [PHASE_1J_FINAL_VALIDATION.md](PHASE_1J_FINAL_VALIDATION.md).
+Sign-off is stopped pending approval of a backend correction: independent SEND
+clock samples produce different mailbox and receipt deadlines. The latest
+recipient-commit-based 72-hour requirement also differs from the currently
+implemented server-enqueue-based window. Fourteen focused JVM checks (including a
+temporary diagnostic probe) passed with strict dependency verification; they
+confirmed the discrepancies rather than validating the requested new semantics.
+No server/physical-device access, runtime fix, deployment or migration was made.

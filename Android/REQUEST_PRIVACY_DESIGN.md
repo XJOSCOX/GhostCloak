@@ -1,5 +1,16 @@
 # Phase 1J — request privacy and mailbox retention
 
+## Final validation status (2026-10-02)
+
+**Not signed off.** [Final validation findings](PHASE_1J_FINAL_VALIDATION.md)
+identify two discrepancies against the latest requirements: the implemented
+72-hour window starts at server enqueue rather than recipient secure commit, and
+new server enqueues can persist different mailbox/receipt expiry deadlines because
+they sample the clock separately. Validation stopped at the explicitly requested
+backend-correctness gate. The sections below describe current behavior, not a
+claim that the latest recipient-commit or exact seven-day semantics passed.
+No fix, backend deployment or new migration was performed.
+
 ## Implemented behavior
 
 New and existing installations default to **Require confirmation**. The private encrypted preference is captured when a new request begins. Turning it off allows text in future requests to be presented; it never reveals an existing hidden request. Existing accepted contacts are unchanged. Existing pending requests acquire a hidden record with a bounded migration grace period; account/device credentials and Signal records are not replaced.

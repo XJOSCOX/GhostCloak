@@ -38,7 +38,7 @@ import java.time.format.DateTimeFormatter
         if(outgoing) Text(when(message.state) {
             MessageState.PENDING -> "Pending"; MessageState.ENCRYPTED -> "Encrypted"
             MessageState.SENT_TO_TRANSPORT -> "Sent locally"; MessageState.DELIVERED_LOCAL_SIMULATION -> "Delivered locally"
-            MessageState.FAILED -> "Not delivered"; MessageState.SERVER_ACCEPTED -> "Queued on server"
+            MessageState.FAILED -> "Not delivered"; MessageState.SERVER_ACCEPTED -> "Encrypting, Waiting…"
             MessageState.DELIVERED -> "Delivered"; MessageState.RECEIVED -> "Received"
             MessageState.EXPIRED_UNDELIVERED -> "Expired before delivery"
         },Modifier.padding(top=GhostDimensions.tiny,end=GhostDimensions.tiny),style=MaterialTheme.typography.labelSmall,

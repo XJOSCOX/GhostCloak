@@ -33,6 +33,18 @@ class LocalOperationGate internal constructor(private val journal: LocalOperatio
 
     fun requireNormal() = access { Unit }
 
+    /** A write may commit its stage and then fail directory sync/readback, leaving only this
+     * process's in-memory fence CORRUPT. Retry may adopt a *valid, still-blocked* durable stage;
+     * NONE and unreadable/ambiguous journals never reopen or authorize destruction. */
+    internal fun readBlockedForRecovery(): LocalOperationState = synchronized(monitor) {
+        val durable=journal.read()
+        if (mutable.value==LocalOperationState.CORRUPT &&
+            durable!=LocalOperationState.NONE && durable!=LocalOperationState.CORRUPT) {
+            mutable.value=durable
+        }
+        durable
+    }
+
     suspend fun <T> operation(block: suspend () -> T): T = coroutineScope {
         val job = currentCoroutineContext()[Job]!!
         access { jobs.add(job) }

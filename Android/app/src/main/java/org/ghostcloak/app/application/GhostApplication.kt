@@ -8,7 +8,8 @@ import kotlinx.coroutines.cancelAndJoin
 
 /** A single store/engine owner per process; activity recreation never opens a second engine. */
 class GhostApplication : Application(), androidx.work.Configuration.Provider, org.ghostcloak.storage.LocalStateAccessOwner {
-    val localOperationGate by lazy { org.ghostcloak.app.access.LocalOperationGate(org.ghostcloak.app.access.DurableLocalOperationJournal(this)) }
+    private val localOperationJournal by lazy { org.ghostcloak.app.access.DurableLocalOperationJournal(this) }
+    val localOperationGate by lazy { org.ghostcloak.app.access.LocalOperationGate(localOperationJournal) }
     override val localStateAccess get() = localOperationGate
     private var lockScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate)
     private var lifecycleScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate)
@@ -19,7 +20,11 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
         val unregister: () -> Unit = { synchronized(uiOwners) { uiOwners.remove(stop) }; Unit }
         unregister
     }
-    val localOperationCoordinator by lazy { org.ghostcloak.app.access.LocalOperationCoordinator(localOperationGate,
+    @Volatile private var activeLocalOperationCoordinator: org.ghostcloak.app.access.LocalOperationCoordinator? = null
+    val localOperationCoordinator: org.ghostcloak.app.access.LocalOperationCoordinator
+        get() = synchronized(this) { activeLocalOperationCoordinator ?: newLocalOperationCoordinator() }
+    @Synchronized private fun newLocalOperationCoordinator(): org.ghostcloak.app.access.LocalOperationCoordinator {
+        return org.ghostcloak.app.access.LocalOperationCoordinator(localOperationGate,
         destruction=if(org.ghostcloak.app.BuildConfig.EMERGENCY_WIPE_DESTRUCTIVE_READY) org.ghostcloak.app.access.AndroidLocalDestruction(this) else null,
         prepareFreshOwners={prepareFreshOwners()}) {
         BackgroundSyncSchedule.cancelForLocalOperation(this)
@@ -34,10 +39,34 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
         lifecycleScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin()
         localOperationGate.drain()
         if (runtimeOwner.isInitialized()) runtimeOwner.value.quiesce()
-    } }
-    internal fun resumeLocalOperation() { recoveryScope.launch { try { localOperationCoordinator.resume() }
-        catch (e: kotlinx.coroutines.CancellationException) { throw e }
-        catch (_: Exception) { /* Fence stays closed; no reset or private diagnostics. */ } } }
+    }.also { activeLocalOperationCoordinator=it }
+    }
+    private val safeExitRecovery by lazy {
+        org.ghostcloak.app.access.SafeExitRecovery(localOperationGate,localOperationJournal,{newLocalOperationCoordinator()})
+    }
+    private val recoveryRequested = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val mutableRecoveryStatus = kotlinx.coroutines.flow.MutableStateFlow(RecoveryStatus.IDLE)
+    internal val recoveryStatus = mutableRecoveryStatus.asStateFlow()
+    internal fun resumeLocalOperation(retry: Boolean = false) {
+        if (retry) org.ghostcloak.app.access.SafeExitRecoveryDiagnostics.emit(
+            org.ghostcloak.app.access.SafeExitRecoveryEvent.SAFE_EXIT_RETRY_TAPPED)
+        if (!recoveryRequested.compareAndSet(false,true)) return
+        mutableRecoveryStatus.value=RecoveryStatus.RUNNING
+        recoveryScope.launch {
+            try {
+                mutableRecoveryStatus.value=when(safeExitRecovery.resume()) {
+                    org.ghostcloak.app.access.SafeExitRetryResult.COMPLETED -> RecoveryStatus.IDLE
+                    else -> RecoveryStatus.FAILED
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) {
+                org.ghostcloak.app.access.SafeExitRecoveryDiagnostics.emit(
+                    org.ghostcloak.app.access.SafeExitRecoveryEvent.SAFE_EXIT_RETRY_FAILED_COORDINATOR)
+                mutableRecoveryStatus.value=RecoveryStatus.FAILED
+            }
+            finally { recoveryRequested.set(false) }
+        }
+    }
     private fun newMediaOwner() = lazy { org.ghostcloak.app.attachments.AttachmentPresentation(this) }
     private var mediaOwner = newMediaOwner()
     val media get() = localOperationGate.access { mediaOwner.value }
@@ -119,3 +148,5 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
         }
     }
 }
+
+internal enum class RecoveryStatus { IDLE, RUNNING, FAILED }

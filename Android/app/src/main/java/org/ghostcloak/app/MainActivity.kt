@@ -18,6 +18,10 @@ import androidx.compose.runtime.*
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.core.view.WindowCompat
 import org.ghostcloak.app.ui.privacy.SensitiveClipboardProvider
+import org.ghostcloak.app.application.RecoveryStatus
+import org.ghostcloak.app.access.LocalOperationState
+import org.ghostcloak.app.access.SafeExitRecoveryDiagnostics
+import org.ghostcloak.app.access.SafeExitRecoveryEvent
 
 class MainActivity : FragmentActivity() {
     private var chatsRequest by mutableIntStateOf(0)
@@ -77,14 +81,8 @@ class MainActivity : FragmentActivity() {
                         }
                     }
                     if (operationState != org.ghostcloak.app.access.LocalOperationState.NONE) {
-                        androidx.compose.material3.Surface(androidx.compose.ui.Modifier.fillMaxSize()) {
-                            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment=androidx.compose.ui.Alignment.Center) {
-                                androidx.compose.foundation.layout.Column(horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally) {
-                                    androidx.compose.material3.Text("Ghost Cloak is completing a secure local operation.")
-                                    androidx.compose.material3.TextButton(onClick={app.resumeLocalOperation()}) {androidx.compose.material3.Text("Retry")}
-                                }
-                            }
-                        }
+                        val recoveryStatus by app.recoveryStatus.collectAsState()
+                        SafeExitRecoveryScreen(operationState,recoveryStatus) { app.resumeLocalOperation(retry=true) }
                     } else key(generation) { AppLockGate(appLock) {
                         val model = remember { ViewModelProvider(this@MainActivity)["ghost-$generation",GhostViewModel::class.java] }
                         SensitiveClipboardProvider { GhostApp(model, chatsRequest) }
@@ -96,5 +94,28 @@ class MainActivity : FragmentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putInt("chats-request", chatsRequest)
         super.onSaveInstanceState(outState)
+    }
+}
+
+@Composable
+internal fun SafeExitRecoveryScreen(state: LocalOperationState, status: RecoveryStatus, onRetry: () -> Unit) {
+    LaunchedEffect(state) {
+        SafeExitRecoveryDiagnostics.emit(SafeExitRecoveryEvent.SAFE_EXIT_RECOVERY_SCREEN)
+        SafeExitRecoveryDiagnostics.state(state)
+    }
+    androidx.compose.material3.Surface(androidx.compose.ui.Modifier.fillMaxSize()) {
+        androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment=androidx.compose.ui.Alignment.Center) {
+            androidx.compose.foundation.layout.Column(horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally) {
+                androidx.compose.material3.Text("Ghost Cloak is completing a secure local operation.")
+                when (status) {
+                    RecoveryStatus.RUNNING -> androidx.compose.material3.Text("Retrying secure local operation…")
+                    RecoveryStatus.FAILED -> androidx.compose.material3.Text("Could not finish. You can retry.")
+                    RecoveryStatus.IDLE -> Unit
+                }
+                androidx.compose.material3.TextButton(onClick=onRetry,enabled=status!=RecoveryStatus.RUNNING) {
+                    androidx.compose.material3.Text("Retry")
+                }
+            }
+        }
     }
 }

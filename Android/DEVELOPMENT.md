@@ -661,6 +661,8 @@ working-tree edits remain outside this commit.
 
 ## Phase 1K.4E Safe Exit release validation
 
+For a device stuck on the intermediate secure-local-operation screen, see [SAFE_EXIT_RECOVERY.md](SAFE_EXIT_RECOVERY.md) for the fixed-category release Logcat tag and in-place manual retest procedure. Do not uninstall or clear data to investigate a pending wipe.
+
 Safe Exit release arming and destructive readiness are enabled after the
 disposable-AVD acceptance in [SAFE_EXIT_RELEASE_VALIDATION.md](SAFE_EXIT_RELEASE_VALIDATION.md#phase-1k4e-completed-on-a-fresh-disposable-avd).
 The earlier disabled-status notes above are historical. The actual-release test

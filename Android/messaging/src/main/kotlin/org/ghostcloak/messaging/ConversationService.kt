@@ -51,22 +51,34 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         if (contacts.any { it.remoteDeviceId != card.deviceId && repository.card(it.remoteDeviceId)?.let {
                 saved -> ContactCardCodec.decode(saved).identity.contentEquals(card.identity) } == true })
             throw AppFailure(AppError.AMBIGUOUS_IDENTITY)
-        if (existing != null && repository.card(card.deviceId)?.let {
+        if (existing?.blocked == true) throw AppFailure(AppError.BLOCKED)
+        if (existing != null && repository.isActiveContact(card.deviceId) && repository.card(card.deviceId)?.let {
                 ContactCardCodec.decode(it).identity.contentEquals(card.identity) } == true)
             throw AppFailure(AppError.DUPLICATE_CONTACT)
         // Engine alone decides whether the public key matches a pin and persists CHANGED on rejection.
-        try { engine.establishSession(card.bundle()) }
+        try {
+            if(existing != null && !repository.isActiveContact(card.deviceId)) engine.validateRetainedIdentity(card.bundle())
+            else engine.establishSession(card.bundle())
+        }
         catch (e: CryptoFailure) {
             if (e.error == CryptoError.IdentityChanged && existing != null) repository.pending(card.deviceId, text)
             throw e
         }
-        if (existing != null) throw AppFailure(AppError.DUPLICATE_CONTACT)
+        if (existing != null) {
+            if(repository.isActiveContact(card.deviceId)) throw AppFailure(AppError.DUPLICATE_CONTACT)
+            repository.activateRetainedContact(card.deviceId,text)
+            return@action repository.contact(card.deviceId)
+        }
         repository.card(card.deviceId, text)
         Contact(RandomIdentifiers.create(), card.userId, card.username, card.deviceId).also(repository::save)
     }
     suspend fun contacts(): List<ContactStatus> = action {
         repository.expireRequests()
-        repository.contacts().filter { !it.request || repository.requestActive(it.remoteDeviceId) }
+        repository.contacts().filter {
+            repository.isActiveContact(it.remoteDeviceId) ||
+                repository.relationshipState(it.remoteDeviceId)==RelationshipState.REQUEST_PENDING ||
+                (it.blocked && !it.request) // Keep existing accepted-contact unblock management reachable.
+        }
             .map { ContactStatus(it, engine.getRemoteIdentityStatus(it.remoteDeviceId), engine.getSessionLifecycle(it.remoteDeviceId)) }
     }
     suspend fun messages(id: String) = action { repository.contact(id); repository.messages(id) }
@@ -146,7 +158,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         return repository.messages(id).firstOrNull { it.localId == submission } ?: message
     }
     private suspend fun networkAllowed(id:String) {
-        if(repository.contact(id).blocked || repository.contact(id).request) throw AppFailure(AppError.BLOCKED)
+        if(!repository.isActiveContact(id)) throw AppFailure(AppError.BLOCKED)
         if(engine.getRemoteIdentityStatus(id)?.trustState==IdentityTrustState.CHANGED) throw CryptoFailure(CryptoError.IdentityChanged)
         if(engine.getSessionLifecycle(id)!=SessionLifecycle.ACTIVE) throw CryptoFailure(CryptoError.UnknownSession)
     }
@@ -189,6 +201,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             // Defer controls until this side has explicitly accepted/added the contact.
             if (content.control && (contacts.none { it.remoteDeviceId == contact.remoteDeviceId } || contact.request))
                 throw AppFailure(AppError.BLOCKED)
+            repository.expireRequests()
             repository.save(contact)
             if(contact.request && contacts.none {it.remoteDeviceId==contact.remoteDeviceId})
                 repository.startRequest(contact.remoteDeviceId,serverAcceptedAt)
@@ -221,6 +234,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     suspend fun deleteRequest(id: String) = action {
         val contact = repository.contact(id)
         require(contact.request)
+        if(contact.blocked) throw AppFailure(AppError.BLOCKED)
         repository.finishRequest(id,RequestState.REJECTED)
     }
     suspend fun unreadCounts() = action { repository.contacts().filter { !it.blocked && (!it.request || repository.requestActive(it.remoteDeviceId)) }.associate { it.remoteDeviceId to repository.unreadCount(it.remoteDeviceId) } }

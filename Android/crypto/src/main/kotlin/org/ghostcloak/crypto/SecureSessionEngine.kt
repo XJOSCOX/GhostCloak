@@ -25,6 +25,8 @@ interface SecureSessionEngine {
     suspend fun verifyAttachmentCapability(audience: String, entry: org.ghostcloak.protocol.DirectoryEntry,
         time: Long): Boolean
     suspend fun establishSession(remote: RemoteKeyBundle)
+    /** Check a retained peer pin without replacing its existing ratchet. */
+    suspend fun validateRetainedIdentity(remote: RemoteKeyBundle)
     suspend fun encrypt(remoteDeviceId: String, plaintext: ByteArray): EncryptedEnvelope
     suspend fun decrypt(envelope: EncryptedEnvelope): ByteArray
     /** Commit application acceptance using the same EndpointRecords transaction as the ratchet.

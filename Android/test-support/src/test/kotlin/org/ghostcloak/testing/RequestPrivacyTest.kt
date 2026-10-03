@@ -88,7 +88,7 @@ class RequestPrivacyTest {
         assertThrows(IllegalArgumentException::class.java) {r.acceptRequest(id)}
         boot++;elapsed=0;r=repo();assertEquals(RequestState.EXPIRED,r.request(id).state)
     }
-    @Test fun rebootRequiresFreshReferenceAndDeleteCooldownCannotBecomeBlock() {
+    @Test fun rebootRequiresFreshReferenceAndDeleteDoesNotBecomeBlock() {
         val records=MemoryRecords();var boot=1;var elapsed=0L
         fun repo()=LocalRepository(records,ExpiryClock({1},{elapsed},{boot}))
         var r=repo();val id=RandomIdentifiers.create()
@@ -97,7 +97,7 @@ class RequestPrivacyTest {
         assertThrows(IllegalArgumentException::class.java) {r.acceptRequest(id)}
         r.serverReference(1001000);r.finishRequest(id,RequestState.REJECTED)
         assertFalse(r.contact(id).blocked);r.restartRequestIfEligible(id,1002000)
-        assertEquals(RequestState.REJECTED,r.request(id).state)
+        assertEquals(RequestState.PENDING,r.request(id).state)
         r.serverReference(5000000);r.restartRequestIfEligible(id,5000000)
         assertEquals(RequestState.PENDING,r.request(id).state)
         r.finishRequest(id,RequestState.BLOCKED);r.serverReference(10000000);r.restartRequestIfEligible(id,10000000)

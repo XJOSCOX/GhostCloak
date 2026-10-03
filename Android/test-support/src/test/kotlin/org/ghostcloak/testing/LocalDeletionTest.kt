@@ -71,11 +71,13 @@ class LocalDeletionTest {
             assertTrue(NotificationLedger(br).eligible().isEmpty())
             for (request in listOf(false, true)) for (blocked in listOf(false, true)) {
                 repo.save(repo.contact(ai.deviceId).copy(request = request, blocked = blocked))
-                val status = b.contacts().single(); b.clearConversation(ai.deviceId)
-                val after = b.contacts().single()
-                assertEquals(status.contact, after.contact)
-                assertEquals(status.identity?.trustState, after.identity?.trustState)
-                assertEquals(status.session, after.session)
+                val retained = repo.contact(ai.deviceId)
+                val status = b.contacts(); b.clearConversation(ai.deviceId)
+                assertEquals(retained, repo.contact(ai.deviceId))
+                val after = b.contacts()
+                assertEquals(status.map {it.contact}, after.map {it.contact})
+                assertEquals(status.map {it.identity?.trustState}, after.map {it.identity?.trustState})
+                assertEquals(status.map {it.session}, after.map {it.session})
             }
             repo.save(repo.contact(ai.deviceId).copy(request = false, blocked = false))
             a.send(bi.deviceId, "still works"); b.acceptNetwork(inbox.receive().first())

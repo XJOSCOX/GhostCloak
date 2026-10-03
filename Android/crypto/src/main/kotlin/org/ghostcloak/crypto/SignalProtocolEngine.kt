@@ -157,6 +157,14 @@ class SignalProtocolEngine(private val records: EndpointRecords,
         setLifecycle(bundle.deviceId, SessionLifecycle.ACTIVE)
         logger.record(SafeLogCode.SESSION_ESTABLISHED)
     }
+    override suspend fun validateRetainedIdentity(remote: RemoteKeyBundle) = operation {
+        trust.ensureUsable(remote.deviceId)
+        val address = remote(remote.deviceId)
+        val key = IdentityKey(remote.identity)
+        if (store.getIdentity(address) == null) throw CryptoFailure(CryptoError.UnknownSession)
+        if (!store.isTrustedIdentity(address, key, org.signal.libsignal.protocol.state.IdentityKeyStore.Direction.SENDING))
+            throw UntrustedIdentityException(address.name, key)
+    }
     override suspend fun establishSession(remote: RemoteKeyBundle) = operation {
         trust.ensureUsable(remote.deviceId)
         when (lifecycle(remote.deviceId)) {

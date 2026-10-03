@@ -358,3 +358,5 @@ The Room-backed regression is updated to cover a visible Activity before polling
 ## Current Phase 1J deployment requirement
 
 [Request privacy and retention](REQUEST_PRIVACY_DESIGN.md) requires the matching backend and V005__mailbox_retention.sql BEFORE updated Android clients. Default request content is hidden until acceptance; pending requests expire at 72 hours from server acceptance, and general queued envelopes expire after seven days. See the design for clock/legacy limitations, retained receipt capacity, exact migration order and physical retest. No remote rollout is performed automatically. Android tests use only the new disposable GhostCloak_Phase1J_Disposable AVD, never account-bearing phones or emulators.
+
+Reject/expired request relationship correction: see [RELATIONSHIP_REGRESSION.md](RELATIONSHIP_REGRESSION.md) for retained security records, explicit Add, replay/Block behavior and the four physical retests. This correction requires an Android update only; no backend deployment or migration.

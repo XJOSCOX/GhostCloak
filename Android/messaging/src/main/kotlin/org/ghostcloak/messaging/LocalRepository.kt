@@ -58,14 +58,33 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     }
     fun requestHidden(id:String)=records.transaction {contact(id).request && request(id).hidden}
     fun requestActive(id:String)=records.transaction {request(id).state==RequestState.PENDING && !requestExpired(id)}
+    fun relationshipState(id:String):RelationshipState=records.transaction {
+        val c=contacts().firstOrNull {it.remoteDeviceId==id}
+        when {
+            c==null -> RelationshipState.UNKNOWN
+            c.blocked -> RelationshipState.BLOCKED
+            !c.request -> RelationshipState.ACCEPTED_CONTACT
+            requestActive(id) -> RelationshipState.REQUEST_PENDING
+            else -> RelationshipState.DORMANT_UNACCEPTED
+        }
+    }
+    fun isActiveContact(id:String)=relationshipState(id)==RelationshipState.ACCEPTED_CONTACT
+    fun activateRetainedContact(id:String,card:String)=records.transaction {
+        val c=contact(id)
+        if(c.blocked) throw AppFailure(AppError.BLOCKED)
+        expireRequests()
+        save(c.copy(request=false));card(id,card);finishRequest(id,RequestState.ACCEPTED)
+    }
     fun finishRequest(id:String,state:RequestState)=records.transaction {
         val r=request(id); put("app/request/$id",r.copy(state=state,lastEnvelopeAt=serverNow() ?: r.lastEnvelopeAt))
         if(state!=RequestState.ACCEPTED) clear(id)
     }
     fun restartRequestIfEligible(id:String,acceptedAt:Long?)=records.transaction {
         val r=request(id);val server=serverNow()
-        if(r.state in setOf(RequestState.REJECTED,RequestState.EXPIRED) && acceptedAt!=null && server!=null &&
-            r.lastEnvelopeAt!=null && acceptedAt-r.lastEnvelopeAt>3600000L && server-acceptedAt<REQUEST_WINDOW)
+        // Called only inside authenticated new-envelope commit, after accepted-envelope replay checks.
+        // An old offline envelope cannot revive an expired request; no sender-level Reject cooldown.
+        if(!contact(id).blocked && r.state in setOf(RequestState.REJECTED,RequestState.EXPIRED) &&
+            (acceptedAt==null || server==null || server-acceptedAt<REQUEST_WINDOW))
             startRequest(id,acceptedAt)
     }
     fun expireRequests():Int=records.transaction {
@@ -210,7 +229,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun attachmentAvailable(id:String,localId:String) = records.transaction {
         val message=read<Message>("app/message/$id/$localId")
         val contact=read<Contact>("app/contact/$id")
-        message!=null && message.activeExpiry?.reached(clock.now())!=true && contact!=null && !contact.blocked && !contact.request && hasAttachment(id,localId)
+        message!=null && message.activeExpiry?.reached(clock.now())!=true && contact!=null && isActiveContact(id) && hasAttachment(id,localId)
     }
     fun attachment(id:String,localId:String,bytes:ByteArray) = records.transaction {
         org.ghostcloak.attachments.AttachmentFormat.decode(bytes)

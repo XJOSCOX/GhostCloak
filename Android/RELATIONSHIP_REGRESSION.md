@@ -22,7 +22,7 @@ They remove app/message, app/attachment descriptors, read/unread markers and not
 
 - Reject/72-hour expiry makes an unaccepted relationship dormant. A new authenticated, dedup-eligible envelope immediately establishes a new bounded request using the current privacy preference. Expiry cleanup occurs in the same decrypt/commit transaction before starting it. Old envelopes cannot restore content or extend the new window.
 - Explicit Add of pending/dormant relationships checks the retained pinned identity through existing Signal trust checks without replacing the ratchet. Card/contact/request activation is atomic and reuses the same contact ID. Surviving pending content can be revealed by this explicit acceptance action; deleted/expired content stays deleted. Identity mismatch preserves CHANGED/pending-card approval and does not activate the contact.
-- Block suppresses incoming processing. Add returns BLOCKED and cannot silently unblock; the separate explicit unblock action is unchanged.
+- Block silently authenticates/discards new envelopes and ACKs after secure commit (see BLOCKED_ENVELOPE_PRIVACY.md). Add returns BLOCKED and cannot silently unblock; the separate explicit unblock action is unchanged.
 - Accepted conversation delete/clear remains Phase 1H local deletion, not rejection or unsend.
 
 No backend change/deployment, V007 or database migration. V006 is unchanged. No server connection is needed.

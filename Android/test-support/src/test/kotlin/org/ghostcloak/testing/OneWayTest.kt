@@ -80,8 +80,9 @@ object OneWayProbe {
         repeat(NetworkLimits.BATCH) { a.service.sendNetwork(bob.deviceId, "Blocked message $it", a.outbox) }
         val blocked = b.client.call(ApiRequest.Fetch()).deliveries
         assertEquals(NetworkLimits.BATCH, blocked.size)
-        try { b.service.acceptNetwork(EnvelopeCodec.decode(blocked.first().encryptedEnvelope)); fail() }
-        catch (e: AppFailure) { assertEquals(AppError.BLOCKED, e.error) }
+        b.service.acceptNetwork(EnvelopeCodec.decode(blocked.first().encryptedEnvelope))
+        b.transport.acknowledgeAccepted(listOf(blocked.first().serverMessageId))
+        assertTrue(b.service.messages(a.registration.deviceId).none {it.body.startsWith("Blocked message")})
         val fresh = b.engine.publicBundle().publicData()
         b.client.publish(bob.deviceId, listOf(fresh))
         c.account.connect("bob", c.engine)

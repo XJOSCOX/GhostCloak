@@ -194,7 +194,14 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             if (contacts.any { it.publicUserId == profile.accountId }) throw AppFailure(AppError.AMBIGUOUS_IDENTITY)
             Contact(RandomIdentifiers.create(), profile.accountId, profile.username, profile.deviceId, request = true)
         }
-        if(contact.blocked) throw AppFailure(AppError.BLOCKED)
+        if(contact.blocked) {
+            // Authenticate sender/bound envelope and atomically advance the ratchet and replay receipt.
+            // Do not parse content, retain descriptors, create requests or enqueue notifications.
+            engine.decryptAndCommit(envelope) {
+                repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
+            }
+            return@action
+        }
         repository.capacity()
         engine.decryptAndCommit(envelope) { bytes ->
             val content = ConversationPayload.decode(bytes)
@@ -275,10 +282,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         engine.reestablishSession(ContactCardCodec.decode(pending).bundle(), expected)
         repository.card(id, pending); repository.clearPending(id)
     }
-    suspend fun block(id: String, blocked: Boolean) = action {
-        val contact=repository.contact(id);repository.save(contact.copy(blocked = blocked))
-        if(contact.request && blocked) repository.finishRequest(id,RequestState.BLOCKED)
-    }
+    suspend fun block(id: String, blocked: Boolean) = action { repository.block(id,blocked) }
     suspend fun delete(id: String, localId: String) = action { repository.contact(id); repository.delete(id, localId) }
     suspend fun clearConversation(id: String) = action { repository.contact(id); repository.clear(id) }
     suspend fun send(id: String, body: String): Message = action {

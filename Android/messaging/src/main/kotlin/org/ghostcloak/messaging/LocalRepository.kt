@@ -79,6 +79,14 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         val r=request(id); put("app/request/$id",r.copy(state=state,lastEnvelopeAt=serverNow() ?: r.lastEnvelopeAt))
         if(state!=RequestState.ACCEPTED) clear(id)
     }
+    fun block(id:String,blocked:Boolean)=records.transaction {
+        val c=contact(id)
+        save(c.copy(blocked=blocked))
+        if(c.request && blocked) finishRequest(id,RequestState.BLOCKED)
+        // Commit suppression and its request lifecycle together, including explicit Unblock.
+        if(c.request && !blocked && request(id).state==RequestState.BLOCKED)
+            finishRequest(id,RequestState.REJECTED)
+    }
     fun restartRequestIfEligible(id:String,acceptedAt:Long?)=records.transaction {
         val r=request(id);val server=serverNow()
         // Called only inside authenticated new-envelope commit, after accepted-envelope replay checks.
@@ -240,9 +248,14 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         require(java.security.MessageDigest.isEqual(existing,hash)) {"Envelope receipt conflict"}; true
     }
     fun saveAccepted(message:Message,hash:ByteArray)=records.transaction {
-        require(records.keys("app/accepted/").size<10000)
-        save(message); records.write("app/accepted/${message.conversationId}/${message.envelopeId}",hash)
+        saveEnvelopeReceipt(message.conversationId,requireNotNull(message.envelopeId),hash)
+        save(message)
         // Same transaction as authenticated content and deduplication; never enqueue on FETCH alone.
         NotificationLedger.accepted(records, message)
+    }
+    /** Security receipt only: no plaintext, descriptor, read state or notification ledger entry. */
+    fun saveEnvelopeReceipt(sender:String,id:String,hash:ByteArray)=records.transaction {
+        require(records.keys("app/accepted/").size<10000)
+        records.write("app/accepted/$sender/$id",hash)
     }
 }

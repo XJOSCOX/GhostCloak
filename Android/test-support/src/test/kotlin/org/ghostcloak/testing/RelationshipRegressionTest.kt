@@ -93,7 +93,7 @@ class RelationshipRegressionTest {
     }
     @Test fun blockSuppressesNewRequestsAndExplicitAddCannotUnblock()=runBlocking {
         val p=Pair();p.open();p.receive();p.b.block(p.aid,true)
-        try {p.receive();fail()} catch(e:AppFailure) {assertEquals(AppError.BLOCKED,e.error)}
+        p.receive()
         try {p.b.importCard(p.a.exportCard());fail()} catch(e:AppFailure) {assertEquals(AppError.BLOCKED,e.error)}
         assertEquals(RelationshipState.BLOCKED,p.repo.relationshipState(p.aid));assertTrue(p.b.messages(p.aid).isEmpty())
     }

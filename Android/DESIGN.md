@@ -159,3 +159,5 @@ See [REQUEST_PRIVACY_DESIGN.md](REQUEST_PRIVACY_DESIGN.md) for default hidden re
 ## Phase 1J.1 attachment compatibility
 
 See [ATTACHMENT_CAPABILITY_DESIGN.md](ATTACHMENT_CAPABILITY_DESIGN.md) for implemented identity-signed ATTACHMENT_V1, opt-in discovery/refresh, V006, validity/replay limitations and owner deployment/rollback. Request acceptance remains local/private and is never inferred from compatibility or delivery ACK.
+
+Delivery acknowledgment proves secure device-level envelope processing only. It does not prove reading, acceptance, display, attachment viewing or absence of blocking. See [BLOCKED_ENVELOPE_PRIVACY.md](BLOCKED_ENVELOPE_PRIVACY.md).

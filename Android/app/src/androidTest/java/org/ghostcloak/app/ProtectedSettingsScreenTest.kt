@@ -82,6 +82,9 @@ class ProtectedSettingsScreenTest {
         Fixture().use {f->f.ready(enabled=true)
             withContext(Dispatchers.Main) {assertTrue(f.lock.verifyPin("123456".toCharArray(),UnlockPurpose.SETTINGS))}
             compose.setContent {GhostCloakTheme {EmergencyWipeSettingsScreen(f.lock) {}}}
+            compose.onNodeWithText("Safe Exit permanently destroys this device's Ghost Cloak cryptographic keys and local data. This cannot be undone.").assertExists()
+            compose.onNodeWithText("stops before deleting",substring=true).assertDoesNotExist()
+            compose.onNodeWithText("non-destructive",substring=true).assertDoesNotExist()
             compose.onNodeWithText("On").assertExists(); compose.onNodeWithText("Change PIN").performScrollTo().performClick()
             compose.onNodeWithText("New Safe Exit PIN").assertDoesNotExist()
             compose.onNodeWithText("PIN").performScrollTo().performTextInput("123456")

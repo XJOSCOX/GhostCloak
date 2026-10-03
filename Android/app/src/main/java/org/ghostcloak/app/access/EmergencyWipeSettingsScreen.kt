@@ -37,7 +37,11 @@ private enum class SafeExitAction { ENABLE, CHANGE, DISABLE }
     PageContent("Safe Exit",back=back) {
         Text(if(state.emergencyEnabled) "On" else "Disabled",style=MaterialTheme.typography.titleMedium)
         Text("Set a separate PIN that securely clears Ghost Cloak from this device when entered at the app lock screen.")
-        Text("This build is a non-destructive debug preview. Activation permanently blocks local access and stops before deleting keys or data. Use only a disposable test device.",color=MaterialTheme.colorScheme.error)
+        Text("Safe Exit permanently destroys this device's Ghost Cloak cryptographic keys and local data. This cannot be undone.",color=MaterialTheme.colorScheme.error)
+        Text("Messages, contacts, attachments, security keys, and account credentials stored on this device will be removed.",style=MaterialTheme.typography.bodySmall)
+        if (!org.ghostcloak.app.BuildConfig.EMERGENCY_WIPE_DESTRUCTIVE_READY) {
+            Text("Safe Exit destruction is not enabled in this build.",color=MaterialTheme.colorScheme.error)
+        }
         Text("There is no forgotten Safe Exit PIN reset through your normal PIN or biometric.",style=MaterialTheme.typography.bodySmall)
         when {
             !state.mode.pin -> Text("Configure PIN app lock first. Safe Exit requires a normal PIN unlock method.")
@@ -67,7 +71,7 @@ private enum class SafeExitAction { ENABLE, CHANGE, DISABLE }
             else -> {
                 PinInput(pin,"New Safe Exit PIN",!state.busy) {pin=it}
                 PinInput(confirmation,"Confirm Safe Exit PIN",!state.busy) {confirmation=it}
-                Text("Planned destructive behavior: Safe Exit permanently destroys this device's Ghost Cloak cryptographic keys and local data. This cannot be undone.")
+                Text("Safe Exit permanently destroys this device's Ghost Cloak cryptographic keys and local data. This cannot be undone.")
                 Row(verticalAlignment=Alignment.CenterVertically) {
                     Checkbox(acknowledged,{acknowledged=it},enabled=!state.busy)
                     Text("I understand this cannot be undone.")

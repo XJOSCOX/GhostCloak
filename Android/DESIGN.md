@@ -237,3 +237,15 @@ must be corrected and actual-release disposable-AVD acceptance completed before
 activation. This review implements no fix. See
 [the decision and evidence boundaries](EMERGENCY_WIPE_DESIGN.md#phase-1k4-release-activation-review--not-ready-2026-10-03).
 No backend, database, permissions or deployment changes.
+
+
+## Phase 1K.4A Safe Exit user contract
+
+The obsolete non-destructive preview promise and “Planned destructive behavior”
+copy were removed. Settings describes irreversible destruction of locally stored
+keys/data without claiming forensic flash erasure. Authentication and destruction
+logic are unchanged. Release arming/readiness remain false because mandatory
+actual-release disposable-AVD acceptance could not run (Windows WHPX startup denial;
+software emulator offline). See
+[contract correction and pending gates](EMERGENCY_WIPE_DESIGN.md#phase-1k4a-contract-correction--activation-withheld-2026-10-03).
+No backend or schema changes; this is not release activation.

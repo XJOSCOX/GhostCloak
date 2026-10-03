@@ -627,3 +627,34 @@ launcher/toolchain working-tree changes are excluded from the review commit.
 Actual installed release normal PIN/biometric/Settings/destructive/post-wipe
 restart/reboot/reconnect and release network-spy results remain **NOT RUN** under
 the stop condition. The fixture results do not authorize release activation.
+
+
+## Phase 1K.4A validation / environment blocker (2026-10-03)
+
+Corrected Safe Exit consent copy and added UI assertions for the destructive
+warning/absence of obsolete non-destructive promises. All security logic is
+unchanged. Final source and release APK have arming=false and destructive
+readiness=false; debug retains arming=true/readiness=false. Candidate flags were
+restored before final verification; no activated APK installed or wipe executed.
+
+Final strict validation command was the Phase 1K.4 command above with empty debug
+origin. **314 host tests passed**: 135 test-support, 4 attachments, 91 debug-app,
+84 release-app; zero failures/errors/skips. Debug/release and debug test APK builds
+passed with strict dependency verification. New instrumentation assertions compile
+but have not executed. **Zero emulator tests executed this phase.**
+
+Disposable startup attempts used explicit test-only AVDs, never the connected
+phone. API-37 standard/headless WHPX partition startup returned 80070005/access
+denied. Fresh API-30 software emulation stayed offline, including direct maintained
+session startup. Acceleration-check alone is insufficient evidence that the AVD
+can boot. A booted disposable Android Studio AVD is required to resume acceptance.
+Do not use either important physical account or an aggregate connected task.
+
+Actual release full wipe, normal PIN/biometric/wrong PIN/Settings UI, copied-DB/
+Signal/device-auth/attachment probes, restart/reboot/reconnect and release-path
+zero-network assertion are NOT RUN. Prior phase results are not new acceptance
+results. Backup/manifest/release-log source audits passed, with real OEM/cloud
+restore still untested. See the full
+[decision and gate table](EMERGENCY_WIPE_DESIGN.md#phase-1k4a-contract-correction--activation-withheld-2026-10-03).
+No VPS access, deployment or database migration. Unrelated launcher/toolchain
+working-tree edits remain outside this commit.

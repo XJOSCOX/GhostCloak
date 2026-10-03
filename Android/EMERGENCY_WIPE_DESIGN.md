@@ -921,3 +921,81 @@ Residual limits remain: external/peer copies, privileged/OEM snapshots, flash
 remanence and JVM/ART immutable-memory/GC behavior prevent perfect physical or
 memory-erasure claims. No backend deployment, server/Android DB migration, Nginx,
 Cloudflare or VPS change is required. Physical phones were not tested.
+
+
+## Phase 1K.4A contract correction — activation withheld (2026-10-03)
+
+The Phase 1K.4 copy blocker is corrected. Safe Exit's setup and enrollment/change
+warning now reads: “Safe Exit permanently destroys this device's Ghost Cloak
+cryptographic keys and local data. This cannot be undone.” Supporting text lists
+messages, contacts, attachments, security keys and locally stored account
+credentials. The separate-PIN description and no-forgotten-PIN-bypass guidance
+remain. Removed the unconditional non-destructive/debug-preview sentence including
+“stops before deleting keys or data,” and removed “Planned destructive behavior.”
+No forensic-erasure promise was introduced. A not-yet-activated build explicitly
+states that Safe Exit destruction is not enabled; an activated build would not
+show that notice. Release-visible Safe Exit copy contains none of the prohibited
+preview/simulation/test-mode/no-deletion promises. The existing UI regression test
+now checks the destructive warning and absence of obsolete promises.
+
+**Final decision: NOT ACTIVATED.** The mandatory disposable-AVD acceptance gates
+could not be run in this environment. Hardware-accelerated API-37 startup failed
+with WHPX partition setup `80070005` (access denied), despite acceleration-check
+reporting availability. Standard and headless launches both failed. Software
+emulation attempts, including a separate fresh API-30 image and a maintained
+process session, remained offline. No physical phone was substituted. A disposable
+AVD started through Android Studio was requested so validation can resume.
+
+Candidate destructive flags were temporarily set for compilation/host testing
+before the user's pause, then restored immediately. No candidate release was
+installed; no destructive test ran. Final source and rebuilt release BuildConfig:
+
+| Variant | EMERGENCY_PIN_ARMING_ENABLED | EMERGENCY_WIPE_DESTRUCTIVE_READY |
+| --- | --- | --- |
+| debug | true | false |
+| release | false | false |
+
+No flag change is included in this commit. Credential/controller, persistence,
+coordinator, key destruction, lifecycle and background/network logic are unchanged.
+No test protection or assertion was weakened in the final changes.
+
+### Validation and outstanding gates
+
+Final disabled-state build: 314 host tests passed, zero failures/errors/skips;
+debug/release and debug instrumentation APK builds plus strict dependency
+verification passed. The added UI assertions compiled but were not executed.
+Current-task Android instrumentation tests executed: zero. Earlier Phase 1K.3/1K.4
+emulator results above are historical evidence, not this phase's acceptance result.
+
+| Required gate | Current Phase 1K.4A evidence |
+| --- | --- |
+| Normal PIN, wrong/near-match, biometric separation and Settings/dual credentials | Existing JVM regression suite passed; actual release UI/system biometric NOT RUN |
+| Real release populated offline wipe and fresh onboarding | NOT RUN; no activated release installed |
+| Copied DB, Signal identity, device-auth signing, retained attachment | NOT RERUN; prior scoped fixtures do not authorize activation |
+| Durable-stage crash matrix and critical/noncritical failures | Host coordinator regressions passed; Android fixtures NOT RERUN |
+| Kill/reopen, reboot, reconnect without old-account resurrection | Actual release NOT RUN |
+| Zero newly initiated release-path network requests | Source unchanged and audited; actual release assertion NOT RUN |
+| Sensitive backup exclusions, journal placement | Configuration audit passed; no real OEM/cloud restore |
+| Exported components | Merged release manifest audit passed; no new components |
+| Release logs and analytics | No Safe Exit logging/private diagnostics or new analytics; source unchanged |
+
+The release manifest retains allowBackup=false with all sensitive storage domains
+excluded from both legacy backup and modern cloud/device transfer. Journal stays
+in credential-encrypted noBackupFilesDir. MainActivity accepts no external Safe
+Exit arming/verifier/journal/auth-bypass instruction. Exported platform job/profile
+components require BIND_JOB_SERVICE/DUMP; viewer/notification/startup components
+remain non-exported and scoped. No release test/arming control was added.
+
+A follow-up must execute every Phase 1K.4A acceptance gate on a booted disposable
+AVD, including the actual release Application/Activity path and a populated store,
+not just compile or debug fixtures. Only then may the existing release arming and
+readiness constants be retained as true. Keep the generic unavailable notice for
+inactive builds; never restore the removed preview promises. No hidden activation
+mechanism is added here.
+
+Safe Exit remains local-only: it does not remove recipient/other-app copies or
+contact the server. Already-in-flight pre-arm requests may already have reached
+the server. External copies, privileged/OEM snapshots, flash-sector remanence and
+JVM/ART immutable-memory/GC limitations remain outside perfect erasure claims.
+No backend deployment, server/Android DB migration, Nginx, Cloudflare or VPS change
+is required. No physical connected instrumentation was run.

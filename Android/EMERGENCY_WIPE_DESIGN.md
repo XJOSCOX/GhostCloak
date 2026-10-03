@@ -828,3 +828,96 @@ Nginx or Cloudflare change is required.
 Validation results are recorded in DEVELOPMENT.md. All destructive tests require a
 debug empty-origin ranchu emulator and explicit scoped synthetic roots/aliases; the
 Application's normal key/store namespaces are never destructively armed by tests.
+
+
+## Phase 1K.4 release activation review — NOT READY (2026-10-03)
+
+Reviewed baseline `475b31bd78d54a403792ff6a90cb20792910b890`. Release
+activation is withheld. This review changes documentation only; no protection,
+production code, permission, schema or flag is changed.
+
+### Blocking finding: contradictory destructive consent
+
+`app/src/main/java/org/ghostcloak/app/access/EmergencyWipeSettingsScreen.kt:40`
+unconditionally says this is a non-destructive debug preview that “stops before
+deleting keys or data.” Line 70 calls destruction “Planned destructive behavior.”
+The first statement has no destructive-readiness/build-type condition. Enabling
+release arming and readiness alone would expose that false promise while deleting
+keys/data. Current release hides this screen behind its disabled arming gate;
+this is an activation blocker, not evidence that current release deletes data.
+The destructive consent must accurately describe the actual selected behavior
+before activation. Do not turn either release flag on in this review.
+
+Exact unchanged configuration:
+
+| Variant | EMERGENCY_PIN_ARMING_ENABLED | EMERGENCY_WIPE_DESTRUCTIVE_READY |
+| --- | --- | --- |
+| debug | true | false |
+| release | false | false |
+
+Generated release BuildConfig confirms DEBUG=false and both flags=false.
+The actual release destructive end-to-end test was NOT run: no activated release
+was installed. Fixture success must not be represented as release acceptance.
+
+### Security review and evidence boundaries
+
+Normal PIN and biometric unlock remain distinct from Safe Exit; exact Safe Exit
+matching can arm only from locked UNLOCK purpose. Wrong/near-match PIN does not
+arm. Settings requires fresh normal authentication; Safe Exit alone cannot grant
+management. Change/disable requires both credentials and explicit confirmation;
+App Lock disable/non-PIN mode remains blocked while Safe Exit is enabled. Existing
+controller and settings tests passed. This does not claim a real release system
+biometric prompt was exercised.
+
+The coordinator quiesces owners before the durable key-destruction boundary,
+deletes and verifies owned DB-wrap and device-auth Keystore keys, then removes
+private storage and verifies fresh state before resetting the journal. Signal
+private state and attachment decryption material depend on the encrypted DB.
+The rerun scoped destruction fixtures cover retained copied-DB unreadability,
+old device-auth signing failure, old Signal/attachment inaccessibility, fresh
+state, idempotent durable-stage recreation, partial key failure and cleanup
+failure. These tests use synthetic roots/aliases, not the release Application's
+normal populated store. Critical failure remains locked/incomplete; cleanup
+failure retries without granting old content or premature onboarding.
+
+Offline fixture execution and source review show no wipe-initiated auth, logout,
+revocation, Fetch, ACK, directory, capability, attachment or telemetry call.
+No release-path network-spy end-to-end assertion was performed. An already
+in-flight pre-arm request may have reached the server; erasure is local-only.
+Prior Phase 1K.3 separate reboot probes passed across an actual disposable AVD
+reboot. This review reran durable-stage recreation fixtures but did not rerun
+those opt-in reboot probes or post-wipe actual-release reboot/reconnect tests.
+
+Release merged-manifest review: launcher MainActivity is exported but does not
+accept an external arming/journal mutation/auth-bypass command. WorkManager's
+exported job service requires BIND_JOB_SERVICE; ProfileInstaller's receiver
+requires DUMP. Notification receiver, attachment viewer provider and startup
+provider are non-exported; viewer access uses scoped read grants and local gating.
+No release test/debug/arming component or instrumentation declaration was found.
+Startup may resume an already authorized journal, never arm from an external
+intent. No new components or permissions were added.
+
+allowBackup=false and legacy/modern cloud/device-transfer exclusions cover all
+root/file/database/sharedpref/external domains. Sensitive stores and journal
+remain credential-encrypted noBackup state. No real OEM/cloud restore was tested.
+Release diagnostic implementations are no-ops; review found no Safe Exit private
+logging or crash-reporting/analytics SDK/event.
+
+### Required follow-up before activation
+
+Correct preview/consent copy to match readiness in every enable/change branch,
+with regression checks that destructive-ready UI never promises no deletion.
+Preserve exact PIN matching, dual credentials, throttling and fail-closed journal.
+Then repeat preflight and install the actual release on a disposable AVD only.
+Populate all requested identity/contact/request/message/disappearing/attachment/
+outbox/notification/capability state; exercise normal/wrong/near-match PIN,
+biometric and Settings, then exact Safe Exit entirely offline. Verify no content
+flash, all old-state probes, zero newly initiated network calls, crash/failure
+matrix, verified onboarding, kill/restart, reboot and network reconnect without
+old-account resurrection. Do not substitute scoped fixture results for this gate.
+No fix or automatic activation is included here.
+
+Residual limits remain: external/peer copies, privileged/OEM snapshots, flash
+remanence and JVM/ART immutable-memory/GC behavior prevent perfect physical or
+memory-erasure claims. No backend deployment, server/Android DB migration, Nginx,
+Cloudflare or VPS change is required. Physical phones were not tested.

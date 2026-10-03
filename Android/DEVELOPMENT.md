@@ -596,3 +596,34 @@ The first broad test run exposed fixture identity initialization order; Signal's
 nonempty-store guard correctly rejected it. Corrected fixture and final full run
 passed. An initial reboot-run overlap/System UI ANR was recovered on the disposable
 AVD and the resumed probe and final full suites rerun successfully.
+
+
+## Phase 1K.4 pre-activation validation (2026-10-03)
+
+Decision: NOT READY. Unconditional preview/consent copy is an activation blocker;
+release arming=false and destructive readiness=false in both variants are unchanged.
+See [review](EMERGENCY_WIPE_DESIGN.md#phase-1k4-release-activation-review--not-ready-2026-10-03).
+Documentation only; no activated release installed or destructive physical test.
+
+Reran full host tests: **314 passed**, zero failures/errors/skips (135 test-support,
+4 attachments, 91 debug-app, 84 release-app). Full API-37 disposable
+GhostCloak_Phase1J1_Disposable app instrumentation: **173 reported, 169 passed,
+4 opt-in skipped**, zero failures; includes ten scoped destruction/backup tests.
+The opt-in probes, separate storage suite and actual reboot were not rerun in this
+review; Phase 1K.3 results above remain historical evidence only.
+
+Debug/release builds, test APK build and strict dependency verification passed:
+
+```powershell
+.\Android\gradlew.bat -p Android test :app:testDebugUnitTest :app:testReleaseUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease --dependency-verification=strict -PghostcloakApiOrigin=
+```
+
+JAVA_HOME used Android Studio JBR and ANDROID_HOME the local SDK. An initial missing
+SDK configuration failure was resolved by setting ANDROID_HOME. Instrumentation
+was explicitly targeted to verified emulator-5566, never aggregate connected tasks.
+No physical phone, server/staging suite or VPS was touched. Existing unrelated
+launcher/toolchain working-tree changes are excluded from the review commit.
+
+Actual installed release normal PIN/biometric/Settings/destructive/post-wipe
+restart/reboot/reconnect and release network-spy results remain **NOT RUN** under
+the stop condition. The fixture results do not authorize release activation.

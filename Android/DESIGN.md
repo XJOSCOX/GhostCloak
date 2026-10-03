@@ -227,3 +227,13 @@ for exact inventory, irreversible boundary, failure/restart policy and limitatio
 Debug and release destructive readiness remain FALSE; normal debug retains the gated
 non-destructive preview. Phase 1K.4 activation requires separate review. No backend
 access/deployment or Android/server SQL migration. No physical destructive tests.
+
+
+## Phase 1K.4 activation review: withheld
+
+Release readiness and arming remain false. The settings screen's unconditional
+non-destructive preview promise conflicts with destructive activation; consent
+must be corrected and actual-release disposable-AVD acceptance completed before
+activation. This review implements no fix. See
+[the decision and evidence boundaries](EMERGENCY_WIPE_DESIGN.md#phase-1k4-release-activation-review--not-ready-2026-10-03).
+No backend, database, permissions or deployment changes.

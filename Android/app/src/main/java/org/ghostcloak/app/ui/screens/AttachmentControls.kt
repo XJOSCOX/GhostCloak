@@ -37,10 +37,10 @@ import org.ghostcloak.messaging.Message
     }
     DisposableEffect(conversation) { onDispose { owner.clear() } }
     Box {
-        IconButton(onClick={menu=true},enabled=enabled) { AppIcon(Glyph.PLUS,"Attach photo or document") }
+        IconButton(onClick={menu=true},enabled=enabled) { AppIcon(Glyph.ATTACHMENT,"Attach photo or document") }
         DropdownMenu(expanded=menu,onDismissRequest={menu=false}) {
-            DropdownMenuItem(text={Text("Photo")},onClick={menu=false;photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))})
-            DropdownMenuItem(text={Text("Document")},onClick={menu=false;document.launch(arrayOf("*/*"))})
+            DropdownMenuItem(text={Text("Photo")},leadingIcon={AppIcon(Glyph.GALLERY)},onClick={menu=false;photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))})
+            DropdownMenuItem(text={Text("Document")},leadingIcon={AppIcon(Glyph.ATTACHMENT)},onClick={menu=false;document.launch(arrayOf("*/*"))})
         }
     }
     if(state.conversation==conversation && state.photo && state.message!=null && state.ready) {

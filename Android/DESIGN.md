@@ -11,6 +11,16 @@ remain dormant until a fresh request or explicit Add; accepted relationships ret
 their existing acceptance metadata. Discarded messages/attachments never return.
 See [request privacy](REQUEST_PRIVACY_DESIGN.md#phase-1j2-blocked-contact-management).
 
+## Supplied UI icon pack
+
+The bundled Ghost Cloak SVG pack replaces the hand-drawn Canvas controls through
+the shared `AppIcon` resource mapping. Monochrome vectors inherit semantic theme
+colors in Light, Dark and Automatic appearance. Navigation, headers, search,
+compose, send, verification, profiles and the brand emblem use the same rounded
+stroke family. The attachment action uses a paperclip; Photo/Document menu items
+have matching local icons. Existing spacing, accessible labels and touch targets
+remain shared. See [source artwork and regeneration](design/icons/README.md).
+
 ## Inline photo presentation (Phase 1I.3.1)
 
 Accepted, unlocked foreground conversation photos auto-fetch through the existing
@@ -56,7 +66,7 @@ The encrypted attachment/voice-note architecture and future view-once compatibil
 
 Phase 1F's proposed private background delivery architecture and threat model are documented in [BACKGROUND_SYNC_DESIGN.md](BACKGROUND_SYNC_DESIGN.md), including the optional app-lock roadmap: initial UI lock and a later Keystore-gated maximum-security mode. Phase 1F.1 implements scheduled background FETCH/STORE/ACK; Phase 1F.2 adds an encrypted acceptance ledger and optional generic local notifications. Phase 1G.1 implements the optional root UI/app-access lock described below. Foreground polling cadence is unchanged. Notification taps enter the normal app root, pass the lock gate, then open Chats.
 
-The theme follows the local GoXEV reference: Space Grotesk typography and neutral charcoal surfaces, now with a soft blue accent. Dark primary is `#8FB5FF`, with background `#1A1A1A` and surface `#222222`. Light mode uses `#315FAD` blue for text/button contrast and cool neutral surfaces. Avatars use the semantic brand container, without unrelated color palettes. Chat, Contact, Profiles and Settings have separate bottom-navigation destinations. Settings offers persistent Light, Dark and Automatic choices; Automatic is the default and follows Android's system appearance. System-bar icons also follow the selected appearance. The app uses local vector icons and initials; reference photos, artwork and unavailable feature controls are not copied into the product.
+The theme follows the local GoXEV reference: Space Grotesk typography and neutral charcoal surfaces, now with a soft blue accent. Dark primary is `#8FB5FF`, with background `#1A1A1A` and surface `#222222`. Light mode uses `#315FAD` blue for text/button contrast and cool neutral surfaces. Avatars use the semantic brand container, without unrelated color palettes. Chat, Contact, Profiles and Settings have separate bottom-navigation destinations. Settings offers persistent Light, Dark and Automatic choices; Automatic is the default and follows Android's system appearance. System-bar icons also follow the selected appearance. The app uses local vector icons and initials; reference photos and unavailable feature controls are not copied into the product.
 
 Layout references: [Inbox Chat App](https://dribbble.com/shots/24369393-Inbox-Chat-App) for inbox hierarchy and [Material canonical layouts](https://m3.material.io/foundations/layout/canonical-examples/overview) for list/detail organization.
 

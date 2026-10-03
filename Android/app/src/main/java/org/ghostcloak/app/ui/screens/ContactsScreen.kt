@@ -29,7 +29,7 @@ import org.ghostcloak.app.ui.components.*
                 center = if (hasUnread) "${state.unreadCount} new ${if (state.unreadCount == 1) "message" else "messages"}" else null,
                 leading = if (hasUnread) {{ HeaderAction(Glyph.SEARCH, "Search conversations") { searching = !searching; query = "" } }} else null) {
                 if (!directory && !hasUnread) HeaderAction(Glyph.SEARCH, "Search conversations") { searching = !searching; query = "" }
-                HeaderAction(Glyph.COMPOSE, if (directory) "Add contact" else "New chat", add)
+                HeaderAction(if(directory) Glyph.ADD_CONTACT else Glyph.COMPOSE, if (directory) "Add contact" else "New chat", add)
             }
             Column(Modifier.weight(1f).padding(horizontal = GhostLayout.pageInset)) {
             if(directory || searching) OutlinedTextField(query,{if(it.length<=64) query=it},singleLine=true,placeholder={Text(if(directory) "Search contacts" else "Search conversations")},

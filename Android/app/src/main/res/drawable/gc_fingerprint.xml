@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from Android/design/icons/monochrome; use scripts/import-icons.py. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="64" android:viewportHeight="64">
+    <path android:fillColor="#00000000" android:strokeColor="#FF000000" android:strokeWidth="3.5" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M12 34V27a20 20 0 0 1 40 0v8M21 45V27a11 11 0 0 1 22 0v17M32 26v19c0 7-3 12-6 15M12 44v7M43 53l-2 6M52 44v7" />
+</vector>

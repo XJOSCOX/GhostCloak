@@ -1,8 +1,8 @@
 # Messenger design
 
-## Emergency Wipe (Phase 1K.2B safe arming, debug only)
+## Safe Exit (Phase 1K.2C protected Settings, debug-only safe arming)
 
-[Emergency wipe design and inventory](EMERGENCY_WIPE_DESIGN.md) records the local
+[Safe Exit design and internal wipe inventory](EMERGENCY_WIPE_DESIGN.md) records the local
 key hierarchy, threat model and implemented non-destructive journal/startup fence
 and coordinated shutdown. Phase 1K.1 stopped before implementation; 1K.2A supplies
 those prerequisites; 1K.2B adds debug-only emergency PIN settings and dual verifier
@@ -14,6 +14,16 @@ KEY_DESTRUCTION_PENDING. Failed commits never hand off or unlock. No SQL schema
 migration, backend deployment or destructive action is added. Every
 non-NONE/corrupt journal keeps normal content inaccessible. Biometric unlock,
 FLAG_SECURE and existing account/cryptographic identity remain unchanged.
+
+Settings has a separate, memory-only three-minute authorization when App Lock is
+on, requiring a fresh normal PIN or configured biometric even in an unlocked app.
+No protected Settings/Blocked Contacts subtree is rendered until authorized.
+Leaving Settings, Activity stop, timeout, lock and process death revoke the grant.
+Critical App Lock and Safe Exit actions require separate fresh normal management
+authentication; Safe Exit change/disable additionally require the current Safe Exit
+PIN. There is no normal-PIN/biometric-only forgotten-secret reset. Disable Safe Exit
+with both credentials before turning off PIN app lock. Destructive readiness stays
+false and release arming remains unavailable; no backend or SQL migration is added.
 
 ## Blocked contacts (Phase 1J.2)
 

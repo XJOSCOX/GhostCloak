@@ -31,7 +31,7 @@ import org.ghostcloak.app.ui.components.*
             if (org.ghostcloak.app.access.LocalAppLock.current != null) {
                 OutlinedButton(onClick = appLock) { Text("App lock") }
                 if (org.ghostcloak.app.BuildConfig.EMERGENCY_PIN_ARMING_ENABLED) {
-                    OutlinedButton(onClick=emergencyWipe) { Text("Emergency Wipe") }
+                    OutlinedButton(onClick=emergencyWipe) { Text("Safe Exit") }
                 }
             }
         }

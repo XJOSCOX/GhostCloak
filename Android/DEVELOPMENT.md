@@ -514,3 +514,52 @@ restored only its synthetic journal after force-stop; no DB/key/identity/history
 was cleared. Debug/release builds passed with strict dependency verification,
 both with normal debug staging defaults and the empty-origin disposable-test
 override. No physical-phone instrumentation or VPS access was performed.
+
+
+### Phase 1K.2C — Safe Exit and protected Settings
+
+The user-facing name is Safe Exit; internal wipe classes, journal and encrypted
+record format 2 remain unchanged. See [the security model](EMERGENCY_WIPE_DESIGN.md#phase-1k2c--safe-exit-and-protected-settings).
+With App Lock enabled, tap Settings → “Authenticate to open Settings” → normal
+PIN/configured biometric. Wrong or Safe Exit PINs do not open Settings or arm an
+operation in this challenge. Cancel returns to the prior screen. OFF mode opens
+Settings normally. The authorized subtree is absent until the challenge succeeds.
+
+Settings authorization lasts three minutes maximum from authentication and covers
+Settings → Blocked Contacts/App Lock/Safe Exit → back. Leaving the family revokes
+immediately. Any Activity stop (including rotation), background, global lock,
+process death or timeout removes authorization. Global unlocking on return does
+not authorize Settings again. Secure-window/Recents protection is unchanged.
+
+App Lock administration and each Safe Exit action require a separate fresh normal
+credential (at most 60 seconds, never inherited from Settings entry). Safe Exit
+change/disable additionally require the current Safe Exit PIN; change exposes new
+PIN fields only after that check. Disable also requires confirmation. Enable needs
+fresh normal auth, matching new distinct PINs and irreversible acknowledgement.
+Forgotten Safe Exit PIN cannot be replaced/disabled using normal PIN or biometric
+alone. Disable Safe Exit first using both credentials before disabling PIN app
+lock; no unreachable enabled configuration is permitted.
+
+Test only on a disposable AVD using an empty API origin and explicitly selected
+serial, following the strict commands above. ProtectedSettingsTest covers controller
+boundaries and ProtectedSettingsScreenTest covers Compose plus real navigation;
+EmergencyPinAndroidTest covers the revised enable/disable flow. Standalone navigation
+test fixtures now install an explicit OFF AppLockGate, matching production's
+controller boundary instead of bypassing it. No VPS/physical-phone access or server
+request is involved. Release arming stays disabled; destructive readiness is false.
+No backend deployment, server migration, Android SQL migration or destructive step.
+
+
+Phase 1K.2C validation (2026-10-03): **292 host tests passed** (135 test-support,
+4 attachment-format, 80 debug-app and 73 release-app). The final full disposable
+API-37 app run reported 161 tests: **159 passed, 2 opt-in live probes skipped**,
+zero failures; all **10 encrypted-storage emulator tests passed**. This includes
+16 new controller cases per variant and six new protected-Settings UI cases,
+existing Phase 1E/1F/app-lock/arming coverage, cancellation during pending PIN and
+biometric persistence, and identity/Keystore preservation. Existing async demo
+and credential UI tests now await enabled controls/completed failed verification
+before submitting the next action. Final debug/release builds passed with strict
+dependency verification for normal debug staging defaults and the empty-origin
+AVD override; only the empty-origin build was installed on the disposable AVD.
+No physical phone or VPS was accessed. No production journal was armed; arming
+checks used isolated synthetic fixture journals. No destructive probes were run.

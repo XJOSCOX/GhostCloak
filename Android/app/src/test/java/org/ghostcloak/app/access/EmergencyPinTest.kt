@@ -115,8 +115,8 @@ class EmergencyPinTest {
             assertFalse(f.lock.verifyPin("987654".toCharArray())); assertEquals(LocalOperationState.ARMED,f.journal.value) }
     }
     @Test fun disableRequiresFreshNormalAuthExplicitConfirmationAndRemovesVerifier()=runBlocking {
-        Fixture().use { f -> f.enroll(); assertFalse(f.lock.disableEmergency(true)); f.manage()
-            assertFalse(f.lock.disableEmergency(false)); assertTrue(f.lock.disableEmergency(true))
+        Fixture().use { f -> f.enroll(); assertFalse(f.lock.disableEmergency("654321".toCharArray(),true)); f.manage()
+            assertFalse(f.lock.disableEmergency("654321".toCharArray(),false)); assertTrue(f.lock.disableEmergency("654321".toCharArray(),true))
             assertNull(LockConfiguration.decode(f.memory.bytes!!).emergency); f.locked()
             assertFalse(f.lock.verifyPin("654321".toCharArray())); assertEquals(0,f.armCalls)
             assertTrue(f.lock.verifyPin("123456".toCharArray())) }
@@ -163,7 +163,7 @@ class EmergencyPinTest {
         Fixture(memory,enabled=false).use { f -> f.ready()
             assertFalse(f.lock.verifyPin("654321".toCharArray())); assertEquals(0,f.armCalls)
             assertTrue(f.lock.verifyPin("123456".toCharArray())); f.manage()
-            assertFalse(f.set("987654",current="654321")); assertFalse(f.lock.disableEmergency(true)) }
+            assertFalse(f.set("987654",current="654321")); assertFalse(f.lock.disableEmergency("654321".toCharArray(),true)) }
     }
     @Test fun versionOneRecordsUpgradeWithoutLosingPinThrottleOrIdentityConfiguration() {
         val verifier=PinVerifier.create("123456".toCharArray())

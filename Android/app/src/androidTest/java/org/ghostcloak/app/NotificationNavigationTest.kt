@@ -27,7 +27,7 @@ class NotificationNavigationTest {
         }
         val request = mutableIntStateOf(1)
         try {
-            compose.setContent { GhostCloakTheme { GhostApp(model, request.intValue) } }
+            compose.setContent { GhostCloakTheme { FixtureAppLock { GhostApp(model, request.intValue) } } }
             compose.waitUntil(20000) { model.state.value.ready && !model.state.value.loading }
             compose.onNodeWithText("Chats").assertIsDisplayed()
             compose.onNodeWithContentDescription("Settings").performClick()

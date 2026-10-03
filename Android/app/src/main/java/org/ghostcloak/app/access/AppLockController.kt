@@ -10,7 +10,7 @@ internal interface LockPersistence {
     suspend fun read(): ByteArray?
     suspend fun write(bytes: ByteArray)
 }
-enum class UnlockPurpose { UNLOCK, MANAGE, ENROLL }
+enum class UnlockPurpose { UNLOCK, MANAGE, ENROLL, SETTINGS }
 data class LockViewState(
     val ready: Boolean = false, val canShowContent: Boolean = false,
     val mode: LockMode = LockMode.OFF, val timing: LockTiming = LockTiming.IMMEDIATE,
@@ -18,6 +18,7 @@ data class LockViewState(
     val manageGranted: Boolean = false, val biometricConfirmed: Boolean = false,
     val visible: Boolean = false, val presentation: Long = 0,
     val emergencyEnabled: Boolean = false,
+    val settingsGranted: Boolean = false, val emergencyAdministrationGranted: Boolean = false,
 )
 
 /** Process-owned; UI/lifecycle calls run on Main. Slow KDF/records operations run off Main. */
@@ -36,6 +37,27 @@ class AppLockController internal constructor(
     val state = mutable.asStateFlow()
     private var initialized = false
     private var management: Pair<Long, Long>? = null
+    private var managementTimer: Job? = null
+    private var settingsEpoch=0L
+    private var managementEpoch=0L
+    private fun authorizationEpoch(purpose: UnlockPurpose) = when(purpose) {
+        UnlockPurpose.SETTINGS -> settingsEpoch
+        UnlockPurpose.MANAGE, UnlockPurpose.ENROLL -> managementEpoch
+        UnlockPurpose.UNLOCK -> 0L
+    }
+    private var promptEpoch=0L
+    private var settingsAuthorization: Pair<Long, Long>? = null
+    private var settingsTimer: Job? = null
+    private var emergencyAdministration: Triple<Long, Long, PinVerifier>? = null
+    companion object { internal const val SETTINGS_AUTH_MILLIS = 180_000L }
+    private fun validEmergencyAdministration(): Boolean = valid(management) && emergencyAdministration?.let {
+        it.first == session.generation && now() < it.second && it.third === config.emergency
+    } == true
+    fun leaveSettings() {
+        settingsEpoch++; settingsAuthorization=null; settingsTimer?.cancel(); settingsTimer=null
+        endManagement()
+    }
+    internal fun refreshAuthorization() = update()
     private var enrollment: Pair<Long, Long>? = null
     private var sequence = 0L
     private var prompt: Triple<Long, Long, UnlockPurpose>? = null
@@ -47,19 +69,22 @@ class AppLockController internal constructor(
     private fun update(message: String? = mutable.value.message) {
         mutable.value = mutable.value.copy(ready = initialized, canShowContent = initialized && !mutable.value.unavailable && session.canShow,
             mode = config.mode, timing = config.timing, emergencyEnabled = config.emergency != null, message = message, visible = session.started, presentation = presentation,
-            manageGranted = config.mode == LockMode.OFF || valid(management), biometricConfirmed = valid(enrollment))
+            manageGranted = config.mode == LockMode.OFF || valid(management), biometricConfirmed = valid(enrollment),
+            settingsGranted = initialized && !mutable.value.unavailable && session.canShow &&
+                (config.mode == LockMode.OFF || valid(settingsAuthorization)),
+            emergencyAdministrationGranted = validEmergencyAdministration())
     }
     internal suspend fun quiesce() {
         scope.coroutineContext[Job]!!.cancelAndJoin()
         operations.withLock {
-            timer=null; prompt=null; management=null; enrollment=null; config=LockConfiguration()
+            timer=null; settingsTimer=null; settingsAuthorization=null; emergencyAdministration=null; prompt=null; management=null; enrollment=null; config=LockConfiguration()
             mutable.value=LockViewState(unavailable=true)
         }
     }
     fun start() { timer?.cancel(); session.start(); update(null) }
     fun stop(changingConfiguration: Boolean = false) {
         if (session.started && !changingConfiguration) { automaticPromptConsumed = false; presentation++ }
-        session.stop(changingConfiguration); prompt = null; management = null; enrollment = null
+        session.stop(changingConfiguration); managementTimer?.cancel(); settingsAuthorization=null; settingsTimer?.cancel(); emergencyAdministration=null; prompt = null; management = null; enrollment = null
         update(null)
         timer?.cancel()
         if (!changingConfiguration) timer = scope.launch { delay(config.timing.millis); session.expire(); update(null) }
@@ -79,6 +104,7 @@ class AppLockController internal constructor(
         catch (_: Exception) { failClosed() }
     }
     private fun failClosed() {
+        settingsAuthorization=null; settingsTimer?.cancel(); emergencyAdministration=null; management=null; enrollment=null; prompt=null
         session.configure(config.mode, config.timing)
         initialized = true; mutable.value = mutable.value.copy(unavailable = true, busy = false)
         update("App lock is unavailable. Your local data has not been reset.")
@@ -87,11 +113,21 @@ class AppLockController internal constructor(
         val bytes = value.encode()
         try { persistence.write(bytes) } finally { bytes.fill(0) }
     }
-    private fun grant(purpose: UnlockPurpose, ticket: Long): Boolean {
-        if (!session.started || ticket != session.generation) return false
+    private fun grant(purpose: UnlockPurpose, ticket: Long, epoch: Long): Boolean {
+        if (!session.started || ticket != session.generation || epoch != authorizationEpoch(purpose)) return false
         when (purpose) {
             UnlockPurpose.UNLOCK -> return session.unlock(ticket)
-            UnlockPurpose.MANAGE -> { if (!session.canShow) return false; management = ticket to now() + 60_000 }
+            UnlockPurpose.MANAGE -> {
+                if (!session.canShow) return false
+                emergencyAdministration=null; management = ticket to now() + 60_000
+                managementTimer?.cancel(); managementTimer=scope.launch {delay(60_000); update(null)}
+            }
+            UnlockPurpose.SETTINGS -> {
+                if (!session.canShow) return false
+                settingsAuthorization=ticket to now()+SETTINGS_AUTH_MILLIS
+                settingsTimer?.cancel()
+                settingsTimer=scope.launch { delay(SETTINGS_AUTH_MILLIS); update(null) }
+            }
             UnlockPurpose.ENROLL -> { if (!session.canShow) return false; enrollment = ticket to now() + 60_000 }
         }
         return true
@@ -104,6 +140,7 @@ class AppLockController internal constructor(
                     update("Try again in ${(config.cooldownUntil - now() + 999) / 1000} seconds."); return@withLock false
                 }
                 val ticket = session.generation
+                val epoch=authorizationEpoch(purpose)
                 mutable.value = mutable.value.copy(busy = true)
                 try {
                     // Reserve the failed attempt before doing expensive verification. Killing the process
@@ -128,7 +165,7 @@ class AppLockController internal constructor(
                         false
                     } else if (matches) {
                         config = config.copy(failures = 0, cooldownUntil = 0, cooldownDuration = 0); persist(config)
-                        val accepted = grant(purpose, ticket); update(null); accepted
+                        val accepted = grant(purpose, ticket, epoch); update(null); accepted
                     } else { update("Incorrect PIN. ${if (wait > 0) "Try again in ${wait / 1000} seconds." else "Try again."}"); false }
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { failClosed(); false }
@@ -142,7 +179,7 @@ class AppLockController internal constructor(
         if (purpose == UnlockPurpose.ENROLL && !session.canShow) return null
         if (prompt != null) return null
         if (purpose == UnlockPurpose.UNLOCK) automaticPromptConsumed = true
-        val id = ++sequence; prompt = Triple(id, session.generation, purpose); update(null); return id
+        val id = ++sequence; promptEpoch=authorizationEpoch(purpose); prompt = Triple(id, session.generation, purpose); update(null); return id
     }
     /** Called only by a ready, resumed UI host. Consumption survives rotation and recomposition. */
     internal fun beginAutomaticBiometric(available: Boolean): Long? {
@@ -157,17 +194,18 @@ class AppLockController internal constructor(
     suspend fun completeBiometric(id: Long): Boolean = operations.withLock {
         val attempt = prompt ?: return@withLock false
         if (attempt.first != id) return@withLock false
+        val epoch=promptEpoch
         prompt = null
         if (attempt.second != session.generation || !session.started) return@withLock false
         try {
             if (config.failures > 0) { config = config.copy(failures = 0, cooldownUntil = 0, cooldownDuration = 0); persist(config) }
-            val accepted = grant(attempt.third, attempt.second)
+            val accepted = grant(attempt.third, attempt.second, epoch)
             if (accepted && attempt.third == UnlockPurpose.MANAGE) enrollment = session.generation to now() + 60_000
             update(null); accepted
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { failClosed(); false }
     }
-    fun endManagement() { management = null; enrollment = null; prompt = null; update(null) }
+    fun endManagement() { managementEpoch++; managementTimer?.cancel(); managementTimer=null; emergencyAdministration=null; management = null; enrollment = null; prompt = null; update(null) }
     /** Recent normal MANAGE authentication is mandatory; an emergency match here never arms. */
     suspend fun configureEmergency(pin: CharArray, confirmation: CharArray, current: CharArray, acknowledged: Boolean): Boolean {
         try {
@@ -191,7 +229,7 @@ class AppLockController internal constructor(
                     persist(config)
                     val next = withContext(Dispatchers.Default) {
                         val equal = checkPin(config.verifier!!, pin)
-                        val currentOk = config.emergency?.let { checkPin(it, current) } ?: true
+                        val currentOk = config.emergency?.let { validEmergencyAdministration() || checkPin(it, current) } ?: true
                         if (equal || !currentOk) null else PinVerifier.create(pin)
                     }
                     if (next == null) { update("Choose a different PIN or confirm the current PIN."); return@withLock false }
@@ -200,24 +238,66 @@ class AppLockController internal constructor(
                     persist(value)
                     val previous=config.emergency; config=value
                     previous?.salt?.fill(0); previous?.value?.fill(0)
-                    management=null; enrollment=null; update(null); true
+                    management=null; enrollment=null; emergencyAdministration=null; update(null); true
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { failClosed(); false }
                 finally { mutable.value=mutable.value.copy(busy=false) }
             }
         } finally { pin.fill('\u0000'); confirmation.fill('\u0000'); current.fill('\u0000') }
     }
-    /** Recent configured normal authentication plus explicit confirmation; no credential recovery. */
-    suspend fun disableEmergency(confirmed: Boolean): Boolean = operations.withLock {
-        if (!emergencyArmingEnabled || !initialized || mutable.value.unavailable || !valid(management) || !confirmed) return@withLock false
+    /** Explicit administration challenge: never a normal unlock or wipe trigger. */
+    suspend fun verifyEmergencyAdministration(current: CharArray): Boolean {
         try {
-            val next=config.copy(emergency=null)
-            persist(next)
-            val previous=config.emergency; config=next
-            previous?.salt?.fill(0); previous?.value?.fill(0)
-            management=null; enrollment=null; update(null); true
-        } catch (e: CancellationException) { throw e }
-        catch (_: Exception) { failClosed(); false }
+            return operations.withLock {
+                emergencyAdministration=null
+                if (!emergencyArmingEnabled || !initialized || mutable.value.unavailable || config.emergency == null || !valid(management)) return@withLock false
+                mutable.value=mutable.value.copy(busy=true)
+                try {
+                    if (!reserveAdministrationAttempt()) return@withLock false
+                    val ticket=session.generation
+                    val verifier=config.emergency!!
+                    val matches=withContext(Dispatchers.Default) {checkPin(verifier,current)}
+                    if (!matches) {update("Incorrect PIN. Try again."); return@withLock false}
+                    if (ticket != session.generation || !valid(management)) return@withLock false
+                    val next=config.copy(failures=0,cooldownUntil=0,cooldownDuration=0)
+                    persist(next); config=next
+                    if (ticket != session.generation || !valid(management)) return@withLock false
+                    emergencyAdministration=Triple(ticket,management!!.second,verifier); update(null); true
+                } catch(e: CancellationException) {throw e}
+                catch(_: Exception) {failClosed(); false}
+                finally {mutable.value=mutable.value.copy(busy=false)}
+            }
+        } finally {current.fill('\u0000')}
+    }
+    private suspend fun reserveAdministrationAttempt(): Boolean {
+        if(config.cooldownUntil>now()) {update("Try again later."); return false}
+        val failures=(config.failures+1).coerceAtMost(20)
+        val wait=LockConfiguration.delayAfter(failures)
+        config=config.copy(failures=failures,cooldownUntil=now()+wait,cooldownDuration=wait,boot=boot())
+        persist(config); return true
+    }
+    /** Both credentials plus confirmation; normal/biometric authentication alone is insufficient. */
+    suspend fun disableEmergency(current: CharArray, confirmed: Boolean): Boolean {
+        try {
+            return operations.withLock {
+                if (!emergencyArmingEnabled || !initialized || mutable.value.unavailable || config.emergency == null || !valid(management) || !confirmed) return@withLock false
+                mutable.value=mutable.value.copy(busy=true)
+                try {
+                    val ticket=session.generation
+                    if(!reserveAdministrationAttempt()) return@withLock false
+                    val matches=validEmergencyAdministration() || withContext(Dispatchers.Default) {checkPin(config.emergency!!,current)}
+                    if(!matches) {update("Incorrect PIN. Try again."); return@withLock false}
+                    if(ticket != session.generation || !valid(management)) return@withLock false
+                    val next=config.copy(emergency=null,failures=0,cooldownUntil=0,cooldownDuration=0)
+                    persist(next)
+                    val previous=config.emergency; config=next
+                    previous?.salt?.fill(0); previous?.value?.fill(0)
+                    management=null; enrollment=null; emergencyAdministration=null; update(null); true
+                } catch(e: CancellationException) {throw e}
+                catch(_: Exception) {failClosed(); false}
+                finally {mutable.value=mutable.value.copy(busy=false)}
+            }
+        } finally {current.fill('\u0000')}
     }
     suspend fun configure(mode: LockMode, timing: LockTiming, pin: CharArray, confirmation: CharArray): Boolean {
         try {
@@ -233,7 +313,7 @@ class AppLockController internal constructor(
                 mutable.value = mutable.value.copy(busy = true)
                 try {
                     if (config.emergency != null && (!mode.pin || withContext(Dispatchers.Default) { checkPin(config.emergency!!, pin) })) {
-                        update(if (!mode.pin) "Disable Emergency Wipe before removing PIN app lock." else "Choose a different PIN."); return@withLock false
+                        update(if (!mode.pin) "Disable Safe Exit before turning off App Lock." else "Choose a different PIN."); return@withLock false
                     }
                     val verifier = if (mode.pin) withContext(Dispatchers.Default) { PinVerifier.create(pin) } else null
                     if (!session.canShow || session.generation != ticket || (config.mode != LockMode.OFF && !valid(management)) || (mode.biometric && !valid(enrollment))) return@withLock false

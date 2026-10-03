@@ -1,6 +1,6 @@
 # Phase 1K — emergency wipe design and infrastructure
 
-Current status: **1K.2B debug-only emergency PIN enrollment and safe arming implemented; no destructive wipe engine**.
+Current status: **1K.2C Safe Exit UX and protected Settings implemented; debug-only non-destructive arming, no destructive wipe engine**.
 
 Audit date: 2026-10-03. Baseline: `9b09739`.
 Historical status: **1K.1 audit/design checkpoint; stopped before implementation** under
@@ -9,7 +9,107 @@ enabled. The initial truncated request has been superseded by the complete reque
 This document records findings and a proposed implementation, not an assertion
 that the current app already has safe reset semantics.
 
-## Phase 1K.2B — implemented PIN enrollment and safe arming
+## Phase 1K.2C — Safe Exit and protected Settings
+
+Baseline: `51fba806412e31be301e9466d21ceb5ed83caa5f`. The user-facing name is
+**Safe Exit**. Internal Emergency/Cryptographic Wipe terminology, classes, journal
+and configuration names stay unchanged. The description and permanent-destruction
+warning describe the intended future feature; the adjacent explicit debug-preview
+warning states this build only permanently fences access and deletes nothing.
+Destructive readiness stays false; release settings/arming remain unavailable.
+
+### Settings boundary and lifetime
+
+With App Lock enabled, an already-unlocked app session is insufficient to open
+Settings. The route renders only “Authenticate to open Settings” until a normal
+PIN or configured strong biometric succeeds for the distinct SETTINGS purpose.
+A Safe Exit PIN or wrong PIN grants neither Settings nor wipe authority in this
+challenge. Cancellation/back returns to the previous screen; no Settings subtree
+is composed behind the challenge. App Lock OFF allows Settings without inventing
+a credential. Unready/unavailable controllers never authorize protected content.
+Production navigation always obtains the Application-owned controller through the
+global AppLockGate; missing controller fails closed for protected routes.
+
+A SETTINGS grant is memory-only, generation-bound and expires **three minutes from
+authentication**, with no extension for taps/rows. A scope-owned timer removes the
+protected subtree at expiry; predicates check monotonic time. It covers Settings,
+Blocked Contacts, App Lock and Safe Exit routes. Traversing those rows/back does
+not repeat Settings authentication while the grant remains valid. Leaving this
+route family invalidates it **immediately** (a conservative meaningful-exit policy),
+including bottom-tab changes, notification navigation or normal back navigation.
+Any Activity stop, including rotation, clears authorization; background/lock,
+process death and secure-operation quiesce also revoke it. Returning and satisfying
+global App Lock never restores an old Settings grant. Secure window/Recents behavior
+is unchanged and applies to these screens. Route cancellation also advances a
+purpose-specific authorization epoch, rejecting late PIN/biometric completions
+even when the global unlocked lifecycle generation has not changed.
+
+### Separate critical-action authorization
+
+SETTINGS authentication grants **no MANAGE or biometric ENROLL proof**. Opening
+App Lock administration clears any previous management grant before exposing its
+configuration; changing normal PIN or disabling App Lock requires a fresh configured
+normal PIN/strong biometric. Safe Exit shows On/Disabled and action buttons only;
+choosing enable/change/disable starts a new management challenge, clearing older
+normal/administration proofs. Normal management lasts at most **60 seconds** from
+authentication, is generation-bound, and does not survive background/disposal.
+
+Initial enable requires PIN-capable App Lock, fresh normal management authentication,
+explicit irreversible acknowledgement and matching 6–64-digit new Safe Exit PINs
+that differ from the normal PIN. Change requires that fresh normal credential
+**plus the current Safe Exit PIN** before exposing new PIN entry, then matching
+new PINs/acknowledgement. Disable requires fresh normal authentication **plus the
+current Safe Exit PIN plus explicit confirmation**. Normal PIN or biometric alone
+can neither replace nor remove an existing Safe Exit verifier.
+
+The explicit current-PIN administration check never unlocks or arms. It reserves
+the existing shared durable failed-attempt/cooldown budget before KDF execution.
+Successful verification creates a private, short-lived memory proof bound to the
+normal management grant, lifecycle generation and exact current verifier object.
+Proofs are cleared on a new management challenge, change/disable, screen disposal,
+background, expiry or quiesce. Slow operations recheck generation and fresh normal
+proof before commit. Direct controller administration APIs still require the same
+credentials; there is no UI-only bypass. No failed-attempt destruction or permanent
+credential lockout is introduced. Mutable credential arrays are cleared in finally;
+UI PINs remain transient remember state, never saved/navigation/ViewModel state.
+
+Existing PBKDF2, dual lock-screen verification, equality checks, SQLCipher record
+format 2 and journal behavior are unchanged. PIN app lock cannot be removed while
+Safe Exit is enabled (including switching to biometric-only). Final policy is
+**Option B**: “Disable Safe Exit before turning off App Lock.” The user must first
+disable Safe Exit using both credentials, then separately reauthenticate to turn
+off App Lock. Equality still rejects with “Choose a different PIN.”
+
+There is **no forgotten Safe Exit PIN reset** using a normal PIN, biometric, email,
+server or third party. Losing it prevents ordinary change/disable, even if the app
+can still be unlocked normally. A future explicit full local reset would need its
+own reviewed design and cannot recover old identity/history or silently regenerate
+keys. No such recovery/reset path is implemented here. Biometric has only normal
+Settings/management/unlock roles; it cannot substitute for the Safe Exit secret.
+
+Audit of current Settings actions: there is no recovery-secret export, identity/key
+replacement or full-reset action. Connection actions retain existing explicit
+logout/credential ownership checks; ordinary display/request/notification controls
+use the bounded Settings boundary. Any future account/device-protection weakening
+or recovery action must require a separate fresh management proof, not SETTINGS.
+
+### Validation and rollout
+
+Unit coverage exercises already-unlocked attackers, wrong/Safe Exit Settings PINs,
+normal/biometric Settings authentication, OFF mode, exact timeout, route exit,
+background, process recreation, proof separation, both-credential change/disable,
+forgotten-secret refusal, shared throttling and App Lock disable/equality policy.
+Disposable AVD coverage verifies the absent private subtree, cancel/previous route,
+row/back traversal, critical reauthentication, background/timeout, current-PIN-first
+change and enable/disable confirmation. User-visible literals are audited for old
+branding. Existing Phase 1E/1F/app-lock/arming tests continue to run.
+
+No backend deployment, API/server DB change, Android SQL migration, new permission
+or network event is required. The verifier/configuration format remains 2. No VPS
+access or real-account phone tests; no destructive implementation or release
+readiness change. Test counts are recorded in DEVELOPMENT.md.
+
+## Phase 1K.2B — implemented PIN enrollment and safe arming (historical baseline)
 
 Baseline: `9602111`. This is **not a usable destructive wipe release**. Settings →
 Privacy & Security → Emergency Wipe is visible only in debug. Its default is

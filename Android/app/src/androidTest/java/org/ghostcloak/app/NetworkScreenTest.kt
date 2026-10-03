@@ -49,7 +49,7 @@ class NetworkScreenTest {
             owner.put("network", model)
         }
         try {
-            compose.setContent { GhostCloakTheme { if(attached.value) GhostApp(model) } }
+            compose.setContent { GhostCloakTheme { FixtureAppLock { if(attached.value) GhostApp(model) } } }
             compose.waitUntil(20000) { model.state.value.ready && !model.state.value.loading }
             compose.onNodeWithText("Create local identity").assertDoesNotExist()
             compose.onRoot().captureToImage().asAndroidBitmap().let { bitmap ->

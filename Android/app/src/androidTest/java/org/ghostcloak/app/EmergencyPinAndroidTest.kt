@@ -116,18 +116,30 @@ class EmergencyPinAndroidTest {
             var saved=false
             compose.setContent {GhostCloakTheme {EmergencyWipeSettingsScreen(controller) {saved=true}}}
             compose.onNodeWithText("Disabled").assertExists()
-            compose.onNodeWithText("Emergency PIN").performScrollTo().performTextInput("654321")
-            compose.onNodeWithText("Confirm emergency PIN").performScrollTo().performTextInput("654321")
-            compose.onNodeWithText("Enable emergency PIN").performScrollTo().assertIsNotEnabled()
+            compose.onNodeWithText("Set up Safe Exit").performScrollTo().performClick()
+            compose.onNodeWithText("PIN").performScrollTo().performTextInput("123456")
+            compose.waitUntil(30000) {try {compose.onNodeWithText("Confirm access").assertIsEnabled(); true} catch(_: AssertionError) {false}}
+            compose.onNodeWithText("Confirm access").performScrollTo().performClick()
+            compose.waitUntil(30000) {controller.state.value.manageGranted}
+            compose.onNodeWithText("New Safe Exit PIN").performScrollTo().performTextInput("654321")
+            compose.onNodeWithText("Confirm Safe Exit PIN").performScrollTo().performTextInput("654321")
+            compose.onNodeWithText("Enable Safe Exit").performScrollTo().assertIsNotEnabled()
             compose.onNode(isToggleable()).performScrollTo().performClick()
-            compose.onNodeWithText("Enable emergency PIN").performScrollTo().performClick()
+            compose.onNodeWithText("Enable Safe Exit").performScrollTo().performClick()
             compose.waitUntil(30000) {saved}; assertTrue(controller.state.value.emergencyEnabled)
-            withContext(Dispatchers.Main) {controller.verifyPin("123456".toCharArray(),UnlockPurpose.MANAGE)}
-            compose.onNodeWithText("Disable Emergency Wipe").performScrollTo().performClick()
-            compose.onNodeWithText("Disable Emergency Wipe?").assertExists()
+            compose.onNodeWithText("Disable",substring=false).performScrollTo().performClick()
+            compose.onNodeWithText("PIN").performScrollTo().performTextInput("123456")
+            compose.waitUntil(30000) {try {compose.onNodeWithText("Confirm access").assertIsEnabled(); true} catch(_: AssertionError) {false}}
+            compose.onNodeWithText("Confirm access").performScrollTo().performClick()
+            compose.waitUntil(30000) {controller.state.value.manageGranted}
+            compose.onNodeWithText("Current Safe Exit PIN").performScrollTo().performTextInput("654321")
+            compose.onNodeWithText("Confirm Safe Exit PIN").performScrollTo().performClick()
+            compose.waitUntil(30000) {controller.state.value.emergencyAdministrationGranted}
+            compose.onNodeWithText("Confirm disable").performScrollTo().performClick()
+            compose.onNodeWithText("Disable Safe Exit?").assertExists()
             compose.onNodeWithText("Cancel").performClick(); assertTrue(controller.state.value.emergencyEnabled)
-            compose.onNodeWithText("Disable Emergency Wipe").performClick()
-            compose.onNodeWithText("Disable",substring=false).performClick()
+            compose.onNodeWithText("Confirm disable").performScrollTo().performClick()
+            compose.onNodeWithText("Disable Safe Exit",substring=false).performClick()
             compose.waitUntil(30000) {!controller.state.value.emergencyEnabled}
             assertEquals(LocalOperationState.NONE,f.journal.read())
         } finally {f.scope.cancel(); f.runtime.close()}

@@ -96,7 +96,7 @@ val LocalAppLock = staticCompositionLocalOf<AppLockController?> { null }
         }
         PinInput(pin, "PIN", !state.busy, Modifier.focusRequester(focus)) { pin = it }
         Button(onClick = { val input = pin.toCharArray(); pin = ""; scope.launch { controller.verifyPin(input, purpose) } },
-            enabled = !state.busy && pin.length >= 6) { Text(if (purpose == UnlockPurpose.MANAGE) "Confirm access" else "Unlock") }
+            enabled = !state.busy && pin.length >= 6) { Text(when(purpose) {UnlockPurpose.SETTINGS -> "Open Settings"; UnlockPurpose.MANAGE -> "Confirm access"; else -> "Unlock"}) }
     }
     state.message?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error) }
     if (state.busy) CircularProgressIndicator()
@@ -156,7 +156,7 @@ private fun Context.fragmentActivity(): FragmentActivity? {
                 // No callback details are logged; another attempt requires an explicit retry.
             })
             prompt = next
-            try { next.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Unlock Ghost Cloak")
+            try { next.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle(if(purpose == UnlockPurpose.SETTINGS) "Authenticate to open Settings" else "Unlock Ghost Cloak")
                 .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG).setNegativeButtonText("Cancel").build()) }
             catch (_: Exception) { ticket = null; controller.cancelBiometric(id, true) }
         }
@@ -175,6 +175,8 @@ private fun Context.fragmentActivity(): FragmentActivity? {
 @Composable fun AppLockSettingsScreen(controller: AppLockController, back: () -> Unit) {
     val state by controller.state.collectAsState()
     val scope = rememberCoroutineScope()
+    var managementReady by remember { mutableStateOf(false) }
+    LaunchedEffect(controller) {controller.endManagement(); managementReady=true}
     var mode by remember { mutableStateOf(state.mode) }
     var timing by remember { mutableStateOf(state.timing) }
     var pin by remember { mutableStateOf("") }
@@ -187,7 +189,7 @@ private fun Context.fragmentActivity(): FragmentActivity? {
     }
     PageContent("App lock", back = back) {
         Text("Local app-access lock. Background delivery continues while locked. Screenshots and recent-app previews are protected throughout Ghost Cloak.", style = MaterialTheme.typography.bodyMedium)
-        if (!state.manageGranted) {
+        if (!managementReady || !state.manageGranted) {
             Text("Confirm your current unlock method to change app lock.")
             UnlockControls(controller, UnlockPurpose.MANAGE)
         } else {

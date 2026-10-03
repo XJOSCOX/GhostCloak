@@ -45,9 +45,23 @@ import org.ghostcloak.app.ui.components.*
         }
     }
     val route = entry?.destination?.route
+    val lock=org.ghostcloak.app.access.LocalAppLock.current
+    val settingsRoutes=setOf("settings","blocked","app-lock","emergency-wipe")
+    var settingsReturnRoute by rememberSaveable {mutableStateOf("contacts")}
+    LaunchedEffect(route,lock) {if(route!=null && route !in settingsRoutes) lock?.leaveSettings()}
+    val cancelSettings: () -> Unit = {
+        if(route=="settings") nav.navigate(settingsReturnRoute) {popUpTo("contacts"); launchSingleTop=true}
+        else nav.popBackStack()
+        Unit
+    }
+    val protectSettings: @Composable (@Composable () -> Unit) -> Unit = {content ->
+        if(lock!=null) org.ghostcloak.app.access.SettingsAccessGate(lock,cancelSettings,content)
+    }
     Scaffold(containerColor = MaterialTheme.colorScheme.background, bottomBar = {
         if (state.identity != null && route in listOf("contacts", "people", "profiles", "settings")) {
             GhostBottomBar(route) { destination ->
+                if(destination=="settings" && route !in settingsRoutes) settingsReturnRoute=route ?: "contacts"
+                if(destination !in settingsRoutes) lock?.leaveSettings()
                 nav.navigate(destination) { popUpTo("contacts"); launchSingleTop = true }
             }
         }
@@ -60,18 +74,18 @@ import org.ghostcloak.app.ui.components.*
                     composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
                     composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard, {name->model.addNetwork(name) {nav.popBackStack()}},model::unblock,{nav.navigate("blocked")}) { text -> model.importCard(text) { nav.popBackStack() } } }
                     composable("profiles") { ProfilesScreen(state, model::rename) }
-                    composable("settings") { SettingsScreen(state, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork, { nav.navigate("app-lock") },model::requestPrivacy,{nav.navigate("blocked")}, {nav.navigate("emergency-wipe")}) }
-                    composable("blocked") {BlockedContactsScreen(state,{nav.popBackStack()},model::unblock)}
-                    composable("emergency-wipe") {
+                    composable("settings") { protectSettings { SettingsScreen(state, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork, { nav.navigate("app-lock") },model::requestPrivacy,{nav.navigate("blocked")}, {nav.navigate("emergency-wipe")}) } }
+                    composable("blocked") {protectSettings {BlockedContactsScreen(state,{nav.popBackStack()},model::unblock)}}
+                    composable("emergency-wipe") { protectSettings {
                         org.ghostcloak.app.access.LocalAppLock.current?.let { controller ->
                             org.ghostcloak.app.access.EmergencyWipeSettingsScreen(controller) { nav.popBackStack() }
                         }
-                    }
-                    composable("app-lock") {
+                    } }
+                    composable("app-lock") { protectSettings {
                         org.ghostcloak.app.access.LocalAppLock.current?.let { controller ->
                             org.ghostcloak.app.access.AppLockSettingsScreen(controller) { nav.popBackStack() }
                         }
-                    }
+                    } }
                     composable("conversation/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable
                         val contact = state.contacts.firstOrNull { it.contact.remoteDeviceId == id } ?: return@composable

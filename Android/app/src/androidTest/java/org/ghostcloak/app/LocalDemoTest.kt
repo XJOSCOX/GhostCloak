@@ -26,7 +26,7 @@ class LocalDemoTest {
             model = GhostViewModel(context.applicationContext as android.app.Application, runtime)
             owner.put("local-demo", model)
         }
-        compose.setContent { GhostCloakTheme { GhostApp(model) } }
+        compose.setContent { GhostCloakTheme { FixtureAppLock { GhostApp(model) } } }
     }
     @After fun closeRuntime() {
         InstrumentationRegistry.getInstrumentation().runOnMainSync { owner.clear() }
@@ -42,6 +42,7 @@ class LocalDemoTest {
         }
         compose.waitUntil(20000) { compose.onAllNodesWithContentDescription("Settings").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Settings").performClick()
+        compose.waitUntil(20000) { compose.onNodeWithText("Open local demo").isEnabled() }
         compose.onNodeWithText("Open local demo").performScrollTo().performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText("Return to my identity").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Contact").performClick()
@@ -61,6 +62,7 @@ class LocalDemoTest {
         compose.waitUntil(20000) { compose.onAllNodesWithText(message).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Security").performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText("Mark verified").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(20000) { compose.onNodeWithText("Mark verified").isEnabled() }
         compose.onNodeWithText("Mark verified").performScrollTo().performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText("I compared it · Verify").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("I compared it · Verify").performClick()

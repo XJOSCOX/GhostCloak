@@ -1,14 +1,13 @@
 # Messenger design
 
-## Emergency Wipe (Phase 1K.1 audit only)
+## Emergency Wipe (Phase 1K.2A infrastructure only)
 
 [Emergency wipe design and inventory](EMERGENCY_WIPE_DESIGN.md) records the local
-key hierarchy, reset state machine and threat model. Implementation is stopped at
-the requested safety gate: current startup has no durable interrupted-reset guard
-and live storage/media/demo owners need coordinated revocation. No emergency PIN
-or destruction action is enabled. The proposed feature is local/offline, keeps
-biometric unlock ordinary and preserves FLAG_SECURE, with cryptographic erasure
-claims limited to Ghost Cloak-controlled state.
+key hierarchy, threat model and implemented non-destructive journal/startup fence
+and coordinated shutdown. Phase 1K.1 stopped before implementation; 1K.2A supplies
+those prerequisites without adding an emergency PIN or destructive action. Every
+non-NONE/corrupt journal keeps normal content inaccessible. Biometric unlock,
+FLAG_SECURE and existing account/cryptographic identity remain unchanged.
 
 ## Blocked contacts (Phase 1J.2)
 
@@ -192,3 +191,13 @@ See [REQUEST_PRIVACY_DESIGN.md](REQUEST_PRIVACY_DESIGN.md) for default hidden re
 See [ATTACHMENT_CAPABILITY_DESIGN.md](ATTACHMENT_CAPABILITY_DESIGN.md) for implemented identity-signed ATTACHMENT_V1, opt-in discovery/refresh, V006, validity/replay limitations and owner deployment/rollback. Request acceptance remains local/private and is never inferred from compatibility or delivery ACK.
 
 Delivery acknowledgment proves secure device-level envelope processing only. It does not prove reading, acceptance, display, attachment viewing or absence of blocking. See [BLOCKED_ENVELOPE_PRIVACY.md](BLOCKED_ENVELOPE_PRIVACY.md).
+
+
+## Phase 1K.2A local-operation infrastructure
+
+[EMERGENCY_WIPE_DESIGN.md](EMERGENCY_WIPE_DESIGN.md) records the implemented
+non-destructive journal/startup fence, owner shutdown inventory and awaited
+quiesce semantics. Every non-NONE state (including corruption and COMPLETE)
+blocks normal content, DB/crypto access, network and media. The coordinator stops
+at KEY_DESTRUCTION_PENDING. No emergency PIN, key/data deletion or final reset
+exists; no release UI can arm it. Backend and database schemas are unchanged.

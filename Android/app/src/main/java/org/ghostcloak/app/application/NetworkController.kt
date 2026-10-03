@@ -17,11 +17,13 @@ class NetworkController(
     private val origin: String = BuildConfig.API_ORIGIN,
     connection: GhostCloakTransport = TransportPolicy.select(),
     private val cooldown: FetchCooldown = FetchCooldown(),
+    private val requireNormal: () -> Unit = {},
+    private val stateAccess: org.ghostcloak.storage.LocalStateAccess? = null,
 ) {
     val configured get() = origin.isNotEmpty()
-    private val state by lazy { EndpointNetworkState(records, URI(origin).host, KeystoreDeviceAuth()) }
+    private val state by lazy { EndpointNetworkState(records, URI(origin).host, KeystoreDeviceAuth(stateAccess)) }
     private var backgroundFetches: Int? = null
-    private val client: HttpGhostClient by lazy { HttpGhostClient(origin, state, transport = AccountRecoveryDiagnostics.wrap(connection), renewSession = ::renewSession, authenticatedFailure = ::networkFailure, diagnostics = NetworkDiagnostics.observer,
+    private val client: HttpGhostClient by lazy { HttpGhostClient(origin, state, transport = AccountRecoveryDiagnostics.wrap(GhostCloakTransport { request -> requireNormal(); connection.execute(request) }), renewSession = ::renewSession, authenticatedFailure = ::networkFailure, diagnostics = NetworkDiagnostics.observer,
         fetchCooldown = cooldown, beforeFetch = {
             backgroundFetches?.let { count ->
                 if (count >= 4) throw BackgroundDeferred()
@@ -89,7 +91,7 @@ class NetworkController(
     }
     private suspend fun <T> operation(category: NetworkOperation, block: suspend () -> T): T {
         val started = System.nanoTime()
-        try { return block() }
+        try { requireNormal(); return block() }
         catch (e: kotlinx.coroutines.CancellationException) { throw e }
         catch (e: ApiFailure) {
             NetworkDiagnostics.observer?.let { emitNetworkDiagnostic(it, NetworkDiagnostic(category, NetworkEvent.API_FAILURE,

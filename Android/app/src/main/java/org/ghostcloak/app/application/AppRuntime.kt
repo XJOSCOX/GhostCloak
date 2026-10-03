@@ -22,7 +22,12 @@ class AppRuntime internal constructor(
     private val expiryClock: ExpiryClock = ExpiryClock(System::currentTimeMillis, android.os.SystemClock::elapsedRealtime,
         { android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0) }),
     private val attachmentAccess: () -> Boolean = { true },
+    private val operationGate: org.ghostcloak.app.access.LocalOperationGate? =
+        (context.applicationContext as? GhostApplication)?.localOperationGate,
 ) : AutoCloseable {
+    internal val operationBlocked get() = operationGate?.blocked == true
+    private suspend fun <T> guarded(block: suspend () -> T): T = if (operationGate != null) operationGate.operation(block) else block()
+    private fun requireNormal() { operationGate?.requireNormal() }
     private val expiryChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
     val expiryRevision: kotlinx.coroutines.flow.StateFlow<Long> get() = expiryChanges
     fun expiryNow() = expiryClock.now()
@@ -41,7 +46,7 @@ class AppRuntime internal constructor(
     @Volatile private var activityVisible = false
     val syncActive get() = network?.syncActive == true
     val fetchRetryDelayMillis get() = network?.fetchRetryDelayMillis ?: 0L
-    val canAutoSync get() = !inDemo && network?.canAutoSync == true
+    val canAutoSync get() = !operationBlocked && !inDemo && network?.canAutoSync == true
     val networkRequiresConnect get() = networkConfigured && !inDemo && network?.canAutoSync != true
     val networkConfigured get() = apiOrigin.isNotEmpty()
     val networkStatus get() = network?.status ?: if (networkConfigured) NetworkStatus.NEEDS_CONNECT else NetworkStatus.DISABLED
@@ -62,11 +67,12 @@ class AppRuntime internal constructor(
     internal fun revokeAttachmentAccess() { attachments?.invalidate() }
     // Polling is a coroutine, not the Activity lifecycle. Its cancellation/restart may lag
     // a picker result. Activity stop and app lock independently revoke attachment access.
-    private fun attachmentAllowed() = canAutoSync && activityVisible && attachmentAccess()
+    private fun attachmentAllowed() = !operationBlocked && canAutoSync && activityVisible && attachmentAccess()
     // UI predicates must never enter Room; transfer operations retain the live IO checks above.
-    internal val attachmentTransfersAllowed get() = attachmentUiAccess.accountEligible && !inDemo && activityVisible && attachmentAccess()
+    internal val attachmentTransfersAllowed get() = !operationBlocked && attachmentUiAccess.accountEligible && !inDemo && activityVisible && attachmentAccess()
     private fun cancelNotificationSafely() { try { notifications.cancel() } catch (_: Exception) { } }
     private fun reconcileNotifications() {
+        if (operationBlocked) return
         if (notifications === NoLocalNotifications) return
         try {
             val ledger = notificationLedger ?: return
@@ -92,6 +98,7 @@ class AppRuntime internal constructor(
         if (canOpenExisting()) use { notificationLedger?.dismissPublished() }
     }
     private fun reconcileBackground() {
+        if (operationBlocked) return
         val eligible = canAutoSync
         if (scheduledEligibility != eligible) {
             try {
@@ -100,10 +107,11 @@ class AppRuntime internal constructor(
             } catch (_: Exception) { BackgroundDiagnostics.emit(BackgroundEvent.WORK_SKIP) }
         }
     }
-    private fun canOpenExisting() = context.getSystemService(android.os.UserManager::class.java).isUserUnlocked &&
+    private fun canOpenExisting() = !operationBlocked && context.getSystemService(android.os.UserManager::class.java).isUserUnlocked &&
         java.io.File(context.noBackupFilesDir, "$endpointName.db").exists() &&
         java.io.File(context.noBackupFilesDir, "$endpointName.wrapped").exists()
     internal suspend fun readAppLock(): ByteArray? {
+        requireNormal()
         val db = java.io.File(context.noBackupFilesDir, "$endpointName.db")
         val wrapped = java.io.File(context.noBackupFilesDir, "$endpointName.wrapped")
         if (!db.exists() && !wrapped.exists()) return null
@@ -140,43 +148,53 @@ class AppRuntime internal constructor(
     val inDemo get() = demo != null
     fun currentService() = demo?.service ?: local!!
     val protection get() = if (inDemo) "Isolated local simulator" else store?.protection?.name ?: "Unavailable"
-    suspend fun <T> use(block: suspend (ConversationService) -> T): T = withContext(Dispatchers.IO) {
-        mutex.withLock {
-            if (local == null) {
-                val records = LocalStateDiagnostics.open(context.noBackupFilesDir, endpointName, apiOrigin) {
-                    EncryptedEndpointStore.open(context, endpointName)
+    suspend fun <T> use(block: suspend (ConversationService) -> T): T = guarded {
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                requireNormal()
+                if (local == null) {
+                    val records = LocalStateDiagnostics.open(context.noBackupFilesDir, endpointName, apiOrigin) {
+                        EncryptedEndpointStore.open(context, endpointName)
+                    }
+                    store = records // Retain ownership even if initialization/close fails.
+                    try {
+                        LocalStateDiagnostics.inventory(records, apiOrigin)
+                        val engine=SignalProtocolEngine(records, preKeyPolicy = org.ghostcloak.crypto.PreKeyPolicy(maximumRetained = 10000))
+                        val cooldown = if (networkConfigured) storedFetchCooldown(records, java.net.URI(apiOrigin).host,
+                            android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0))
+                            else org.ghostcloak.transport.FetchCooldown()
+                        network=NetworkController(records,engine,apiOrigin,connection,cooldown, ::requireNormal, operationGate)
+                        local = ConversationService(engine, LocalRepository(records, expiryClock))
+                        notificationLedger = NotificationLedger(records, expiryClock)
+                        store = records
+                        attachments = org.ghostcloak.attachments.AttachmentStore(records,java.io.File(context.noBackupFilesDir,"$endpointName-attachments"),
+                            AttachmentDiagnostics.observer)
+                    } catch (e: Exception) {
+                        records.close()
+                        attachments=null; notificationLedger=null; local=null; network=null; store=null
+                        throw e
+                    }
                 }
-                try {
-                LocalStateDiagnostics.inventory(records, apiOrigin)
-                val engine=SignalProtocolEngine(records, preKeyPolicy = org.ghostcloak.crypto.PreKeyPolicy(maximumRetained = 10000))
-                val cooldown = if (networkConfigured) storedFetchCooldown(records, java.net.URI(apiOrigin).host,
-                    android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0))
-                    else org.ghostcloak.transport.FetchCooldown()
-                network=NetworkController(records,engine,apiOrigin,connection,cooldown)
-                local = ConversationService(engine, LocalRepository(records, expiryClock))
-                notificationLedger = NotificationLedger(records, expiryClock)
-                store = records
-                attachments = org.ghostcloak.attachments.AttachmentStore(records,java.io.File(context.noBackupFilesDir,"$endpointName-attachments"),
-                    AttachmentDiagnostics.observer)
-                } catch (e: Exception) { records.close(); throw e }
-            }
-            if (local!!.reconcileExpiry() > 0) expiryChanges.value++
-            try { block(demo?.service ?: local!!) } finally {
                 if (local!!.reconcileExpiry() > 0) expiryChanges.value++
-                // Publish atomically on IO before returning to Compose.
-                refreshAttachmentUiAccess()
-                reconcileBackground()
-                reconcileNotifications()
-                attachments?.reconcileReferences(
-                    store!!.transaction { store!!.keys("app/message/").map { it.removePrefix("app/message/") }.toSet() },
-                    store!!.transaction { store!!.keys("outbox/").map { it.removePrefix("outbox/") }.toSet() })
+                try { block(demo?.service ?: local!!) } finally {
+                    if (!operationBlocked) {
+                        if (local!!.reconcileExpiry() > 0) expiryChanges.value++
+                        // Publish atomically on IO before returning to Compose.
+                        refreshAttachmentUiAccess()
+                        reconcileBackground()
+                        reconcileNotifications()
+                        attachments?.reconcileReferences(
+                            store!!.transaction { store!!.keys("app/message/").map { it.removePrefix("app/message/") }.toSet() },
+                            store!!.transaction { store!!.keys("outbox/").map { it.removePrefix("outbox/") }.toSet() })
+                    }
+                }
             }
         }
     }
     suspend fun open(service: ConversationService): DeviceIdentity? = service.open().also { identity ->
         if (!inDemo && !networkConfigured && identity != null && !attached) { service.attach(router.register(identity.deviceId)); attached = true }
     }
-    suspend fun startDemo() { if (demo == null) demo = DeveloperMode.create(context) }
+    suspend fun startDemo() { requireNormal(); if (demo == null) demo = DeveloperMode.create(context) }
     fun leaveDemo() { demo = null }
     suspend fun create(service: ConversationService, username: String) {
         if (service.open() == null) {
@@ -225,15 +243,29 @@ class AppRuntime internal constructor(
     }
     /** Process owner closes only after all foreground operations have finished (also used by reopen tests). */
     override fun close() { attachmentUiAccess=AttachmentUiAccess(); attachments?.invalidate(); attachments=null; store?.close(); store = null; local = null; network = null; notificationLedger = null; attached = false }
+    /** Fence first, drain all leased runtime operations, then close under the runtime mutex.
+     * No invalidate/reconcile/delete/logout: those APIs can delete files or mutate auth state. */
+    internal suspend fun quiesce() {
+        check(operationBlocked)
+        operationGate!!.drain()
+        mutex.withLock {
+            attachmentUiAccess=AttachmentUiAccess(); attachmentContacts=emptySet()
+            attachments=null
+            DeveloperMode.quiesce()
+            demo=null; router.close()
+            store?.close(); store=null; local=null; network=null; notificationLedger=null; attached=false
+        }
+    }
     /** Internal synthetic-file foundation only; no picker/recorder/UI entry point. */
-    internal suspend fun prepareAttachment(source:java.io.InputStream,length:Long,kind:org.ghostcloak.attachments.AttachmentKind,seconds:Int,filename:String?=null):org.ghostcloak.attachments.AttachmentDescriptor {
+    internal suspend fun prepareAttachment(source:java.io.InputStream,length:Long,kind:org.ghostcloak.attachments.AttachmentKind,seconds:Int,filename:String?=null):org.ghostcloak.attachments.AttachmentDescriptor = guarded {
         use { check(attachmentAllowed()) }
-        return attachments!!.prepare(source,length,kind,seconds,filename,::attachmentAllowed)
+        attachments!!.prepare(source,length,kind,seconds,filename,::attachmentAllowed)
     }
     internal suspend fun supportsAttachments(conversation:String):Boolean=use { network?.supportsAttachments(it,conversation) ?: it.attachmentPeer(conversation) }
     internal fun cachedAttachments(conversation:String?) = if(conversation==null) emptySet() else
         attachments?.cachedReferences().orEmpty().filter { it.substringBefore('/')==conversation }.map { it.substringAfter('/') }.toSet()
     internal fun attachmentAvailableNow(conversation:String,message:String):Boolean {
+        if (operationBlocked) return false
         val access=attachmentUiAccess
         val key=conversation to message
         return !inDemo && access.accountEligible && access.messages.containsKey(key) &&
@@ -256,9 +288,9 @@ class AppRuntime internal constructor(
     internal suspend fun attachmentStillAvailable(conversation:String,message:String):Boolean=use { attachmentAvailableNow(conversation,message) }
     internal suspend fun attachmentDuration(conversation:String):Int=use { it.policies()[conversation] ?: 0 }
     internal suspend fun discardAttachment(id:String) { use { attachments?.entry(id)?.takeIf { it.references.isEmpty() }?.let { attachments?.remove(id) } } }
-    internal suspend fun uploadAttachment(id:String):org.ghostcloak.attachments.AttachmentDescriptor {
+    internal suspend fun uploadAttachment(id:String):org.ghostcloak.attachments.AttachmentDescriptor = guarded {
         use { check(attachmentAllowed()) }
-        return attachments!!.upload(id,network!!.blobClient(::attachmentAllowed,{check(attachmentAllowed())}),::attachmentAllowed)
+        attachments!!.upload(id,network!!.blobClient(::attachmentAllowed,{check(attachmentAllowed())}),::attachmentAllowed)
     }
     internal suspend fun sendPreparedAttachment(conversation:String,blob:String,peerSupportsAttachments:Boolean,requireNegotiatedSupport:Boolean=false):Message=use { service ->
         check(attachmentAllowed())
@@ -275,10 +307,10 @@ class AppRuntime internal constructor(
             attachments!!.bind(blob,"$conversation/${it.localId}")
         }
     }
-    internal suspend fun downloadAttachment(conversation:String,message:String):org.ghostcloak.attachments.VerifiedAttachment {
+    internal suspend fun downloadAttachment(conversation:String,message:String):org.ghostcloak.attachments.VerifiedAttachment = guarded {
         val descriptor=use { check(attachmentAllowed()); it.attachment(conversation,message) ?: error("attachment_missing") }
         val allowed = { attachmentAllowed() && conversation in attachmentContacts &&
             LocalRepository(store!!,expiryClock).attachmentAvailable(conversation,message) }
-        return attachments!!.download(descriptor,"$conversation/$message",network!!.blobClient(allowed,{check(allowed())}),allowed)
+        attachments!!.download(descriptor,"$conversation/$message",network!!.blobClient(allowed,{check(allowed())}),allowed)
     }
 }

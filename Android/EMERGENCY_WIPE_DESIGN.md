@@ -1,13 +1,185 @@
-# Phase 1K — emergency wipe security audit
+# Phase 1K — emergency wipe design and infrastructure
+
+Current status: **1K.2A non-destructive infrastructure implemented; no emergency PIN or wipe engine**.
 
 Audit date: 2026-10-03. Baseline: `9b09739`.
-Status: **1K.1 audit/design checkpoint; stopped before implementation** under
+Historical status: **1K.1 audit/design checkpoint; stopped before implementation** under
 section 39 of the complete Phase 1K request. Emergency wipe is NOT implemented or
 enabled. The initial truncated request has been superseded by the complete request.
 This document records findings and a proposed implementation, not an assertion
 that the current app already has safe reset semantics.
 
-## Implementation stop condition
+## Phase 1K.2A — implemented non-destructive prerequisites
+
+Baseline for this slice: `55f3269`. There is no emergency PIN, wipe engine, key
+deletion, database/cache deletion, account reset, logout, configuration clearing,
+server request or fresh-install finalization in this implementation. Existing
+normal scratch rollback/expiry behavior is unchanged; it is not repurposed as wipe
+cleanup. The previous stop condition below describes the 1K.1 baseline.
+
+### Journal and state machine
+
+`DurableLocalOperationJournal` uses credential-encrypted app-private
+`noBackupFilesDir/local-operation.v1`, outside SQLCipher and independent of keys.
+Only the fixed ASCII version prefix `GCLO1:`, enum name and newline are stored.
+There are no identifiers, credentials, timestamps, counters or content. Missing
+base **and** missing `.new`/`.bak` mean NONE. A populated NONE is invalid. Reads are
+bounded to 65 bytes and require exact canonical bytes. Unreadable, truncated,
+oversized, unknown-version/state or incomplete-first-write artifacts are CORRUPT.
+
+State enum: NONE, ARMED, QUIESCING, KEY_DESTRUCTION_PENDING,
+KEY_DESTRUCTION_COMPLETE, STORAGE_CLEANUP_PENDING, FINALIZING, COMPLETE, CORRUPT.
+This slice can simulate ARMED through the debug-source in-process test hook;
+the coordinator advances ARMED -> QUIESCING -> KEY_DESTRUCTION_PENDING and stops.
+No later destructive/finalization transition is executable. **Every state except
+NONE, including COMPLETE, blocks normal access.** Corruption does not grant wipe
+authorization and is never converted to a destruction checkpoint.
+
+Writes use Android AtomicFile startWrite/finishWrite/failWrite, followed by an
+explicit parent-directory Os.fsync and canonical readback before success. One
+process-wide monitor serializes transitions, opens and synchronous record/key
+access. Android AtomicFile provides no locking itself. The in-memory fence closes
+before writing; any write failure keeps this process fail-closed. A successful
+arming is acknowledged only after durable write/sync/readback. An uncommitted first
+write with no surviving artifact is not a durable arming; this phase does no
+destruction before or after it. Power-loss guarantees still depend on the OS/device
+honoring fsync. No absolute hardware-erasure/durability claim is made.
+
+The journal is excluded from backup by noBackupFilesDir and the unchanged manifest
+allowBackup=false plus all cloud/device-transfer exclusions. It is not stored in
+device-protected storage. No Direct Boot path is added; components remain in the
+credential-unlocked startup regime. The journal is not a forensic-authenticity
+primitive against a rooted actor who can alter app files.
+
+### Startup, operation gates and restart
+
+`GhostApplication.onCreate` reads the gate before starting app-lock collection,
+runtime initialization or expiry work. With a non-NONE journal it starts only the
+local recovery coordinator. It never initializes runtime/store/engine/media/lock
+owners just to shut them down. MainActivity retains FLAG_SECURE but skips lock and
+media initialization and renders only generic maintenance text. The private Compose
+subtree is absent, including notification-requested navigation. ViewModels are not
+created in that branch. Existing ViewModels are registered for cancellation,
+awaited termination and snapshot/reference removal during a live simulation.
+
+`BackgroundSyncWorker` checks the gate before even resolving its lazy shared runtime.
+The sole unique work is `ghostcloak-background-sync`; its automatic class-name tag
+contains no private input. Scheduling admission shares the fence monitor.
+Cancellation awaits WorkManager's Operation result and verifies all matching work
+rows are terminal. This is a scheduler acknowledgement, not proof that a running
+HTTP call has finished: runtime operation leases are separately cancelled/joined.
+No other Ghost Cloak work name/tag exists in the current code.
+
+AppRuntime.use and transfer operations are coroutine leases admitted only in NONE.
+Polling stops through the ViewModel scope and checks the runtime fence each cycle.
+NetworkController checks the fence at operation and actual transport entry;
+StreamingBlobClient uses the existing eligibility/checkpoint callbacks. Thus sends,
+FETCH/ACK/status, login/renewal, lookup, capability/prekey publication and transfers
+cannot be newly admitted after arming. Work already admitted before arming is
+cancelled and fully awaited; a request already on the wire cannot be recalled.
+Existing connection timeouts bound blocking control HTTP. Blob sockets disconnect
+on cancellation and their watchdog is now cancelled **and joined**.
+
+`EncryptedEndpointStore.open` obtains the Application's LocalStateAccess fence
+before key unwrap/create or SQLCipher/Room opening. Its record methods and
+transactions also use the fence. An in-progress synchronous open/transaction must
+finish before arming can commit; later attempts fail. Closing is exempt so existing
+handles can be released. Signal uses these fenced records: identity loading, prekey
+use and session-store reads cannot resume through a stale service. Device-auth
+Keystore publicKey/sign are fenced separately. No crypto format or key deletion
+behavior changed.
+
+Media eligibility, picker work, document preparation and provider entry points are
+fenced. New decoding/rendering/transfer work is denied; live jobs are cancelled and
+awaited. Ghost Cloak-owned source streams and provider descriptors are explicitly
+closed. Viewer grants are revoked; files are left in place by quiesce. Already
+duplicated external file descriptors/copies are outside Ghost Cloak's revocation
+boundary, not evidence that our owned descriptors are still open.
+
+On process death all volatile owners/completion evidence disappear. Relaunch reads
+the durable checkpoint, repeats idempotent non-deleting shutdown and remains gated.
+ARMED/QUIESCING resume to KEY_DESTRUCTION_PENDING after success; later checkpoints
+and corruption remain unchanged. Any failed owner or journal write leaves the
+maintenance screen and completion false. There is no retry timer that reopens state.
+Corrupt journals require explicit future reviewed recovery; current code never
+repairs, deletes or treats them as NONE. No Cancel/reset control is exposed.
+
+### Complete ownership and shutdown inventory
+
+| Subsystem | Owner/class and retained state | Stop and completion evidence |
+|---|---|---|
+| UI/polling/manual API operations | GhostViewModel viewModelScope; snapshots, selected conversation, drafts in private Compose | Root gate removes private subtree; registered stop callback cancels/joins entire ViewModel scope, drops snapshots/selection; foreground polling exits and releases mutex; onCleared unregisters completed UI owners |
+| Activity initialization/biometric UI | MainActivity lifecycleScope; AppLockGate/UnlockControls | Initialization is a leased operation; subtree disposal cancels biometric UI and composition jobs; gated lifecycle skips normal start/stop restoration; gate drain joins runtime initialization |
+| App-lock controller | GhostApplication lockScope, AppLockController timer/config/grants | cancelAndJoin scope; acquire operations mutex after outstanding PIN/KDF operation completes; drop config/grants/prompt and publish unavailable state; no persistence write |
+| Background startup/expiry/notification dismissal | GhostApplication backgroundScope/lifecycleScope | cancelAndJoin both scopes; notification receiver checks gate before runtime; expiry and notification reconciliation skip fenced work |
+| Scheduled mailbox work | BackgroundSyncSchedule/BackgroundSyncWorker, WorkManager | cancel unique work; await Operation and query terminal rows; lazy worker gate; separately drain runtime leases for physical execution completion |
+| Control HTTP, renewal, capabilities, prekeys, outbox, receipt loops | NetworkController and clients, owned by AppRuntime | Gate admission; cancellation/join of runtime leases; transport finally disconnects before lease completion; controller reference removed; no logout or auth-state write |
+| Attachment transfers/verified staging | AttachmentStore through leased AppRuntime calls; StreamingBlobClient watchdog; verified attachments held inside presentation coroutines | Deny eligibility; cancel/join whole presentation scope and runtime leases, including watchdog; existing use/finally closes owned streams; no invalidate/reconcile wipe cleanup |
+| Photo decode/picker preparation/preview jobs | AttachmentPresentation scope, source CancellationSignal/InputStream, InlinePhotos jobs/Bitmaps | Revoke visibility/epoch; clear snapshots/thumbnails; cancel source signal, close active input; cancelAndJoin entire parent scope, including jobs previously removed from child maps |
+| Document provider/handoff | AttachmentPresentation lease, owned ParcelFileDescriptors, AttachmentViewerProvider | Gate provider access and register open under same fence; revoke URI grants; close every retained owned descriptor; failures prevent completion; external duplicates/copies cannot be recalled |
+| DB/repositories/notification ledger/Signal | AppRuntime mutex, EncryptedEndpointStore SQLCipher handle/DB secret, ConversationService/SignalProtocolEngine/SignalStore/repository/router | Drain leases, acquire runtime mutex, close Room/SQLCipher (existing close zeroes in-memory wrapper secret), null engine/service/store/ledger/attachment references; router.close; no file/key deletion; no promise of universal JVM/native RAM erasure |
+| Debug simulator | DeveloperMode singleton, DemoSession, two encrypted stores/engines/router and initialization ownership set | Runtime operations are drained first; new DeveloperMode.quiesce closes router and both stores, then clears singleton and runtime demo reference; failed initialization/close retains store ownership for retry; absent simulator implementation in release |
+| Recovery coordination | GhostApplication recoveryScope, LocalOperationCoordinator | Dedicated scope never touches normal content/credentials and remains for maintenance; mutex coalesces repeated requests; completion flag only after all stop callbacks, drain and journal checkpoint succeed |
+
+The coordinator must run outside an admitted state lease; self-drain is rejected
+instead of deadlocking. Completion is process-local evidence of **owned subsystem
+quiescence**, not key destruction or final reset. No timeout/sleep is used to claim
+completion. Unknown/new owners must be added to this inventory and tests before a
+future destructive slice. A blocked/hung close cannot be skipped to report success.
+
+### Future COMPLETE policy and release safety
+
+Future destruction must revalidate journal authorization, all owners and the
+key/file inventory before advancing. Only after key destruction, cleanup and a
+verified fresh namespace/state commit may COMPLETE be cleared to NONE. This slice
+has **no production clear/reset API**, so even a test-installed COMPLETE stays
+gated. A debug-source `LocalOperationTestHooks` permits in-process arming only; no
+UI, exported receiver/activity/provider, hidden gesture or intent arm handler was
+added. The hook class is absent from release. No release user-accessible arming
+mechanism exists. No Emergency Wipe PIN/configuration has been added.
+
+Quiesced scopes and owners intentionally cannot restart in this slice. Future
+finalization must establish new owners/generation (or a fresh process) before
+allowing NONE; reusing a cancelled scope or retained lazy owner is not finalization.
+Stream/grant/DB close failure retains the owned resource for retry rather than
+discarding its reference and falsely declaring success.
+
+No backend deployment, server DB migration or Android DB migration is required.
+Existing Room schema and encrypted record format are unchanged.
+
+Validation passed on 2026-10-03:
+
+- 222 JVM/app unit tests: 135 test-support, 4 attachments, 45 debug app, 38 release app.
+- Full offline app AVD suite: 149 reported (147 passed, 2 opt-in probes deliberately
+  skipped in the ordinary run). Final focused owner run: 14 passed, including all
+  13 infrastructure cases plus LocalDemoTest and the deterministic record/device-
+  credential lock-order race added after the full run.
+- Final 17 lifecycle/owner tests also passed after ordinary ViewModel disposal was
+  made to unregister its owner callback.
+- 37 focused app-lock/foreground/background/session/notification/infrastructure
+  regression tests passed; 10 separate encrypted-storage instrumentation tests passed.
+- Explicit live media close-failure/retry probe passed. Five startup probe executions
+  passed: ARMED, QUIESCING, corrupt, reboot with corrupt state, and final
+  KEY_DESTRUCTION_PENDING relaunch. Application/Activity/Worker kept sensitive owners
+  uninitialized. The live probe proved input close retries, parent-scope join and
+  preservation of the synthetic plaintext staging file.
+- Debug/release builds and strict dependency verification passed with both normal
+  build configuration and the offline empty-origin test build. Release compile
+  artifact excludes LocalOperationTestHooks; merged manifest retains allowBackup=false,
+  cloud/device-transfer exclusions and no new exported arm component.
+
+No wipe-specific destruction tests ran because no destruction exists. Existing
+storage tests use their own synthetic key fixtures only. No physical phone, VPS,
+account reset or server wipe call was used. Existing uncommitted launcher/tooling
+changes were preserved and excluded from the infrastructure commit.
+The instrumentation harness uses explicit adb serial selection of a disposable AVD
+with an empty API origin; no real phones or VPS are touched. Process/relaunch probes
+install only synthetic journal bytes, never reset account data or keys.
+
+References for durability APIs: [AtomicFile](https://developer.android.com/reference/android/util/AtomicFile),
+[Os.fsync](https://developer.android.com/reference/android/system/Os#fsync(java.io.FileDescriptor)).
+
+## Historical 1K.1 implementation stop condition
 
 Current startup cannot safely distinguish an interrupted destructive reset from
 ordinary store availability/fresh installation: there is no durable reset journal

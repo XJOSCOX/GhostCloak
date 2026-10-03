@@ -44,6 +44,13 @@ class AppLockController internal constructor(
             mode = config.mode, timing = config.timing, message = message, visible = session.started, presentation = presentation,
             manageGranted = config.mode == LockMode.OFF || valid(management), biometricConfirmed = valid(enrollment))
     }
+    internal suspend fun quiesce() {
+        scope.coroutineContext[Job]!!.cancelAndJoin()
+        operations.withLock {
+            timer=null; prompt=null; management=null; enrollment=null; config=LockConfiguration()
+            mutable.value=LockViewState(unavailable=true)
+        }
+    }
     fun start() { timer?.cancel(); session.start(); update(null) }
     fun stop(changingConfiguration: Boolean = false) {
         if (session.started && !changingConfiguration) { automaticPromptConsumed = false; presentation++ }

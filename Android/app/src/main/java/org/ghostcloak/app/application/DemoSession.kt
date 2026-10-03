@@ -5,5 +5,6 @@ import org.ghostcloak.messaging.Message
 
 interface DemoSession {
     val service: ConversationService
+    fun close()
     suspend fun deliver(message: Message)
 }

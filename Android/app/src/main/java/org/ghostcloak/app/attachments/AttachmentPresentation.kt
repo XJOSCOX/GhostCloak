@@ -54,18 +54,19 @@ class AttachmentPresentation(private val app: GhostApplication) {
     }
     init { root.listFiles()?.filter { it.isFile }?.forEach { it.delete() } }
     internal val presentationVisible get() = visible
-    private fun allowed() = visible && app.appLock.state.value.canShowContent && app.runtime.attachmentTransfersAllowed
+    private fun allowed() = !app.localOperationGate.blocked && visible && app.appLock.state.value.canShowContent && app.runtime.attachmentTransfersAllowed
     private fun check(expected: Long) { check(expected == epoch && allowed()) { "attachment_unavailable" } }
     private fun check(expected: Long, trace: PhotoTrace?) {
         try { check(expected) }
         catch(failure: Exception) { trace?.begin(PhotoOperation.ACCESS_CHECK);throw failure }
     }
     private fun temporary() = File(root,AttachmentFormat.newId())
-    fun start() { visible = true; session.value++; revokeLease() }
+    fun start() { app.localOperationGate.requireNormal(); visible = true; session.value++; revokeLease() }
     private fun sweepPresentation() { root.listFiles()?.filter { it.isFile && it!=lease?.second }?.forEach { it.delete() } }
-    fun stop() { visible = false; photos.clear(); clear(); sweepPresentation() }
-    fun locked() { photos.clear(); clear(); revokeLease(); sweepPresentation() }
+    fun stop() { if(app.localOperationGate.blocked) return; visible = false; photos.clear(); clear(); sweepPresentation() }
+    fun locked() { if(app.localOperationGate.blocked) return; photos.clear(); clear(); revokeLease(); sweepPresentation() }
     fun clear() {
+        if(app.localOperationGate.blocked) return
         val revoked=synchronized(inputGate) {
             epoch++
             (sourceSignal to activeInput).also { sourceSignal=null;activeInput=null }
@@ -83,6 +84,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
         if (orphan != null) scope.launch { try { app.runtime.discardAttachment(orphan) } catch (_: Exception) {} }
     }
     private fun launch(trace: PhotoTrace? = null, block: suspend (Long)->Unit) {
+        app.localOperationGate.requireNormal()
         job?.cancel()
         val expected = epoch
         job = scope.launch {
@@ -126,6 +128,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
         }
     }
     fun select(conversation: String, uri: Uri, photo: Boolean) {
+        app.localOperationGate.requireNormal()
         clear()
         mutable.value=MediaUi(conversation=conversation,photo=photo,busy=true)
         if(photo) PhotoDiagnostics.emit(PhotoEvent.START)
@@ -215,6 +218,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
         }
     }
     fun download(conversation: String, message: String, photo: Boolean, filename: String, refresh: ()->Unit = {}) {
+        app.localOperationGate.requireNormal()
         clear()
         mutable.value=MediaUi(conversation=conversation,message=message,filename=filename,photo=photo,busy=true)
         launch { expected ->
@@ -247,11 +251,12 @@ class AttachmentPresentation(private val app: GhostApplication) {
         leaseMessage?.let { if(!app.runtime.attachmentAvailableNow(it.first,it.second)) revokeLease() }
     }
     private fun revokeLease() {
+        if(app.localOperationGate.blocked) return
         lease?.let { (uri,source) -> try { app.revokeUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION) } finally { source.delete() } }
         lease=null; leaseMessage=null
     }
     /** Explicit external-view handoff only; it may retain a copy outside our control. */
-    suspend fun documentIntent(): Intent {
+    suspend fun documentIntent(): Intent = app.localOperationGate.operation {
         val expected=epoch
         val current=mutable.value
         check(allowed() && current.ready && !current.photo && current.message!=null)
@@ -268,9 +273,36 @@ class AttachmentPresentation(private val app: GhostApplication) {
         val view=Intent(Intent.ACTION_VIEW).setDataAndType(uri,DocumentType.sniff(source))
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         view.clipData=ClipData.newRawUri("Attachment",uri)
-        return Intent.createChooser(view,"Open document").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        Intent.createChooser(view,"Open document").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    private val providerHandles = mutableListOf<android.os.ParcelFileDescriptor>()
+    internal fun openLease(uri: Uri): android.os.ParcelFileDescriptor = app.localOperationGate.access {
+        android.os.ParcelFileDescriptor.open(leaseFile(uri),android.os.ParcelFileDescriptor.MODE_READ_ONLY).also {
+            synchronized(providerHandles) { providerHandles.add(it) }
+        }
+    }
+    /** Revokes access and joins the entire presentation scope without invoking file cleanup.
+     * Existing operation rollback may clean its own incomplete scratch as before; durable data stays. */
+    internal suspend fun quiesce() {
+        visible=false; epoch++
+        mutable.value=MediaUi(); photos.clear()
+        val revoked=synchronized(inputGate) { sourceSignal to activeInput }
+        revoked.first?.cancel()
+        revoked.second?.close()
+        synchronized(inputGate) {
+            if(sourceSignal===revoked.first) sourceSignal=null
+            if(activeInput===revoked.second) activeInput=null
+        }
+        val viewer=lease
+        viewer?.let { app.revokeUriPermission(it.first,Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        lease=null; leaseMessage=null
+        synchronized(providerHandles) { providerHandles.toList() }.forEach { it.close() }
+        synchronized(providerHandles) { providerHandles.clear() }
+        scope.coroutineContext[Job]!!.cancelAndJoin()
+        job=null; file=null; blob=null
     }
     internal fun leaseFile(uri: Uri): File {
+        app.localOperationGate.requireNormal()
         val pair=lease ?: throw java.io.FileNotFoundException()
         val reference=leaseMessage ?: throw java.io.FileNotFoundException()
         if(pair.first!=uri || android.os.SystemClock.elapsedRealtime()>=leaseDeadline ||

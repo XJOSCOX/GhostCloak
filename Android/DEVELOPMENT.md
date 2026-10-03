@@ -426,3 +426,37 @@ by [REQUEST_CLOCK_CORRECTION.md](REQUEST_CLOCK_CORRECTION.md). Deploy the correc
 backend release, then update Android in place. Existing V006 remains current: no
 V007, DB migration or nginx changes. Never clear data/recreate identity or run
 expiry tests against production. No deployment is performed by this task.
+
+
+### Phase 1K.2A - non-destructive local-operation gating
+
+See [EMERGENCY_WIPE_DESIGN.md](EMERGENCY_WIPE_DESIGN.md#phase-1k2a--implemented-non-destructive-prerequisites)
+for `noBackupFilesDir/local-operation.v1`, canonical versioned states, startup
+ordering, corruption handling and the complete quiesce ownership table.
+This is infrastructure only: no emergency PIN, key/file deletion, account reset,
+logout or journal-clear API. No backend deployment or server/Android DB migration.
+
+A non-NONE or corrupt journal shows only generic secure-local-operation wording.
+Closing/reopening/rebooting stays fenced; missing DB/key artifacts do not authorize
+recovery, regeneration or destructive cleanup. Do not create another identity or
+clear app storage to investigate a maintenance state.
+
+The debug-source LocalOperationTestHooks is in-process instrumentation tooling,
+not a UI/exported component and not present in release. LocalOperationInfrastructureTest
+uses independent synthetic journal/store namespaces. LocalOperationStartupProbeTest
+and LocalOperationLiveProbeTest require explicit instrumentation arguments; ordinary
+suite runs skip those opt-in probes. The startup probe never arms/clears anything.
+The live probe leaves a non-sensitive simulation journal armed and preserves its
+synthetic staging file. Run both only on a verified disposable AVD, never a phone.
+
+Build JVM/tests/APKs with strict dependency verification and use an empty debug
+API origin (`-PghostcloakApiOrigin=`) for these offline tests. Do not use Gradle's
+aggregate connected task when real phones are attached: build `assembleDebugAndroidTest`
+and install/run through an explicit `adb -s <verified disposable serial>` instead.
+The live probe argument is `localOperationLiveProbe=true`; startup is
+`localOperationStartupProbe=true`. The harness force-stops before installing synthetic
+ARMED/QUIESCING/corrupt bytes, relaunches in a new process, and verifies Application,
+Activity and default Worker leave all sensitive owners uninitialized. It separately
+reboots the disposable AVD to exercise durable gating. No wipe-specific network
+request or server connection is involved. Restore only the harness-owned simulation
+journal after tests; never remove a real maintenance journal to bypass the gate.

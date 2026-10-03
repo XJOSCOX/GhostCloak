@@ -67,7 +67,7 @@ class StreamingBlobClient(origin: String, private val auth: HttpGhostClient,
                 // HttpURLConnection may reject retrying a streamed body before exposing its 401 response.
                 if(e is java.net.HttpRetryException && e.responseCode()==401) throw ApiFailure(401,"unauthorized")
                 throw ApiFailure(503,"attachment_unavailable")
-            } finally { watchdog.cancel(); connection.disconnect() }
+            } finally { connection.disconnect(); withContext(NonCancellable) { watchdog.cancelAndJoin() } }
         }
     }
     private fun result(connection: HttpURLConnection): BlobResult {

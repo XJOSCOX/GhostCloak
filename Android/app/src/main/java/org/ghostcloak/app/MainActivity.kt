@@ -1,6 +1,8 @@
 package org.ghostcloak.app
 
 import android.os.Bundle
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -19,16 +21,23 @@ import org.ghostcloak.app.ui.privacy.SensitiveClipboardProvider
 
 class MainActivity : FragmentActivity() {
     private var chatsRequest by mutableIntStateOf(0)
+    private val app get() = application as org.ghostcloak.app.application.GhostApplication
     private val runtime get() = (application as org.ghostcloak.app.application.GhostApplication).runtime
     private val appLock get() = (application as org.ghostcloak.app.application.GhostApplication).appLock
     override fun onStart() {
+        if (app.localOperationGate.blocked) { super.onStart(); return }
         appLock.start()
         // Startup callbacks must see current visibility; photo results additionally wait for RESUMED.
         (application as org.ghostcloak.app.application.GhostApplication).media.start()
         runtime.notificationActivityVisible(true)
         super.onStart()
     }
-    override fun onStop() { (application as org.ghostcloak.app.application.GhostApplication).media.stop(); appLock.stop(isChangingConfigurations); runtime.notificationActivityVisible(false); super.onStop() }
+    override fun onStop() {
+        if (!app.localOperationGate.blocked) {
+            app.media.stop(); appLock.stop(isChangingConfigurations); runtime.notificationActivityVisible(false)
+        }
+        super.onStop()
+    }
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -39,7 +48,7 @@ class MainActivity : FragmentActivity() {
         chatsRequest = savedInstanceState?.getInt("chats-request", 0) ?: 0
         // Global policy: protects the first frame, PIN enrollment, grace periods and locked screens.
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
-        lifecycleScope.launch { appLock.initialize() }
+        lifecycleScope.launch { if (!app.localOperationGate.blocked) app.localOperationGate.operation { appLock.initialize() } }
         if (savedInstanceState == null && intent.action == org.ghostcloak.app.application.AndroidLocalNotifications.OPEN_CHATS) chatsRequest++
         enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
@@ -55,7 +64,14 @@ class MainActivity : FragmentActivity() {
             }
             CompositionLocalProvider(LocalAppearance provides AppearanceControl(mode, appearance::select)) {
                 GhostCloakTheme(darkTheme = dark) {
-                    AppLockGate(appLock) {
+                    val operationState by app.localOperationGate.state.collectAsState()
+                    if (operationState != org.ghostcloak.app.access.LocalOperationState.NONE) {
+                        androidx.compose.material3.Surface(androidx.compose.ui.Modifier.fillMaxSize()) {
+                            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment=androidx.compose.ui.Alignment.Center) {
+                                androidx.compose.material3.Text("Ghost Cloak is completing a secure local operation.")
+                            }
+                        }
+                    } else AppLockGate(appLock) {
                         val model = remember { ViewModelProvider(this@MainActivity)[GhostViewModel::class.java] }
                         SensitiveClipboardProvider { GhostApp(model, chatsRequest) }
                     }

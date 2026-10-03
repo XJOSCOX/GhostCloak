@@ -38,16 +38,17 @@ enum class KeyProtection { HARDWARE, SOFTWARE }
 
 /** Construct off-main. One open store/engine per endpoint; caller closes when done. */
 class EncryptedEndpointStore private constructor(private val db: EndpointDatabase,
-    val protection: KeyProtection, private val databaseSecret: ByteArray) : EndpointRecords, AutoCloseable {
-    override fun <T> transaction(block: () -> T): T = try { db.runInTransaction(Callable { block() }) }
+    val protection: KeyProtection, private val databaseSecret: ByteArray, private val access: LocalStateAccess?) : EndpointRecords, AutoCloseable {
+    override fun <T> transaction(block: () -> T): T = try { guarded { db.runInTransaction(Callable { block() }) } }
         catch (e: android.database.sqlite.SQLiteException) { throw EndpointStorageFailure() }
-    override fun read(key: String) = db.records().read(key)
-    override fun write(key: String, value: ByteArray) {
+    private fun <T> guarded(block: () -> T): T = if (access != null) access.access(block) else block()
+    override fun read(key: String) = guarded { db.records().read(key) }
+    override fun write(key: String, value: ByteArray) = guarded {
         val copy = value.copyOf()
         try { db.records().put(SecretRecord(key, copy)) } finally { copy.fill(0) }
     }
-    override fun remove(key: String) = db.records().remove(key)
-    override fun keys(prefix: String) = db.records().keys().filter { it.startsWith(prefix) }
+    override fun remove(key: String) = guarded { db.records().remove(key) }
+    override fun keys(prefix: String) = guarded { db.records().keys().filter { it.startsWith(prefix) } }
     override fun close() { try { db.close() } finally { databaseSecret.fill(0) } }
 
     companion object {
@@ -56,12 +57,13 @@ class EncryptedEndpointStore private constructor(private val db: EndpointDatabas
         private fun legacyHardwareBacked(info: KeyInfo): Boolean = info.isInsideSecureHardware
 
         @Synchronized fun open(context: Context, endpoint: String): EncryptedEndpointStore {
-            return try { openInternal(context, endpoint) }
+            val gate = (context.applicationContext as? LocalStateAccessOwner)?.localStateAccess
+            return try { gate?.access { openInternal(context, endpoint, gate) } ?: openInternal(context, endpoint, null) }
             catch (e: java.security.GeneralSecurityException) { throw EndpointStorageFailure() }
             catch (e: java.io.IOException) { throw EndpointStorageFailure() }
             catch (e: android.database.sqlite.SQLiteException) { throw EndpointStorageFailure() }
         }
-        private fun openInternal(context: Context, endpoint: String): EncryptedEndpointStore {
+        private fun openInternal(context: Context, endpoint: String, gate: LocalStateAccess?): EncryptedEndpointStore {
             require(endpoint.matches(Regex("[a-z0-9-]{1,40}")))
             val alias = "ghost-cloak.db.$endpoint"
             val file = File(context.noBackupFilesDir, "$endpoint.wrapped")
@@ -128,7 +130,7 @@ class EncryptedEndpointStore private constructor(private val db: EndpointDatabas
                     .openHelperFactory(factory).build()
                 try { db.openHelper.writableDatabase; opened = true }
                 finally { if (!opened) db.close() }
-                return EncryptedEndpointStore(db, if (hardware) KeyProtection.HARDWARE else KeyProtection.SOFTWARE, secret)
+                return EncryptedEndpointStore(db, if (hardware) KeyProtection.HARDWARE else KeyProtection.SOFTWARE, secret, gate)
             } finally { if (!opened) secret.fill(0) }
         }
     }

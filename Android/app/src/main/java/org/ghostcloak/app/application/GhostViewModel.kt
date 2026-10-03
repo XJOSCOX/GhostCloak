@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +35,15 @@ class GhostViewModel internal constructor(application: Application, private val 
     val developerAvailable get() = runtime.developerAvailable
     @Volatile private var selected: String? = null
     private var workCount = 0
+    private val unregisterOwner = (application as? GhostApplication)?.registerUiOwner {
+        viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin()
+        selected=null; mutable.value=AppState()
+    }
+    override fun onCleared() {
+        unregisterOwner?.invoke()
+        selected=null; mutable.value=AppState()
+        super.onCleared()
+    }
     init {
         refresh()
         viewModelScope.launch { runtime.expiryRevision.collect { if (it > 0) run(quiet = true) } }
@@ -94,10 +104,11 @@ class GhostViewModel internal constructor(application: Application, private val 
     private val foregroundMutex = kotlinx.coroutines.sync.Mutex()
     suspend fun foregroundSync() {
         foregroundMutex.lock()
+        if (runtime.operationBlocked) { foregroundMutex.unlock(); return }
         runtime.foregroundStarted()
         polling.reset()
         try {
-            while (true) {
+            while (!runtime.operationBlocked) {
                 if (runtime.networkConfigured && !runtime.inDemo) {
                     val cycle = ++foregroundCycle
                     val started = System.nanoTime()

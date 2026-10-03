@@ -24,14 +24,28 @@ object BackgroundSyncSchedule {
 
     fun reconcile(context: Context, eligible: Boolean) {
         val manager = WorkManager.getInstance(context)
-        if (eligible) manager.enqueueUniquePeriodicWork(NAME, ExistingPeriodicWorkPolicy.KEEP, request())
+        val gate = (context.applicationContext as? GhostApplication)?.localOperationGate
+        if (gate?.blocked == true) return
+        if (eligible) {
+            if (gate != null) gate.access { manager.enqueueUniquePeriodicWork(NAME, ExistingPeriodicWorkPolicy.KEEP, request()) }
+            else manager.enqueueUniquePeriodicWork(NAME, ExistingPeriodicWorkPolicy.KEEP, request())
+        }
         else manager.cancelUniqueWork(NAME)
     }
+    suspend fun cancelForLocalOperation(context: Context) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val manager=WorkManager.getInstance(context)
+        manager.cancelUniqueWork(NAME).result.get()
+        check(manager.getWorkInfosForUniqueWork(NAME).get().none { !it.state.isFinished })
+    }
+
 }
 
-class BackgroundSyncWorker internal constructor(context: Context, params: WorkerParameters, internal val runtime: AppRuntime) : CoroutineWorker(context, params) {
-    constructor(context: Context, params: WorkerParameters) : this(context, params, (context.applicationContext as GhostApplication).runtime)
+class BackgroundSyncWorker private constructor(context: Context, params: WorkerParameters, runtimeFactory: () -> AppRuntime) : CoroutineWorker(context, params) {
+    internal val runtime by lazy(runtimeFactory)
+    internal constructor(context: Context, params: WorkerParameters, runtime: AppRuntime) : this(context, params, { runtime })
+    constructor(context: Context, params: WorkerParameters) : this(context, params, { (context.applicationContext as GhostApplication).runtime })
     override suspend fun doWork(): Result {
+        if ((applicationContext.applicationContext as? GhostApplication)?.localOperationGate?.blocked == true || runtime.operationBlocked) return Result.success()
         BackgroundDiagnostics.emit(BackgroundEvent.WORK_START)
         if (!applicationContext.getSystemService(UserManager::class.java).isUserUnlocked) {
             BackgroundDiagnostics.emit(BackgroundEvent.WORK_SKIP)

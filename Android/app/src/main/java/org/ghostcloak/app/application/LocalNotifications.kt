@@ -60,6 +60,11 @@ class AndroidLocalNotifications(private val context: Context) : LocalNotificatio
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
         .build()
     override fun post(quiet: Boolean): Boolean {
+        val gate=(context.applicationContext as? GhostApplication)?.localOperationGate
+        if (gate?.blocked == true) return false
+        return if(gate != null) gate.access { postUnlocked(quiet) } else postUnlocked(quiet)
+    }
+    private fun postUnlocked(quiet: Boolean): Boolean {
         if (!allowed()) return false
         return try { manager.notify(ID, build(quiet)); true } catch (_: SecurityException) { false }
     }

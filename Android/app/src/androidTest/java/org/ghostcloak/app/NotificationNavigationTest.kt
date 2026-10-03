@@ -31,10 +31,10 @@ class NotificationNavigationTest {
             compose.waitUntil(20000) { model.state.value.ready && !model.state.value.loading }
             compose.onNodeWithText("Chats").assertIsDisplayed()
             compose.onNodeWithContentDescription("Settings").performClick()
-            compose.onNodeWithText("Privacy").assertExists()
+            compose.onNodeWithText("Privacy & Security").assertExists()
             compose.runOnIdle { request.intValue++ }
             compose.onNodeWithText("Chats").assertIsDisplayed()
-            compose.onNodeWithText("Privacy").assertDoesNotExist()
+            compose.onNodeWithText("Privacy & Security").assertDoesNotExist()
         } finally { instrumentation.runOnMainSync { owner.clear() }; runtime.close() }
     }
 }

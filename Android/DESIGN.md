@@ -1,17 +1,23 @@
 # Messenger design
 
-## Emergency Wipe (Phase 1K.2A infrastructure only)
+## Emergency Wipe (Phase 1K.2B safe arming, debug only)
 
 [Emergency wipe design and inventory](EMERGENCY_WIPE_DESIGN.md) records the local
 key hierarchy, threat model and implemented non-destructive journal/startup fence
 and coordinated shutdown. Phase 1K.1 stopped before implementation; 1K.2A supplies
-those prerequisites without adding an emergency PIN or destructive action. Every
+those prerequisites; 1K.2B adds debug-only emergency PIN settings and dual verifier
+checks in the existing lock screen. Release arming is disabled until 1K.3. The
+version-2 encrypted app-access record uses independent PBKDF2-HMAC-SHA256 verifiers
+and rejects normal/emergency PIN equality in both directions. Durable ARMED
+commit/readback hands off to non-deleting quiesce, stopping at
+KEY_DESTRUCTION_PENDING. Failed commits never hand off or unlock. No SQL schema
+migration, backend deployment or destructive action is added. Every
 non-NONE/corrupt journal keeps normal content inaccessible. Biometric unlock,
 FLAG_SECURE and existing account/cryptographic identity remain unchanged.
 
 ## Blocked contacts (Phase 1J.2)
 
-Settings → Privacy → Blocked contacts uses the shared header, page spacing, theme
+Settings → Privacy & Security → Blocked contacts uses the shared header, page spacing, theme
 and existing app-lock private subtree. It reads only encrypted local Contact.blocked
 state and retained names, without directory refreshes or identifier fallbacks.
 Unblock requires confirmation, removes the committed entry immediately, preserves

@@ -60,8 +60,13 @@ import org.ghostcloak.app.ui.components.*
                     composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
                     composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard, {name->model.addNetwork(name) {nav.popBackStack()}},model::unblock,{nav.navigate("blocked")}) { text -> model.importCard(text) { nav.popBackStack() } } }
                     composable("profiles") { ProfilesScreen(state, model::rename) }
-                    composable("settings") { SettingsScreen(state, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork, { nav.navigate("app-lock") },model::requestPrivacy,{nav.navigate("blocked")}) }
+                    composable("settings") { SettingsScreen(state, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork, { nav.navigate("app-lock") },model::requestPrivacy,{nav.navigate("blocked")}, {nav.navigate("emergency-wipe")}) }
                     composable("blocked") {BlockedContactsScreen(state,{nav.popBackStack()},model::unblock)}
+                    composable("emergency-wipe") {
+                        org.ghostcloak.app.access.LocalAppLock.current?.let { controller ->
+                            org.ghostcloak.app.access.EmergencyWipeSettingsScreen(controller) { nav.popBackStack() }
+                        }
+                    }
                     composable("app-lock") {
                         org.ghostcloak.app.access.LocalAppLock.current?.let { controller ->
                             org.ghostcloak.app.access.AppLockSettingsScreen(controller) { nav.popBackStack() }

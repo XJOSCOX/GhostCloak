@@ -460,3 +460,57 @@ Activity and default Worker leave all sensitive owners uninitialized. It separat
 reboots the disposable AVD to exercise durable gating. No wipe-specific network
 request or server connection is involved. Restore only the harness-owned simulation
 journal after tests; never remove a real maintenance journal to bypass the gate.
+
+
+### Phase 1K.2B — emergency PIN preview, disposable AVD only
+
+See [the implemented PIN/arming design](EMERGENCY_WIPE_DESIGN.md#phase-1k2b--implemented-pin-enrollment-and-safe-arming)
+for storage, KDF, timing limits, failure semantics and release safety. Debug Settings →
+Privacy & Security → Emergency Wipe requires PIN app lock and fresh normal
+management authentication. Enrollment/change requires the irreversible acknowledgement;
+change also requires the current emergency PIN. Disable requires fresh normal
+authentication and confirmation. Enter only the normal PIN on any account-bearing
+phone. **Do not enroll/test emergency arming on physical phones.** Debug arming
+permanently blocks access in this slice and deletes nothing; no production reset
+or clear-journal workaround exists.
+
+Release `EMERGENCY_PIN_ARMING_ENABLED=false` hides settings and disables triggering;
+`EMERGENCY_WIPE_DESTRUCTIVE_READY=false` in both variants. No backend deployment,
+server DB migration, Android SQL migration, permission or network dependency is added.
+The binary app-access record moves to version 2 on writes; version 1 remains readable.
+Older format-1-only binaries cannot read version 2: downgrade fails closed. Preserve
+app data and do not bypass this by creating another identity or clearing storage.
+
+Validation commands (build APKs first; select the verified disposable serial explicitly):
+
+```powershell
+.\Android\gradlew.bat -p Android :test-support:test :attachments:test :app:testDebugUnitTest :app:testReleaseUnitTest --dependency-verification strict
+.\Android\gradlew.bat -p Android :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease -PghostcloakApiOrigin= --dependency-verification strict
+adb -s <verified-disposable-serial> install -r Android/app/build/outputs/apk/debug/app-debug.apk
+adb -s <verified-disposable-serial> install -r Android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb -s <verified-disposable-serial> shell am instrument -w org.ghostcloak.app.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+`EmergencyPinAndroidTest` arms only isolated synthetic fixture directories/gates,
+never the real Application gate. It verifies encrypted persistence/identity retention,
+Compose enrollment/confirmation, no private subtree on match, journal process
+recreation and independent write/file-sync/directory-sync/readback failures. Host
+`EmergencyPinTest` verifies exact/near matches, management grants/throttling,
+biometric separation, equality, change/disable, buffer clearing, record compatibility
+and equal primitive-call counts. This is not a hardware-erasure or constant-time claim.
+
+
+1K.2B validation (2026-10-03): 260 host tests passed — 135 test-support,
+4 attachment, 64 debug app and 57 release app (19 new emergency-PIN cases per
+variant). Full API 37 disposable-AVD suite reported 155 tests: 153 passed and
+2 opt-in probes skipped. The final lock-screen-only guard was additionally tested
+with the 5 emergency Android cases and the background/app-lock storage case
+(6 passed). The opt-in live probe uses synthetic in-memory enrollment credentials
+and proves the real Application automatically begins quiescing after exact match;
+it retains an injected first-close failure/retry check. Fresh-process startup
+probes cover KEY_DESTRUCTION_PENDING, ARMED and a truncated/CORRUPT journal without
+initializing sensitive owners. These 4 opt-in probes passed separately. The harness
+restored only its synthetic journal after force-stop; no DB/key/identity/history
+was cleared. Debug/release builds passed with strict dependency verification,
+both with normal debug staging defaults and the empty-origin disposable-test
+override. No physical-phone instrumentation or VPS access was performed.

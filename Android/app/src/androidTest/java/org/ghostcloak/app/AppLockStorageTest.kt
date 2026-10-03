@@ -33,6 +33,8 @@ class AppLockStorageTest {
             withContext(Dispatchers.Main) {
                 controller.start(); controller.initialize()
                 assertTrue(controller.configure(LockMode.PIN, LockTiming.IMMEDIATE, "824619".toCharArray(), "824619".toCharArray()))
+                assertTrue(controller.verifyPin("824619".toCharArray(), UnlockPurpose.MANAGE))
+                assertTrue(controller.configureEmergency("654321".toCharArray(), "654321".toCharArray(), charArrayOf(), true))
                 controller.stop()
             }
             a.use { a.send(it, identity.deviceId, "Synthetic locked delivery") }
@@ -44,6 +46,7 @@ class AppLockStorageTest {
             val bytes = b.readAppLock()!!
             assertFalse(bytes.toString(Charsets.ISO_8859_1).contains("824619"))
             assertEquals(LockMode.PIN, LockConfiguration.decode(bytes).mode)
+            assertNotNull(LockConfiguration.decode(bytes).emergency)
             b.close(); b = AppRuntime(context, "https://fixture.invalid", name, api, notifications = sink)
             controller = lock(b, scope)
             withContext(Dispatchers.Main) { controller.start(); controller.initialize() }

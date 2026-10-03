@@ -4,10 +4,14 @@ import android.content.Context
 import android.util.AtomicFile
 import java.io.File
 
+internal enum class JournalCheckpoint { WRITE, FILE_SYNC, DIRECTORY_SYNC, READBACK }
+
 /** Credential encrypted, excluded from backup, independent of DB/Keystore/account credentials.
  * AtomicFile syncs the output before rename; all use is serialized by LocalOperationGate.
  * NONE is represented only by absence, never accepted from a populated journal. */
-internal class DurableLocalOperationJournal(context: Context) : LocalOperationJournal {
+internal class DurableLocalOperationJournal(context: Context,
+    private val checkpoint: (JournalCheckpoint) -> Unit = {},
+) : LocalOperationJournal {
     private val file = File(context.noBackupFilesDir, "local-operation.v1")
     private val atomic = AtomicFile(file)
     override fun read(): LocalOperationState {
@@ -33,11 +37,17 @@ internal class DurableLocalOperationJournal(context: Context) : LocalOperationJo
         require(state !in setOf(LocalOperationState.NONE, LocalOperationState.CORRUPT))
         val output = atomic.startWrite()
         try {
+            checkpoint(JournalCheckpoint.WRITE)
             output.write(encode(state))
+            checkpoint(JournalCheckpoint.FILE_SYNC)
+            // AtomicFile can log a failed sync rather than throw on some Android versions.
+            // Explicit checked fsync must succeed before a transition can be authorized.
+            output.fd.sync()
             atomic.finishWrite(output)
             val directory = android.system.Os.open(file.parentFile!!.path,
                 android.system.OsConstants.O_RDONLY, 0)
-            try { android.system.Os.fsync(directory) } finally { android.system.Os.close(directory) }
+            try { checkpoint(JournalCheckpoint.DIRECTORY_SYNC); android.system.Os.fsync(directory) } finally { android.system.Os.close(directory) }
+            checkpoint(JournalCheckpoint.READBACK)
             check(read() == state)
         } catch (failure: Exception) { atomic.failWrite(output); throw failure }
     }

@@ -1,6 +1,6 @@
 # Phase 1K — emergency wipe design and infrastructure
 
-Current status: **1K.2A non-destructive infrastructure implemented; no emergency PIN or wipe engine**.
+Current status: **1K.2B debug-only emergency PIN enrollment and safe arming implemented; no destructive wipe engine**.
 
 Audit date: 2026-10-03. Baseline: `9b09739`.
 Historical status: **1K.1 audit/design checkpoint; stopped before implementation** under
@@ -8,6 +8,141 @@ section 39 of the complete Phase 1K request. Emergency wipe is NOT implemented o
 enabled. The initial truncated request has been superseded by the complete request.
 This document records findings and a proposed implementation, not an assertion
 that the current app already has safe reset semantics.
+
+## Phase 1K.2B — implemented PIN enrollment and safe arming
+
+Baseline: `9602111`. This is **not a usable destructive wipe release**. Settings →
+Privacy & Security → Emergency Wipe is visible only in debug. Its default is
+Disabled. The future-feature explanation is paired with an explicit preview
+warning: an exact emergency PIN permanently fences local access in this debug
+build and cannot restore access, **but deletes nothing**. Never test arming on an
+account-bearing phone. The only implemented progression is ARMED → QUIESCING →
+KEY_DESTRUCTION_PENDING. No reset/clear/completion UI was added.
+
+### Credential configuration and persistence
+
+The dedicated app-access configuration remains the encrypted key-value record
+`app/access-lock` in the existing SQLCipher `noBackupFilesDir/local.db` (synthetic
+instrumentation uses isolated endpoint names). Its existing DB secret is protected
+by `local.wrapped` and Android Keystore; emergency PINs do not gate database
+unwrapping. No additional plaintext preference/file is created. Binary configuration
+format **2** adds only an emergency-verifier presence/enabled boolean, fixed KDF
+iteration parameter, 16-byte salt and 32-byte verifier to the normal app-lock
+configuration. Decoder accepts legacy format 1 with emergency disabled, validates
+fixed costs/mode consistency/trailing bytes, and bounds the record to 192 bytes.
+SQLCipher/Room schema stays unchanged; this is record versioning, not a SQL migration.
+
+Enable/change/disable use the existing single encrypted-record transaction. This
+keeps normal and emergency configuration consistent atomically. Database files and
+wrapped keys remain in app-private no-backup storage, with existing manifest and
+cloud/device-transfer exclusions. Credentials never enter server state, logs,
+notifications, analytics, saved UI state or an exported component. No API request
+is invoked by enrollment, credential change/disable, verification or arming.
+Independent ordinary background sync can still run until the operation fence closes.
+
+Both PIN types use the audited platform PBKDF2-HMAC-SHA256 primitive: **600,000
+iterations**, independent CSPRNG **16-byte salts**, **256-bit derived verifiers**, and
+`MessageDigest.isEqual`. No Signal or attachment key participates. No new weak-PIN
+heuristic was invented: both require 6–64 ASCII digits and confirmation. Six digits
+have low entropy against an offline attacker despite the KDF; longer PINs are better.
+
+Mutable input arrays and PBEKeySpec password copies are cleared in finally blocks;
+derived candidate bytes are zeroed after comparison. Change/disable drops and zeroes
+the previous in-memory emergency verifier only after successful record commit.
+Compose input Strings are transient `remember` state (never saveable/ViewModel);
+submit, background and disposal clear references. JVM/IME String copies cannot be
+promised erased. FLAG_SECURE stays in force. Removing an encrypted record field is
+not a claim of physical SQLite/WAL/flash erasure; any old pages remain DB-encrypted.
+
+### Management and equality safety
+
+Enrollment requires PIN-capable app lock, an unlocked/visible UI, fresh normal
+management authentication (the existing 60-second generation-bound grant), explicit
+“I understand this cannot be undone” acknowledgement, matching valid new PINs, and
+inequality with the normal verifier. Change additionally verifies the current
+emergency PIN with the shared persisted attempt/cooldown budget. Disable requires
+fresh normal management authentication and an explicit confirmation dialog, then
+atomically removes the verifier without touching identity, messages or attachments.
+An emergency PIN entered for MANAGE/ENROLL never grants access or arms anything.
+Biometric management authentication is the existing configured strong biometric,
+not device credential recovery or a new identity provider.
+
+Changing the normal PIN checks the new candidate against the enabled emergency
+verifier and rejects equality with “Choose a different PIN.” Conversely emergency
+enrollment/change rejects a normal-PIN match. Removing the normal PIN unlock method
+(OFF or biometric-only mode) requires disabling Emergency Wipe first, so the feature
+cannot become inaccessible or share a credential accidentally. New normal PIN
+configuration preserves the emergency verifier. Backgrounding invalidates management
+grants; slow enrollment/change rechecks the generation and grant before commit.
+
+### Dual verification and timing limits
+
+After reserving the existing durable shared failed-attempt budget, an enabled
+configuration checks the normal verifier **and then the emergency verifier**, always
+using two equivalent-cost primitives for every valid-format attempt. Normal success
+never skips the second check. Only after both comparisons does the controller select
+normal unlock, exact emergency arming (UNLOCK purpose only), or failure. Format-invalid
+inputs and cooldowns skip both KDFs. Biometric success follows only the normal grant
+path and cannot arm. No prefix/fuzzy/attempt-threshold/timeout trigger exists.
+
+This removes a gross *normal success versus emergency verification* cost split;
+it is **not constant-time Android execution**. Scheduling, JIT/provider behavior,
+persistence and post-authentication actions differ. Enabled configurations perform
+two KDFs versus one when disabled, so a local actor able to benchmark sufficiently
+can potentially infer enrollment; an authenticated user can already see it in
+Settings. Do not claim the existence of a wipe PIN is unobservable, or that remote
+attackers can measure this local-only path. PIN entropy/throttling still matter.
+Tests count primitive invocations for wrong/normal/emergency input rather than
+asserting flaky wall-clock thresholds or weakening the KDF for speed.
+
+### Durable arming, failure and restart
+
+Exact emergency success first invalidates normal access/grants and never calls
+normal `grant`. It then writes NONE → ARMED through the existing gate on IO.
+The gate closes before writing. AtomicFile write plus explicit checked file fsync,
+rename, parent-directory fsync and canonical readback must succeed before publishing
+ARMED. The independent recovery scope observes **only known committed non-NONE
+states**, not the provisional/failure CORRUPT state. This avoids a write-failure
+handoff and avoids draining the same coroutine/mutex that performed verification.
+The coordinator cancels/joins existing owners and stops at KEY_DESTRUCTION_PENDING.
+The Activity root renders generic maintenance text, never the private route.
+
+On write/file-sync/directory-sync/readback failure, current-process state stays
+CORRUPT/unavailable, no normal unlock and **no coordinator handoff**. No account/key
+reset is attempted. If a late failure left a canonical ARMED file, a fresh process
+can validate that surviving journal and resume; if an uncommitted first write leaves
+no artifact, it is not durable arming, and restart still uses normal app-lock policy.
+Unreadable/partial/unknown files remain fenced without invented authorization.
+AtomicFile/device fsync cannot guarantee behavior of broken hardware.
+
+Process death after committed ARMED cannot reopen runtime/store/media/lock owners:
+startup reads the journal first, resumes non-deleting shutdown, and remains fenced.
+Biometric success is never cached across process death. There is no timer/cancel
+button that returns an armed journal to NONE.
+
+### Release safety, compatibility and validation
+
+`BuildConfig.EMERGENCY_PIN_ARMING_ENABLED` is **true only in debug, false in release**.
+`EMERGENCY_WIPE_DESTRUCTIVE_READY` is **false in both variants**. Release has no
+settings entry and ignores an emergency match as an unlock credential, even if a
+same-package debug upgrade previously enrolled it. The normal PIN remains usable.
+Release retains configuration/equality protection; it does not erase enrollment.
+A durable pre-existing armed journal still gates release startup; never transfer
+an armed disposable-debug install into normal use. No property/intent/exported
+component enables release arming. Phase 1K.3 must separately review release enablement.
+
+Format-2 writes cannot be read by older format-1-only app-lock code; downgrade to
+those binaries fails closed. Do not clear data or silently downgrade config to
+work around that. No backend deployment, server migration or Android SQL migration
+is required. Destructive action, key/data deletion, account replacement, server
+wipe and identity recovery are still absent.
+
+Validation uses equivalent-primitive host tests in debug/release, isolated encrypted
+store/Compose/journal tests on the disposable AVD, and existing foreground/background,
+renewal, notifications, local deletion, attachments and app-lock tests. Fault
+injection covers write, file fsync, directory fsync and readback independently.
+Existing startup probes check real-process journal recovery separately. Results
+and exact commands are recorded in DEVELOPMENT.md.
 
 ## Phase 1K.2A — implemented non-destructive prerequisites
 
@@ -36,7 +171,7 @@ NONE, including COMPLETE, blocks normal access.** Corruption does not grant wipe
 authorization and is never converted to a destruction checkpoint.
 
 Writes use Android AtomicFile startWrite/finishWrite/failWrite, followed by an
-explicit parent-directory Os.fsync and canonical readback before success. One
+explicit checked output FileDescriptor.sync, parent-directory Os.fsync and canonical readback before success. One
 process-wide monitor serializes transitions, opens and synchronous record/key
 access. Android AtomicFile provides no locking itself. The in-memory fence closes
 before writing; any write failure keeps this process fail-closed. A successful
@@ -54,8 +189,8 @@ primitive against a rooted actor who can alter app files.
 ### Startup, operation gates and restart
 
 `GhostApplication.onCreate` reads the gate before starting app-lock collection,
-runtime initialization or expiry work. With a non-NONE journal it starts only the
-local recovery coordinator. It never initializes runtime/store/engine/media/lock
+runtime initialization or expiry work. With a known non-NONE journal it starts only the
+local recovery coordinator; CORRUPT remains fenced without coordinator authorization. It never initializes runtime/store/engine/media/lock
 owners just to shut them down. MainActivity retains FLAG_SECURE but skips lock and
 media initialization and renders only generic maintenance text. The private Compose
 subtree is absent, including notification-requested navigation. ViewModels are not
@@ -341,23 +476,26 @@ in flight at activation may have sent a request; this cannot be undone. The
 fence prevents subsequent calls and stale completion/publication. No emergency
 request is sent to the server.
 
-## Credential construction and false-activation protection
+## Credential construction and false-activation protection (1K.1 proposal, updated for 1K.2B)
 
 Current normal PIN: 6–64 numeric characters; PBKDF2-HMAC-SHA256, 600,000 iterations,
 16-byte random salt, 256-bit verifier, MessageDigest.isEqual comparison. Failed
 attempt reservation is persisted before KDF execution; after three failures the
 monotonic cooldown increases from 5 seconds to at most 5 minutes and is restored
-across boot. Configuration version 1 has a strict 128-byte decode limit.
+across boot. Historical configuration version 1 has a strict 128-byte decode limit;
+1K.2B accepts it and writes bounded version 2 (192 bytes maximum).
 
-Proposed emergency verifier reuses PBKDF2-HMAC-SHA256 with the same work factor,
-fresh random salt and an explicit emergency-specific salt domain. Do not alter
-the legacy normal verifier derivation. Never persist a reversible/plaintext PIN.
-Use a bounded new lock configuration version; read old version 1 as emergency Off.
+Implemented emergency verifier reuses PBKDF2-HMAC-SHA256 with the same work factor
+and an independent fresh random salt. The proposed extra salt-domain prefix was
+not needed: these independent verifiers are never used as encryption keys. Legacy
+normal derivation stays unchanged. Never persist a reversible/plaintext PIN.
+Version 2 reads old version 1 as emergency Off.
 Invalid/truncated/unknown config fails closed, never activates a reset. Schema
 version 1 SQLCipher key-value storage can hold this without a Room migration.
 
-Require matching confirmations, at least six digits, reject repeated single
-digits and simple ascending/descending sequences. Compare the proposed emergency
+Require matching confirmations and at least six digits. The earlier proposed
+sequence/repeated-digit heuristic is superseded: no vetted existing weak-PIN checker
+exists, so 1K.2B does not invent one. Compare the proposed emergency
 PIN against the current normal verifier, and proposed normal PIN against the
 current emergency verifier, so later normal-PIN changes cannot create equality.
 Reuse authenticated sensitive-settings management grants for enable/change/disable.
@@ -376,7 +514,8 @@ the ordinary PIN surface can be reused without a special visible emergency butto
 Biometric-only/OFF compatibility needs an explicit policy: adding a PIN surface
 only when emergency is enabled would reveal feature configuration. Never silently
 discard emergency configuration when changing normal lock modes/timing. This
-decision must be resolved in the complete implementation instructions.
+decision is resolved in 1K.2B: disabling PIN app lock requires disabling Emergency
+Wipe first. Biometric remains a separate normal-unlock path.
 
 ## Recovery, backups and limits
 
@@ -448,6 +587,7 @@ AppRuntime.kt, GhostApplication.kt, BackgroundSync.kt, LockConfiguration.kt,
 AppLockController.kt, LockScreens.kt, DeveloperMode.kt, AttachmentStore.kt,
 AttachmentPresentation.kt, AttachmentViewerProvider.kt and Android backup XML.
 
+- [Android AtomicFile source](https://github.com/aosp-mirror/platform_frameworks_base/blob/master/core/java/android/util/AtomicFile.java)
 - [Android Keystore](https://developer.android.com/privacy-and-security/keystore)
 - [Android backup overview](https://developer.android.com/identity/data/backup)
 - [WorkManager cancellation](https://developer.android.com/develop/background-work/background-tasks/persistent/how-to/manage-work)

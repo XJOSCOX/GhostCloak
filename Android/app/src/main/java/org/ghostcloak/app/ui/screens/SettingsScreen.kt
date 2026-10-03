@@ -12,12 +12,12 @@ import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 
 @Composable fun SettingsScreen(state: AppState, developerAvailable: Boolean,
-    demo: () -> Unit, leave: () -> Unit, connect:()->Unit={}, sync:()->Unit={}, publish:()->Unit={}, logout:()->Unit={}, appLock:()->Unit={}, requestPrivacy:(Boolean)->Unit={}, blockedContacts:()->Unit={}) {
+    demo: () -> Unit, leave: () -> Unit, connect:()->Unit={}, sync:()->Unit={}, publish:()->Unit={}, logout:()->Unit={}, appLock:()->Unit={}, requestPrivacy:(Boolean)->Unit={}, blockedContacts:()->Unit={}, emergencyWipe:()->Unit={}) {
     var advanced by remember { mutableStateOf(false) }
     PageContent("Settings") {
         ErrorNotice(state.error, important = state.errorImportant)
         SettingsGroup("Appearance") { AppearanceSelector() }
-        SettingsGroup("Privacy") {
+        SettingsGroup("Privacy & Security") {
             OutlinedButton(onClick=blockedContacts,enabled=!state.loading) {Text("Blocked contacts")}
             Text("Message request privacy",style=MaterialTheme.typography.titleMedium)
             Text("Require confirmation hides message content and attachments until you accept the request.")
@@ -28,7 +28,12 @@ import org.ghostcloak.app.ui.components.*
             Text("Changes apply to future requests. Existing hidden requests stay hidden.",style=MaterialTheme.typography.bodySmall)
             DetailRow(Glyph.SHIELD,"Encrypted on this device","Your conversations and keys are kept in encrypted local storage.")
             Text("Screenshots and task previews are protected. Optional app lock controls access to your screens; background delivery continues.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-            if (org.ghostcloak.app.access.LocalAppLock.current != null) OutlinedButton(onClick = appLock) { Text("App lock") }
+            if (org.ghostcloak.app.access.LocalAppLock.current != null) {
+                OutlinedButton(onClick = appLock) { Text("App lock") }
+                if (org.ghostcloak.app.BuildConfig.EMERGENCY_PIN_ARMING_ENABLED) {
+                    OutlinedButton(onClick=emergencyWipe) { Text("Emergency Wipe") }
+                }
+            }
         }
         if (!state.demo && state.networkConfigured) NotificationSettings()
         if(!state.demo) SettingsGroup("Connection") {

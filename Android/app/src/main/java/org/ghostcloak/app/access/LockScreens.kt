@@ -69,13 +69,13 @@ val LocalAppLock = staticCompositionLocalOf<AppLockController?> { null }
     }
 }
 
-@Composable private fun PinInput(value: String, label: String, enabled: Boolean, modifier: Modifier = Modifier, changed: (String) -> Unit) {
+@Composable internal fun PinInput(value: String, label: String, enabled: Boolean, modifier: Modifier = Modifier, changed: (String) -> Unit) {
     OutlinedTextField(value, onValueChange = { if (it.length <= 64 && it.all { c -> c in '0'..'9' }) changed(it) },
         modifier = modifier.fillMaxWidth(), label = { Text(label) }, enabled = enabled, singleLine = true,
         visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword))
 }
 
-@Composable private fun UnlockControls(controller: AppLockController, purpose: UnlockPurpose) {
+@Composable internal fun UnlockControls(controller: AppLockController, purpose: UnlockPurpose) {
     val state by controller.state.collectAsState()
     val scope = rememberCoroutineScope()
     var pin by remember { mutableStateOf("") } // Deliberately never rememberSaveable / ViewModel / clipboard.
@@ -179,7 +179,12 @@ private fun Context.fragmentActivity(): FragmentActivity? {
     var timing by remember { mutableStateOf(state.timing) }
     var pin by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf("") }
-    DisposableEffect(Unit) { onDispose { pin = ""; confirm = ""; controller.endManagement() } }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if(event == Lifecycle.Event.ON_STOP) { pin=""; confirm="" } }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer); pin=""; confirm=""; controller.endManagement() }
+    }
     PageContent("App lock", back = back) {
         Text("Local app-access lock. Background delivery continues while locked. Screenshots and recent-app previews are protected throughout Ghost Cloak.", style = MaterialTheme.typography.bodyMedium)
         if (!state.manageGranted) {

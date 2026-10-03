@@ -39,8 +39,10 @@ class LocalOperationGate internal constructor(private val journal: LocalOperatio
         ensureActive(); block()
     }
 
-    // Only a debug-source hook calls arm in this phase. No production caller or UI exists.
-    internal fun armForSimulation() = synchronized(monitor) {
+    // Credential caller is build-gated; the debug simulator uses the same durable transition.
+    internal fun armForSimulation() = armAfterCredential()
+
+    internal fun armAfterCredential() = synchronized(monitor) {
         if (mutable.value == LocalOperationState.NONE) persist(LocalOperationState.ARMED)
     }
 

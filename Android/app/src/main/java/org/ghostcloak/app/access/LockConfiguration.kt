@@ -41,25 +41,35 @@ internal data class LockConfiguration(
     val mode: LockMode = LockMode.OFF, val timing: LockTiming = LockTiming.IMMEDIATE,
     val verifier: PinVerifier? = null, val failures: Int = 0,
     val cooldownUntil: Long = 0, val cooldownDuration: Long = 0, val boot: Int = 0,
+    val emergency: PinVerifier? = null,
 ) {
     override fun toString() = "LockConfiguration(redacted)"
     fun encode(): ByteArray = ByteArrayOutputStream().also { buffer ->
         DataOutputStream(buffer).use { out ->
-            out.writeInt(1); out.writeInt(mode.ordinal); out.writeInt(timing.ordinal)
+            out.writeInt(2); out.writeInt(mode.ordinal); out.writeInt(timing.ordinal)
             out.writeBoolean(verifier != null)
             verifier?.let { out.writeInt(it.iterations); out.write(it.salt); out.write(it.value) }
             out.writeInt(failures); out.writeLong(cooldownUntil); out.writeLong(cooldownDuration); out.writeInt(boot)
+            out.writeBoolean(emergency != null)
+            emergency?.let { out.writeInt(it.iterations); out.write(it.salt); out.write(it.value) }
         }
     }.toByteArray()
     companion object {
         fun decode(bytes: ByteArray): LockConfiguration = DataInputStream(ByteArrayInputStream(bytes)).use { input ->
-            require(bytes.size <= 128 && input.readInt() == 1)
+            require(bytes.size <= 192)
+            val version = input.readInt(); require(version in 1..2)
             val mode = LockMode.entries[input.readInt()]; val timing = LockTiming.entries[input.readInt()]
             val pin = if (input.readBoolean()) {
                 val iterations = input.readInt(); require(iterations == PinVerifier.ITERATIONS)
                 PinVerifier(ByteArray(16).also(input::readFully), ByteArray(32).also(input::readFully), iterations)
             } else null
-            val config = LockConfiguration(mode, timing, pin, input.readInt(), input.readLong(), input.readLong(), input.readInt())
+            val failures = input.readInt(); val until = input.readLong(); val duration = input.readLong(); val boot = input.readInt()
+            val emergency = if (version == 2 && input.readBoolean()) {
+                val cost = input.readInt(); require(cost == PinVerifier.ITERATIONS)
+                PinVerifier(ByteArray(16).also(input::readFully), ByteArray(32).also(input::readFully), cost)
+            } else null
+            val config = LockConfiguration(mode, timing, pin, failures, until, duration, boot, emergency)
+            require(emergency == null || mode.pin)
             require(mode.pin == (pin != null) && config.failures in 0..20 && config.cooldownUntil >= 0 &&
                 config.cooldownDuration in 0..300_000 && input.available() == 0)
             config

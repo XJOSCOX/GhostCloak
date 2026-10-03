@@ -41,7 +41,8 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
             override suspend fun write(bytes: ByteArray) = runtime.writeAppLock(bytes)
         }, lockScope,
             android.os.SystemClock::elapsedRealtime,
-            { android.provider.Settings.Global.getInt(contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0) })
+            { android.provider.Settings.Global.getInt(contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0) },
+            armEmergency = { localOperationGate.armAfterCredential() })
     }
     val appLock: org.ghostcloak.app.access.AppLockController get() = localOperationGate.access { lockOwner.value }
     private val runtimeOwner: Lazy<AppRuntime> = lazy { AppRuntime(this, backgroundEligibility = { BackgroundSyncSchedule.reconcile(this, it) },
@@ -54,8 +55,11 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
     private val backgroundScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
     override fun onCreate() {
         super.onCreate()
-        if (localOperationGate.blocked) { resumeLocalOperation(); return }
-        recoveryScope.launch { localOperationGate.state.collect { if (it != org.ghostcloak.app.access.LocalOperationState.NONE) resumeLocalOperation() } }
+        if (localOperationGate.blocked) {
+            if (localOperationGate.state.value != org.ghostcloak.app.access.LocalOperationState.CORRUPT) resumeLocalOperation()
+            return
+        }
+        recoveryScope.launch { localOperationGate.state.collect { if (it != org.ghostcloak.app.access.LocalOperationState.NONE && it != org.ghostcloak.app.access.LocalOperationState.CORRUPT) resumeLocalOperation() } }
         lifecycleScope.launch {
             appLock.state.collect { if (!it.canShowContent) {
                 if (!localOperationGate.blocked) runtime.revokeAttachmentAccess()

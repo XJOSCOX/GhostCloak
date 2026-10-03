@@ -17,12 +17,17 @@ data class LockViewState(
     val busy: Boolean = false, val unavailable: Boolean = false, val message: String? = null,
     val manageGranted: Boolean = false, val biometricConfirmed: Boolean = false,
     val visible: Boolean = false, val presentation: Long = 0,
+    val emergencyEnabled: Boolean = false,
 )
 
 /** Process-owned; UI/lifecycle calls run on Main. Slow KDF/records operations run off Main. */
 class AppLockController internal constructor(
     private val persistence: LockPersistence, private val scope: CoroutineScope,
     private val now: () -> Long, private val boot: () -> Int,
+    internal val emergencyArmingEnabled: Boolean = org.ghostcloak.app.BuildConfig.EMERGENCY_PIN_ARMING_ENABLED,
+    private val armEmergency: (() -> Unit)? = null,
+    // Test seam counts equivalent primitive invocations, not wall-clock timing.
+    private val checkPin: (PinVerifier, CharArray) -> Boolean = { verifier, pin -> verifier.matches(pin) },
 ) {
     private val session = LockSession(now)
     private var config = LockConfiguration()
@@ -41,7 +46,7 @@ class AppLockController internal constructor(
         now() < grant.second && session.canShow
     private fun update(message: String? = mutable.value.message) {
         mutable.value = mutable.value.copy(ready = initialized, canShowContent = initialized && !mutable.value.unavailable && session.canShow,
-            mode = config.mode, timing = config.timing, message = message, visible = session.started, presentation = presentation,
+            mode = config.mode, timing = config.timing, emergencyEnabled = config.emergency != null, message = message, visible = session.started, presentation = presentation,
             manageGranted = config.mode == LockMode.OFF || valid(management), biometricConfirmed = valid(enrollment))
     }
     internal suspend fun quiesce() {
@@ -107,8 +112,21 @@ class AppLockController internal constructor(
                     val wait = LockConfiguration.delayAfter(failures)
                     config = config.copy(failures = failures, cooldownUntil = now() + wait, cooldownDuration = wait, boot = boot())
                     persist(config)
-                    val matches = withContext(Dispatchers.Default) { config.verifier!!.matches(pin) }
-                    if (matches) {
+                    val (matches, emergencyMatches) = withContext(Dispatchers.Default) {
+                        // No normal-success early return: enabled dual credentials always cost two KDFs.
+                        val normal = checkPin(config.verifier!!, pin)
+                        val emergency = config.emergency?.let { checkPin(it, pin) } ?: false
+                        normal to emergency
+                    }
+                    if (session.generation != ticket || !session.started) return@withLock false
+                    if (emergencyMatches && purpose == UnlockPurpose.UNLOCK && session.locked && emergencyArmingEnabled) {
+                        // Never grant normal access, even if storage/arming fails. No further records
+                        // operation after arming closes the runtime fence. Handoff is a durable-state
+                        // observer on the independent recovery scope, not this lock mutex/scope.
+                        failClosed()
+                        withContext(Dispatchers.IO) { checkNotNull(armEmergency).invoke() }
+                        false
+                    } else if (matches) {
                         config = config.copy(failures = 0, cooldownUntil = 0, cooldownDuration = 0); persist(config)
                         val accepted = grant(purpose, ticket); update(null); accepted
                     } else { update("Incorrect PIN. ${if (wait > 0) "Try again in ${wait / 1000} seconds." else "Try again."}"); false }
@@ -150,6 +168,57 @@ class AppLockController internal constructor(
         catch (_: Exception) { failClosed(); false }
     }
     fun endManagement() { management = null; enrollment = null; prompt = null; update(null) }
+    /** Recent normal MANAGE authentication is mandatory; an emergency match here never arms. */
+    suspend fun configureEmergency(pin: CharArray, confirmation: CharArray, current: CharArray, acknowledged: Boolean): Boolean {
+        try {
+            return operations.withLock {
+                if (!emergencyArmingEnabled || !initialized || mutable.value.unavailable || !config.mode.pin || !valid(management)) {
+                    update("Confirm your current unlock method first. PIN app lock is required."); return@withLock false
+                }
+                if (!acknowledged) { update("Acknowledge that this cannot be undone."); return@withLock false }
+                if (!PinVerifier.valid(pin) || !pin.contentEquals(confirmation)) {
+                    update("Use matching PINs with 6–64 digits."); return@withLock false
+                }
+                val ticket = session.generation
+                mutable.value = mutable.value.copy(busy = true)
+                try {
+                    // Change requires the current emergency credential too. Persist the shared
+                    // throttle reservation first; settings cannot become an unthrottled oracle.
+                    val failures = (config.failures + 1).coerceAtMost(20)
+                    if (config.cooldownUntil > now()) { update("Try again later."); return@withLock false }
+                    val wait = LockConfiguration.delayAfter(failures)
+                    config = config.copy(failures=failures, cooldownUntil=now()+wait, cooldownDuration=wait, boot=boot())
+                    persist(config)
+                    val next = withContext(Dispatchers.Default) {
+                        val equal = checkPin(config.verifier!!, pin)
+                        val currentOk = config.emergency?.let { checkPin(it, current) } ?: true
+                        if (equal || !currentOk) null else PinVerifier.create(pin)
+                    }
+                    if (next == null) { update("Choose a different PIN or confirm the current PIN."); return@withLock false }
+                    if (session.generation != ticket || !valid(management)) return@withLock false
+                    val value = config.copy(emergency=next, failures=0, cooldownUntil=0, cooldownDuration=0)
+                    persist(value)
+                    val previous=config.emergency; config=value
+                    previous?.salt?.fill(0); previous?.value?.fill(0)
+                    management=null; enrollment=null; update(null); true
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { failClosed(); false }
+                finally { mutable.value=mutable.value.copy(busy=false) }
+            }
+        } finally { pin.fill('\u0000'); confirmation.fill('\u0000'); current.fill('\u0000') }
+    }
+    /** Recent configured normal authentication plus explicit confirmation; no credential recovery. */
+    suspend fun disableEmergency(confirmed: Boolean): Boolean = operations.withLock {
+        if (!emergencyArmingEnabled || !initialized || mutable.value.unavailable || !valid(management) || !confirmed) return@withLock false
+        try {
+            val next=config.copy(emergency=null)
+            persist(next)
+            val previous=config.emergency; config=next
+            previous?.salt?.fill(0); previous?.value?.fill(0)
+            management=null; enrollment=null; update(null); true
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { failClosed(); false }
+    }
     suspend fun configure(mode: LockMode, timing: LockTiming, pin: CharArray, confirmation: CharArray): Boolean {
         try {
             return operations.withLock {
@@ -163,9 +232,12 @@ class AppLockController internal constructor(
                 val ticket = session.generation
                 mutable.value = mutable.value.copy(busy = true)
                 try {
+                    if (config.emergency != null && (!mode.pin || withContext(Dispatchers.Default) { checkPin(config.emergency!!, pin) })) {
+                        update(if (!mode.pin) "Disable Emergency Wipe before removing PIN app lock." else "Choose a different PIN."); return@withLock false
+                    }
                     val verifier = if (mode.pin) withContext(Dispatchers.Default) { PinVerifier.create(pin) } else null
                     if (!session.canShow || session.generation != ticket || (config.mode != LockMode.OFF && !valid(management)) || (mode.biometric && !valid(enrollment))) return@withLock false
-                    val next = LockConfiguration(mode, timing, verifier)
+                    val next = LockConfiguration(mode, timing, verifier, emergency = config.emergency)
                     persist(next); config = next
                     session.configure(mode, timing, authenticated = session.started && session.generation == ticket)
                     management = null; enrollment = null; update(null); true

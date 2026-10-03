@@ -403,6 +403,20 @@ Physical two-phone retest (user-run, no physical instrumentation):
 
 [Request privacy and retention](REQUEST_PRIVACY_DESIGN.md) requires the matching backend and existing migrations BEFORE updated Android clients. Default request content is hidden until acceptance; pending requests expire at 72 hours from recipient secure commit, and general queued envelopes expire seven days from server enqueue. See the design for clock/legacy limitations, retained receipt capacity and physical retest. No remote rollout is performed automatically. Android tests use only a dedicated disposable AVD, never account-bearing phones or emulators.
 
+### Phase 1K.1 — emergency wipe audit checkpoint
+
+See [EMERGENCY_WIPE_DESIGN.md](EMERGENCY_WIPE_DESIGN.md). No wipe PIN or destructive
+reset implementation exists in this checkpoint. Section 39's startup/interrupted
+wipe safety gate stops implementation until the documented journal/operation gate
+and owner-disposal prerequisites are implemented and validated. Missing stores,
+PIN failures and normal updates must never be treated as a wipe command.
+
+No backend deployment, server DB migration or Android DB migration is required for
+this documentation checkpoint. Proposed verifier versioning uses encrypted
+key-value configuration, without changing the SQLCipher Room schema. No server
+wipe or account-recovery weakening is proposed. Any later destructive validation
+must use a disposable AVD only; do not test wipe on either real-account phone.
+
 Reject/expired request relationship correction: see [RELATIONSHIP_REGRESSION.md](RELATIONSHIP_REGRESSION.md) for retained security records, explicit Add, replay/Block behavior and the four physical retests. This correction requires an Android update only; no backend deployment or migration.
 
 Blocked envelope ACK hardening: [BLOCKED_ENVELOPE_PRIVACY.md](BLOCKED_ENVELOPE_PRIVACY.md). Android update only; no backend deployment or database migration. Validate with JVM tests and a disposable AVD; do not run instrumentation on physical accounts.

@@ -1,5 +1,15 @@
 # Messenger design
 
+## Emergency Wipe (Phase 1K.1 audit only)
+
+[Emergency wipe design and inventory](EMERGENCY_WIPE_DESIGN.md) records the local
+key hierarchy, reset state machine and threat model. Implementation is stopped at
+the requested safety gate: current startup has no durable interrupted-reset guard
+and live storage/media/demo owners need coordinated revocation. No emergency PIN
+or destruction action is enabled. The proposed feature is local/offline, keeps
+biometric unlock ordinary and preserves FLAG_SECURE, with cryptographic erasure
+claims limited to Ghost Cloak-controlled state.
+
 ## Blocked contacts (Phase 1J.2)
 
 Settings → Privacy → Blocked contacts uses the shared header, page spacing, theme

@@ -83,11 +83,11 @@ class LocalDestructionTest {
         repeat(2) {engine.key=false; engine.files=false; gate.armAfterCredential(); c.resume()}
         assertEquals(2,stops); assertEquals(2,engine.deletes)
     }
-    @Test fun noEngineMeansExistingNonDestructivePreview()=runBlocking {
+    @Test fun missingEngineKeepsArmedOperationBlockedWithoutDestruction()=runBlocking {
         val j=Journal(); val gate=LocalOperationGate(j); gate.armAfterCredential()
-        LocalOperationCoordinator(gate) {}.resume(); assertTrue(gate.blocked)
+        val coordinator=LocalOperationCoordinator(gate) {}
+        coordinator.resume(); coordinator.resume(); assertTrue(gate.blocked)
         assertEquals(LocalOperationState.KEY_DESTRUCTION_PENDING,j.value)
-        assertFalse(org.ghostcloak.app.BuildConfig.EMERGENCY_WIPE_DESTRUCTIVE_READY)
     }
     @Test fun aliasOwnershipIsExactAndDoesNotMatchOtherNamespaces() {
         assertTrue(AndroidLocalDestruction.ownedAlias("ghost-cloak.db.local"))

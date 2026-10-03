@@ -31,9 +31,17 @@ class KeyboardInsetsTest {
         for (bar in listOf(0.dp, 24.dp, 48.dp)) {
             compose.runOnIdle { navigation.value = bar; keyboard.value = 300.dp }
             val window = compose.onNodeWithTag("window").getUnclippedBoundsInRoot()
-            assertEquals(window.bottom - 300.dp, compose.onNodeWithTag("composer-area").getUnclippedBoundsInRoot().bottom)
+            assertEquals(
+                (window.bottom - 300.dp).value,
+                compose.onNodeWithTag("composer-area").getUnclippedBoundsInRoot().bottom.value,
+                1f, // dp-to-pixel rounding differs on densities such as 420 dpi.
+            )
             compose.runOnIdle { keyboard.value = 0.dp }
-            assertEquals(window.bottom - bar, compose.onNodeWithTag("composer-area").getUnclippedBoundsInRoot().bottom)
+            assertEquals(
+                (window.bottom - bar).value,
+                compose.onNodeWithTag("composer-area").getUnclippedBoundsInRoot().bottom.value,
+                1f,
+            )
         }
     }
 }

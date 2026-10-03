@@ -658,3 +658,13 @@ restore still untested. See the full
 [decision and gate table](EMERGENCY_WIPE_DESIGN.md#phase-1k4a-contract-correction--activation-withheld-2026-10-03).
 No VPS access, deployment or database migration. Unrelated launcher/toolchain
 working-tree edits remain outside this commit.
+
+## Phase 1K.4E Safe Exit release validation
+
+Safe Exit release arming and destructive readiness are enabled after the
+disposable-AVD acceptance in [SAFE_EXIT_RELEASE_VALIDATION.md](SAFE_EXIT_RELEASE_VALIDATION.md#phase-1k4e-completed-on-a-fresh-disposable-avd).
+The earlier disabled-status notes above are historical. The actual-release test
+uses `release-acceptance.init.gradle`, an unreachable fixture origin and a
+disposable AVD. Its local debug-certificate signing override is strictly for
+testing; production release signing is unchanged. Never use the release
+acceptance fixture with a real account or physical device.

@@ -249,3 +249,13 @@ actual-release disposable-AVD acceptance could not run (Windows WHPX startup den
 software emulator offline). See
 [contract correction and pending gates](EMERGENCY_WIPE_DESIGN.md#phase-1k4a-contract-correction--activation-withheld-2026-10-03).
 No backend or schema changes; this is not release activation.
+
+## Phase 1K.4E Safe Exit release activation
+
+The earlier Phase 1K.3/1K.4A status above is historical. Release arming and
+destructive readiness are now enabled after actual-release disposable-AVD
+acceptance. The test observed the complete durable wipe progression, verified
+old local state is inaccessible, and confirmed fresh onboarding after reboot
+without reconnecting the old account. See the
+[release validation record](SAFE_EXIT_RELEASE_VALIDATION.md#phase-1k4e-completed-on-a-fresh-disposable-avd).
+No backend, protocol or database migration is involved.

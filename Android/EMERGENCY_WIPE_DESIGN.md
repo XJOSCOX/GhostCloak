@@ -999,3 +999,19 @@ the server. External copies, privileged/OEM snapshots, flash-sector remanence an
 JVM/ART immutable-memory/GC limitations remain outside perfect erasure claims.
 No backend deployment, server/Android DB migration, Nginx, Cloudflare or VPS change
 is required. No physical connected instrumentation was run.
+
+## Phase 1K.4E release activation — 2026-10-03
+
+The earlier withheld decisions above are historical. After isolated and full
+actual-release acceptance on a fresh disposable API-36 x86_64 AVD, release
+arming and destructive readiness are enabled. Debug arming and destructive
+readiness are also enabled by the shared readiness build field. The acceptance
+verified the exact durable journal sequence, offline populated-store destruction,
+normal and incorrect PINs, biometric success/failure/cancel, protected Settings,
+old-state probes, crash/reboot recovery, fresh onboarding and zero new fixture
+network requests. The final activated release build repeated the full wipe and
+post-reboot checks. [Evidence and limits](SAFE_EXIT_RELEASE_VALIDATION.md#phase-1k4e-completed-on-a-fresh-disposable-avd).
+
+Safe Exit remains local-only. No server action, migration or physical-phone test
+was performed. The release API origin remains separately explicit and may be
+empty; activation does not set it to staging.

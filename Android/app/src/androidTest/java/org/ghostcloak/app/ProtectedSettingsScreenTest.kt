@@ -96,7 +96,7 @@ class ProtectedSettingsScreenTest {
             compose.waitUntil(30000) {try {compose.onNodeWithText("Confirm Safe Exit PIN").assertIsEnabled(); true} catch(_: AssertionError) {false}}
             compose.onNodeWithText("Confirm Safe Exit PIN").performScrollTo().performClick()
             compose.waitUntil(30000) {f.lock.state.value.message == "Incorrect PIN. Try again." && !f.lock.state.value.busy}; compose.onNodeWithText("New Safe Exit PIN").assertDoesNotExist()
-            compose.onNodeWithText("Current Safe Exit PIN").performScrollTo().performTextInput("654321")
+            compose.onNodeWithText("Current Safe Exit PIN").performScrollTo().performTextReplacement("654321")
             compose.waitUntil(30000) {try {compose.onNodeWithText("Confirm Safe Exit PIN").assertIsEnabled(); true} catch(_: AssertionError) {false}}
             compose.onNodeWithText("Confirm Safe Exit PIN").performScrollTo().performClick()
             compose.waitUntil(30000) {f.lock.state.value.emergencyAdministrationGranted}

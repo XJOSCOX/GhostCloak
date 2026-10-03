@@ -1,0 +1,14 @@
+// Test invocation only: selects the actual release variant and signs both APKs
+// with the local debug certificate for a disposable AVD. Does NOT enable Safe Exit.
+// Never use this signing setup for distribution. Production signing is unchanged.
+gradle.beforeProject { p ->
+    p.plugins.withId('com.android.application') {
+        p.androidComponents.finalizeDsl { a ->
+            a.testBuildType = 'release'
+            a.sourceSets.androidTest.java.setSrcDirs(['src/sharedAndroidTest/java'])
+            a.sourceSets.androidTest.kotlin.setSrcDirs(['src/releaseAcceptance/java', 'src/sharedAndroidTest/java'])
+            a.sourceSets.androidTest.manifest.srcFile('src/releaseAcceptance/AndroidManifest.xml')
+            a.buildTypes.release.signingConfig = a.signingConfigs.debug
+        }
+    }
+}

@@ -34,6 +34,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
     }
+    sourceSets.getByName("androidTest").kotlin.srcDir("src/sharedAndroidTest/java")
+    sourceSets.getByName("androidTest").java.srcDir("src/sharedAndroidTest/java")
     buildFeatures {
         compose = true
         buildConfig = true
@@ -58,10 +60,10 @@ validateApiOrigin(releaseApiOrigin)
 require(releaseApiOrigin.isEmpty() || URI(releaseApiOrigin).host.trimEnd('.') != "api.ghostcloak.org") {
     "Release must not use the staging API. Set ghostcloakReleaseApiOrigin to a reviewed release origin, or leave it empty."
 }
-// Non-destructive arming preview is disposable-device/debug only until Phase 1K.3.
+// Phase 1K.4E: release arming and destruction were enabled only after disposable-AVD acceptance.
 android.buildTypes.getByName("debug").buildConfigField("boolean", "EMERGENCY_PIN_ARMING_ENABLED", "true")
-android.buildTypes.getByName("release").buildConfigField("boolean", "EMERGENCY_PIN_ARMING_ENABLED", "false")
-android.buildTypes.all { buildConfigField("boolean", "EMERGENCY_WIPE_DESTRUCTIVE_READY", "false") }
+android.buildTypes.getByName("release").buildConfigField("boolean", "EMERGENCY_PIN_ARMING_ENABLED", "true")
+android.buildTypes.all { buildConfigField("boolean", "EMERGENCY_WIPE_DESTRUCTIVE_READY", "true") }
 android.buildTypes.getByName("debug").buildConfigField("String", "API_ORIGIN", "\"$debugApiOrigin\"")
 android.buildTypes.getByName("release").buildConfigField("String", "API_ORIGIN", "\"$releaseApiOrigin\"")
 

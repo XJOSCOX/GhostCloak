@@ -156,14 +156,18 @@ class EmergencyPinTest {
             listOf(pin,confirm,current).forEach { assertTrue(it.all { c->c=='\u0000' }) }
             f.locked(); val attempt="123456".toCharArray(); assertTrue(f.lock.verifyPin(attempt)); assertTrue(attempt.all {it=='\u0000'}) }
     }
-    @Test fun releaseFeatureFlagNeverAllowsTriggerOrEnrollmentEvenPersistedFromDebug()=runBlocking {
-        assertFalse(BuildConfig.EMERGENCY_WIPE_DESTRUCTIVE_READY)
-        assertEquals(BuildConfig.DEBUG,BuildConfig.EMERGENCY_PIN_ARMING_ENABLED)
+    @Test fun disabledFeatureGateCannotTriggerOrEnrollEvenWithPersistedConfiguration()=runBlocking {
         val memory=Memory(); Fixture(memory).use {it.enroll()}
         Fixture(memory,enabled=false).use { f -> f.ready()
             assertFalse(f.lock.verifyPin("654321".toCharArray())); assertEquals(0,f.armCalls)
             assertTrue(f.lock.verifyPin("123456".toCharArray())); f.manage()
             assertFalse(f.set("987654",current="654321")); assertFalse(f.lock.disableEmergency("654321".toCharArray(),true)) }
+    }
+    @Test fun reviewedReleaseVariantHasBothSafeExitGatesEnabled() {
+        if (!BuildConfig.DEBUG) {
+            assertTrue(BuildConfig.EMERGENCY_PIN_ARMING_ENABLED)
+            assertTrue(BuildConfig.EMERGENCY_WIPE_DESTRUCTIVE_READY)
+        }
     }
     @Test fun versionOneRecordsUpgradeWithoutLosingPinThrottleOrIdentityConfiguration() {
         val verifier=PinVerifier.create("123456".toCharArray())

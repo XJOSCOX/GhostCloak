@@ -108,6 +108,8 @@ Confirm Send freezes the current disappearing duration, streams encryption throu
 
 ### Peer compatibility
 
+The Phase 1J.1 physical audit confirmed that this implemented padding mechanism requires an incoming message. Directory capability negotiation is **not implemented**; see [the signed-capability audit and proposed backend/migration gate](ATTACHMENT_CAPABILITY_DESIGN.md). That proposal requires deployment review and an explicitly approved V006; it does not change the current rollout below.
+
 New text/policy frames advertise support using the fixed 34-byte `GhostCloak/padding/attachments/v1!` marker at the beginning of spare **existing application padding**, inside authenticated Signal ciphertext and outside the text length. Frame version/type/canonical size and text remain unchanged. Older decoders already ignore padding. There is no new unsupported probe, server-visible capability or endpoint.
 
 Only authenticated, committed padding establishes support. Quoting the marker in text cannot do so. The per-device encrypted record defaults absent, clears on identity replacement, and is withdrawn by later non-advertising text/policy messages, including a long frame without sufficient spare padding. Existing request/block/changed-key gates still apply; capability is not identity verification. A downgrade without any later received message cannot be remotely detected.

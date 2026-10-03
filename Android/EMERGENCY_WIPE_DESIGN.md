@@ -694,3 +694,137 @@ AttachmentPresentation.kt, AttachmentViewerProvider.kt and Android backup XML.
 
 Keystore non-exportability is not a promise that cached unwrapped data is revoked.
 WorkManager cancellation is cooperative, so a runtime generation/fence is required.
+
+
+## Phase 1K.3 implemented engine (readiness remains FALSE)
+
+This section supersedes earlier proposed-engine/audit-only statements. The engine is
+implemented and exercised by isolated instrumentation fixtures. Both debug and release
+`EMERGENCY_WIPE_DESTRUCTIVE_READY` remain false. Ordinary debug Safe Exit remains the
+non-destructive journal/quiesce preview; release cannot arm. Phase 1K.4 activation is
+separate review. No exported component, adb production arming endpoint or automatic
+recovery bypass was added.
+
+### Boundary and durable sequence
+
+`LocalOperationCoordinator` alone executes the engine. Durable ARMED closes the shared
+access gate. Owners cancel/join, leased operations drain, databases close and sensitive
+references are dropped before QUIESCING -> KEY_DESTRUCTION_PENDING is written,
+fsynced and readback verified. **That durable transition is the irreversible boundary.**
+No cancel, unlock, rollback or old-account reopen is available afterward.
+
+KEY_DESTRUCTION_PENDING deletes/verifies keys before committing KEY_DESTRUCTION_COMPLETE.
+Then STORAGE_CLEANUP_PENDING removes artifacts; FINALIZING verifies the fresh baseline;
+COMPLETE is durable and baseline verification is repeated. Only then are fresh lazy
+owners prepared and the journal's `.new`, `.bak` and base removed with directory fsync.
+Verified absence reopens NONE. Fresh owners do not create identity or register accounts.
+The Activity uses a fresh generation and ViewModel/navigation composition; onboarding
+requires explicit later identity creation. No completion announcement or prior username.
+The journal stays outside SQLCipher in credential-encrypted noBackupFilesDir.
+
+### Exact cryptographic inventory and order
+
+`AndroidLocalDestruction` enumerates AndroidKeyStore in this application's UID only:
+
+1. `ghost-cloak.db.<endpoint>`: endpoint matches `[a-z0-9-]{1,40}`. Includes `local`,
+   debug demo endpoints and other valid legacy endpoint slots. EncryptedEndpointStore
+   wraps its random 32-byte SQLCipher secret with this non-exportable AES-256 key.
+   Close zeroes its retained mutable secret; deleteEntry removes the wrapping key.
+2. `ghostcloak.auth.<audience-digest>.<device-uuid>`: 64 lowercase hex audience digest
+   and canonical lowercase UUID. KeystoreDeviceAuth's non-exportable P-256 signing key.
+
+Each deletion checks containsAlias/getKey/getCertificate absence. An already absent
+entry is idempotent success; provider/enumeration errors are failures, never absence.
+Malformed entries under either owned prefix fail closed as unclassified. Other aliases
+are preserved. A final rescan must contain no owned keys before KEY_DESTRUCTION_COMPLETE.
+No alias/key/token/filename diagnostics are emitted by this engine in any build.
+
+Signal identity, signed/one-time/PQ prekeys, ratchets/sessions, legacy software auth
+private material, bearer sessions, registration/routing metadata, recovery state,
+contacts/blocks/requests, replay/outbox/messages, notification ledger, app-lock and
+Safe Exit salted KDF verifier/configuration are SQLCipher records. There is no separate
+Signal or media Keystore alias to delete. AttachmentStore's per-object AEAD keys,
+capabilities and descriptors/transfer entries are also SQLCipher records. Removing all
+DB wrapping keys therefore removes the surviving installation's access to these
+secrets before file deletion; no per-row DELETE or replacement key generation.
+
+A retained DB plus `.wrapped` cannot reopen after its alias is removed:
+EncryptedEndpointStore refuses missing-key existing files. Old device-auth signing
+also fails. Encrypted attachment files alone cannot recover their descriptor key.
+This assumes quiesce succeeded and an attacker did not already copy plaintext keys;
+it does not revoke secrets previously stolen or copied to another endpoint.
+
+### Exact file ownership and cleanup
+
+The engine removes all children of app-private credential-encrypted noBackupFilesDir
+except `local-operation.v1{,.bak,.new}` and `androidx.work.workdb{,-wal,-shm,-journal}`.
+This includes every endpoint `.db`, `.wrapped`, SQLite WAL/SHM/journal and AtomicFile
+recovery remnant, `<endpoint>-attachments/{upload,download,scratch}`, media-presentation
+plaintext/viewer copies, thumbnails/previews and legacy private leftovers. It also
+removes app-private filesDir/cacheDir children and application database-directory
+children except those WorkManager files. Code/native libraries and external/public
+storage are not cleanup targets. Symlinks are unlinked, never traversed.
+Known appearance and notification-permission SharedPreferences are cleared with checked
+commit; neither contains credentials. Current nonsensitive theme may persist in memory
+until Activity recreation. Storage and settings absence are rechecked at finalization.
+
+SQLCipher/auth/Signal/attachment keys are critical. Plaintext staging, presentation and
+old identity stores must disappear before onboarding. Encrypted ciphertext and decode
+cache are noncritical to cryptographic erasure, but this initial implementation chooses
+conservative finalization: attempt other deletions after a file failure, retain
+STORAGE_CLEANUP_PENDING and the closed gate until retry removes *all* owned targets.
+No failed cache deletion is silently labelled success. Plaintext remnants after a
+failed unlink may remain on disk, inaccessible through Ghost Cloak but not promised
+forensically inaccessible to a privileged attacker. There is no secure-overwrite claim.
+
+### Jobs, UI, media and network
+
+Existing shared fence prevents new DB/network/crypto/media leases. GhostApplication
+cancels and verifies its unique periodic mailbox work, stops/join UI owners, app-lock,
+media, background and lifecycle scopes and closes runtime. WorkManager's own scheduler
+DB is preserved; unrelated jobs are not cancelled. URI leases are revoked and owned
+streams/ParcelFileDescriptors closed by media quiesce; cleanup repeats root read-grant
+revocation. All package notifications are cancelled and the encrypted ledger disappears.
+A stale notification can only enter the gated screen or fresh onboarding.
+
+No engine path calls auth/logout/revoke/mailbox/directory/capability/blob/telemetry or
+notifies peers. Existing pre-arm in-flight requests may already have reached the server;
+cancellation cannot recall them. Remote account, public keys, queued ciphertext and
+blobs retain existing server lifecycle. Intentional loss of local recovery proof can
+make old-account recovery impossible from this installation; no username-only bypass.
+
+Mutable PIN/DB-key buffers retain existing best-effort clearing. Crypto/network owners,
+plaintext UI/media caches and references are closed/dropped. JVM/ART immutable copies,
+GC timing, process memory and flash wear-leveling do not permit perfect erasure claims.
+External viewers/peers that copied plaintext retain their independent copies.
+
+### Interruption and failure policy
+
+Every resumed non-NONE state first re-quiesces in the new process. At ARMED/QUIESCING
+resume drain then enter boundary. At KEY_DESTRUCTION_PENDING re-enumerate and delete
+remaining keys. At KEY_DESTRUCTION_COMPLETE advance to cleanup; at STORAGE_CLEANUP_PENDING
+retry leftovers; at FINALIZING verify; at COMPLETE reverify before reset. Persisted
+fault-injection tests cover every durable stage, partial alias deletion and retained
+ciphertext. A two-invocation probe also crosses actual disposable-AVD reboot with
+KEY_DESTRUCTION_PENDING and one remaining auth alias.
+
+Keystore failure stays KEY_DESTRUCTION_PENDING, locked, with local retry; cleanup
+failure stays STORAGE_CLEANUP_PENDING. Journal write/reset failure keeps the current
+process blocked. CORRUPT quiesces but never authorizes deletion or guesses NONE;
+there is no automated corrupt-journal recovery. Retry UI reveals no private details.
+
+### Backup and validation scope
+
+Manifest allowBackup=false remains unchanged. Legacy backup_rules and modern
+cloud-backup/device-transfer rules exclude root/file/database/sharedpref/external
+entirely. Sensitive DB, wrappers, attachment caches and journal remain noBackup and
+credential encrypted; no Direct Boot. Deleted Keystore keys are not regenerated for
+restored existing ciphertext. Source/resource/merged-manifest policy plus retained-DB
+unreadability are validated; no real cloud-provider/OEM restore or physical-phone
+uninstall was performed. Privileged/OEM snapshots and external copies are outside the
+claimed boundary. No Android SQL schema migration, backend deployment, server schema,
+Nginx or Cloudflare change is required.
+
+Validation results are recorded in DEVELOPMENT.md. All destructive tests require a
+debug empty-origin ranchu emulator and explicit scoped synthetic roots/aliases; the
+Application's normal key/store namespaces are never destructively armed by tests.

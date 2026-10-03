@@ -1,5 +1,7 @@
 package org.ghostcloak.app.application
 
+import kotlinx.coroutines.flow.asStateFlow
+
 import android.app.Application
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancelAndJoin
@@ -8,8 +10,8 @@ import kotlinx.coroutines.cancelAndJoin
 class GhostApplication : Application(), androidx.work.Configuration.Provider, org.ghostcloak.storage.LocalStateAccessOwner {
     val localOperationGate by lazy { org.ghostcloak.app.access.LocalOperationGate(org.ghostcloak.app.access.DurableLocalOperationJournal(this)) }
     override val localStateAccess get() = localOperationGate
-    private val lockScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate)
-    private val lifecycleScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate)
+    private var lockScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate)
+    private var lifecycleScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate)
     private val recoveryScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
     private val uiOwners = mutableSetOf<suspend () -> Unit>()
     internal fun registerUiOwner(stop: suspend () -> Unit): () -> Unit = localOperationGate.access {
@@ -17,8 +19,11 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
         val unregister: () -> Unit = { synchronized(uiOwners) { uiOwners.remove(stop) }; Unit }
         unregister
     }
-    val localOperationCoordinator by lazy { org.ghostcloak.app.access.LocalOperationCoordinator(localOperationGate) {
+    val localOperationCoordinator by lazy { org.ghostcloak.app.access.LocalOperationCoordinator(localOperationGate,
+        destruction=if(org.ghostcloak.app.BuildConfig.EMERGENCY_WIPE_DESTRUCTIVE_READY) org.ghostcloak.app.access.AndroidLocalDestruction(this) else null,
+        prepareFreshOwners={prepareFreshOwners()}) {
         BackgroundSyncSchedule.cancelForLocalOperation(this)
+        getSystemService(android.app.NotificationManager::class.java).cancelAll()
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
             synchronized(uiOwners) { uiOwners.toList() }.forEach { it() }
             synchronized(uiOwners) { uiOwners.clear() }
@@ -33,9 +38,10 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
     internal fun resumeLocalOperation() { recoveryScope.launch { try { localOperationCoordinator.resume() }
         catch (e: kotlinx.coroutines.CancellationException) { throw e }
         catch (_: Exception) { /* Fence stays closed; no reset or private diagnostics. */ } } }
-    private val mediaOwner = lazy { org.ghostcloak.app.attachments.AttachmentPresentation(this) }
+    private fun newMediaOwner() = lazy { org.ghostcloak.app.attachments.AttachmentPresentation(this) }
+    private var mediaOwner = newMediaOwner()
     val media get() = localOperationGate.access { mediaOwner.value }
-    private val lockOwner: Lazy<org.ghostcloak.app.access.AppLockController> = lazy {
+    private fun newLockOwner(): Lazy<org.ghostcloak.app.access.AppLockController> = lazy {
         org.ghostcloak.app.access.AppLockController(object : org.ghostcloak.app.access.LockPersistence {
             override suspend fun read() = runtime.readAppLock()
             override suspend fun write(bytes: ByteArray) = runtime.writeAppLock(bytes)
@@ -44,22 +50,38 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
             { android.provider.Settings.Global.getInt(contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0) },
             armEmergency = { localOperationGate.armAfterCredential() })
     }
+    private var lockOwner = newLockOwner()
     val appLock: org.ghostcloak.app.access.AppLockController get() = localOperationGate.access { lockOwner.value }
-    private val runtimeOwner: Lazy<AppRuntime> = lazy { AppRuntime(this, backgroundEligibility = { BackgroundSyncSchedule.reconcile(this, it) },
+    private fun newRuntimeOwner(): Lazy<AppRuntime> = lazy { AppRuntime(this, backgroundEligibility = { BackgroundSyncSchedule.reconcile(this, it) },
         notifications = AndroidLocalNotifications(this), attachmentAccess = { appLock.state.value.canShowContent }) }
+    private var runtimeOwner = newRuntimeOwner()
     internal val sensitiveOwnersInitialized get() = runtimeOwner.isInitialized() || lockOwner.isInitialized() || mediaOwner.isInitialized()
     val runtime: AppRuntime get() = localOperationGate.access { runtimeOwner.value }
     override val workManagerConfiguration get() = androidx.work.Configuration.Builder()
         // Silence WorkManager's own logs; only our allowlisted debug events are emitted.
         .setMinimumLoggingLevel(Int.MAX_VALUE).build()
-    private val backgroundScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+    private var backgroundScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+    private val freshRevision=kotlinx.coroutines.flow.MutableStateFlow(0)
+    internal val freshGeneration=freshRevision.asStateFlow()
+    private var normalGeneration=-1
+    private suspend fun prepareFreshOwners() = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+        check(localOperationGate.blocked && synchronized(uiOwners) {uiOwners.isEmpty()})
+        lockScope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+kotlinx.coroutines.Dispatchers.Main.immediate)
+        lifecycleScope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+kotlinx.coroutines.Dispatchers.Main.immediate)
+        backgroundScope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+kotlinx.coroutines.Dispatchers.IO)
+        lockOwner=newLockOwner(); mediaOwner=newMediaOwner(); runtimeOwner=newRuntimeOwner()
+        freshRevision.value++ // New lazy owners; do not open them before journal reset.
+    }
     override fun onCreate() {
         super.onCreate()
-        if (localOperationGate.blocked) {
-            if (localOperationGate.state.value != org.ghostcloak.app.access.LocalOperationState.CORRUPT) resumeLocalOperation()
-            return
-        }
-        recoveryScope.launch { localOperationGate.state.collect { if (it != org.ghostcloak.app.access.LocalOperationState.NONE && it != org.ghostcloak.app.access.LocalOperationState.CORRUPT) resumeLocalOperation() } }
+        recoveryScope.launch {localOperationGate.state.collect {state->
+            if(state==org.ghostcloak.app.access.LocalOperationState.NONE) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {startNormalOwners()}
+            else if(state!=org.ghostcloak.app.access.LocalOperationState.CORRUPT && getSystemService(android.os.UserManager::class.java).isUserUnlocked) resumeLocalOperation()
+        }}
+    }
+    private fun startNormalOwners() {
+        if(localOperationGate.blocked || normalGeneration==freshRevision.value) return
+        normalGeneration=freshRevision.value
         lifecycleScope.launch {
             appLock.state.collect { if (!it.canShowContent) {
                 if (!localOperationGate.blocked) runtime.revokeAttachmentAccess()

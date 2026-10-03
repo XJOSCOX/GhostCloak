@@ -563,3 +563,36 @@ dependency verification for normal debug staging defaults and the empty-origin
 AVD override; only the empty-origin build was installed on the disposable AVD.
 No physical phone or VPS was accessed. No production journal was armed; arming
 checks used isolated synthetic fixture journals. No destructive probes were run.
+
+
+## Phase 1K.3 Safe Exit engine
+
+The coordinator now implements key-first cryptographic destruction, checked private
+file cleanup and verified fresh onboarding. See [EMERGENCY_WIPE_DESIGN.md](EMERGENCY_WIPE_DESIGN.md#phase-1k3-implemented-engine-readiness-remains-false)
+for exact inventory, irreversible boundary, failure/restart policy and limitations.
+Debug and release destructive readiness remain FALSE; normal debug retains the gated
+non-destructive preview. Phase 1K.4 activation requires separate review. No backend
+access/deployment or Android/server SQL migration. No physical destructive tests.
+
+
+Phase 1K.3 validation (2026-10-03): **314 host tests passed** (135 test-support,
+4 attachments, 91 debug-app, 84 release-app). Full API-37 disposable app suite:
+173 reported, **169 passed and 4 opt-in probes skipped**, zero failures. This
+includes all 10 new destruction/backup tests. All **10 encrypted-storage tests
+passed**. Separate reboot prepare/resume invocations each passed their selected
+probe (the other stage skipped): two additional passing tests across actual AVD
+reboot. Final debug/release builds and strict dependency verification passed for
+empty-origin offline test configuration and ordinary default build configuration.
+Old PostgreSQL/staging result directories were excluded from this count; no server
+or staging suite was run. Physical devices and VPS were not touched.
+
+Tests use `LocalDestructionAndroidTest` only on a verified disposable ranchu AVD
+with `-PghostcloakApiOrigin=`. `LocalDestructionRebootTest` is opt-in: run with
+`safeExitRebootStage=prepare`, wait for completion, reboot that same disposable
+AVD and wait for a healthy unlocked UI, then run with `safeExitRebootStage=resume`.
+Never run aggregate connected tasks while phones are attached. Each test uses
+its own explicit root/key allowlist, not the Application's arming gate or keys.
+The first broad test run exposed fixture identity initialization order; Signal's
+nonempty-store guard correctly rejected it. Corrected fixture and final full run
+passed. An initial reboot-run overlap/System UI ANR was recovered on the disposable
+AVD and the resumed probe and final full suites rerun successfully.

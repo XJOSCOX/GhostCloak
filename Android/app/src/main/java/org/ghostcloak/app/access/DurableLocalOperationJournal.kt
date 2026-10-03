@@ -51,6 +51,16 @@ internal class DurableLocalOperationJournal(context: Context,
             check(read() == state)
         } catch (failure: Exception) { atomic.failWrite(output); throw failure }
     }
+    override fun clearCompleted() {
+        check(read()==LocalOperationState.COMPLETE)
+        // Baseline was already verified; preserve COMPLETE across crashes until checked removal.
+        for(candidate in listOf(File(file.path+".new"),File(file.path+".bak"),file)) {
+            if(candidate.exists()) check(candidate.delete()) {"journal_clear_failed"}
+        }
+        val directory=android.system.Os.open(file.parentFile!!.path,android.system.OsConstants.O_RDONLY,0)
+        try {android.system.Os.fsync(directory)} finally {android.system.Os.close(directory)}
+        check(read()==LocalOperationState.NONE)
+    }
     companion object {
         internal fun encode(state: LocalOperationState) = "GCLO1:${state.name}\n".toByteArray(Charsets.US_ASCII)
         internal fun decode(bytes: ByteArray): LocalOperationState = LocalOperationState.entries

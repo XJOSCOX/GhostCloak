@@ -44,8 +44,9 @@ class MainActivity : FragmentActivity() {
         if (intent.action == org.ghostcloak.app.application.AndroidLocalNotifications.OPEN_CHATS) chatsRequest++
     }
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        chatsRequest = savedInstanceState?.getInt("chats-request", 0) ?: 0
+        val restored=if(app.freshGeneration.value>0) null else savedInstanceState
+        super.onCreate(restored)
+        chatsRequest = restored?.getInt("chats-request", 0) ?: 0
         // Global policy: protects the first frame, PIN enrollment, grace periods and locked screens.
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
         lifecycleScope.launch { if (!app.localOperationGate.blocked) app.localOperationGate.operation { appLock.initialize() } }
@@ -65,16 +66,29 @@ class MainActivity : FragmentActivity() {
             CompositionLocalProvider(LocalAppearance provides AppearanceControl(mode, appearance::select)) {
                 GhostCloakTheme(darkTheme = dark) {
                     val operationState by app.localOperationGate.state.collectAsState()
+                    val generation by app.freshGeneration.collectAsState()
+                    LaunchedEffect(operationState,generation) {
+                        if(operationState==org.ghostcloak.app.access.LocalOperationState.NONE && generation>0) {
+                            chatsRequest=0
+                            if(lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+                                appLock.start(); app.media.start(); runtime.notificationActivityVisible(true)
+                            }
+                            app.localOperationGate.operation {appLock.initialize()}
+                        }
+                    }
                     if (operationState != org.ghostcloak.app.access.LocalOperationState.NONE) {
                         androidx.compose.material3.Surface(androidx.compose.ui.Modifier.fillMaxSize()) {
                             androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment=androidx.compose.ui.Alignment.Center) {
-                                androidx.compose.material3.Text("Ghost Cloak is completing a secure local operation.")
+                                androidx.compose.foundation.layout.Column(horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally) {
+                                    androidx.compose.material3.Text("Ghost Cloak is completing a secure local operation.")
+                                    androidx.compose.material3.TextButton(onClick={app.resumeLocalOperation()}) {androidx.compose.material3.Text("Retry")}
+                                }
                             }
                         }
-                    } else AppLockGate(appLock) {
-                        val model = remember { ViewModelProvider(this@MainActivity)[GhostViewModel::class.java] }
+                    } else key(generation) { AppLockGate(appLock) {
+                        val model = remember { ViewModelProvider(this@MainActivity)["ghost-$generation",GhostViewModel::class.java] }
                         SensitiveClipboardProvider { GhostApp(model, chatsRequest) }
-                    }
+                    } }
                 }
             }
         }

@@ -217,3 +217,13 @@ quiesce semantics. Every non-NONE state (including corruption and COMPLETE)
 blocks normal content, DB/crypto access, network and media. The coordinator stops
 at KEY_DESTRUCTION_PENDING. No emergency PIN, key/data deletion or final reset
 exists; no release UI can arm it. Backend and database schemas are unchanged.
+
+
+## Phase 1K.3 Safe Exit engine
+
+The coordinator now implements key-first cryptographic destruction, checked private
+file cleanup and verified fresh onboarding. See [EMERGENCY_WIPE_DESIGN.md](EMERGENCY_WIPE_DESIGN.md#phase-1k3-implemented-engine-readiness-remains-false)
+for exact inventory, irreversible boundary, failure/restart policy and limitations.
+Debug and release destructive readiness remain FALSE; normal debug retains the gated
+non-destructive preview. Phase 1K.4 activation requires separate review. No backend
+access/deployment or Android/server SQL migration. No physical destructive tests.

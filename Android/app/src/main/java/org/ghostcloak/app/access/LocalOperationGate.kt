@@ -13,9 +13,10 @@ enum class LocalOperationState {
 internal interface LocalOperationJournal {
     fun read(): LocalOperationState
     fun write(state: LocalOperationState)
+    fun clearCompleted() { error("journal_reset_unavailable") }
 }
 
-/** A persistent fence, not a wipe engine. There is intentionally no completion/reset/clear API.
+/** Persistent fence. Only the coordinator may advance the destruction sequence or reopen after verification.
  * Synchronous opens/transactions and durable transitions share the same monitor.
  * Suspended operations are leased until their entire coroutine scope has drained. */
 class LocalOperationGate internal constructor(private val journal: LocalOperationJournal) : LocalStateAccess {
@@ -68,6 +69,21 @@ class LocalOperationGate internal constructor(private val journal: LocalOperatio
         active.forEach { it.cancel(LocalOperationBlocked()) }
         active.joinAll()
         check(synchronized(monitor) { jobs.isEmpty() })
+    }
+
+    internal fun advanceDestruction(expected: LocalOperationState, next: LocalOperationState) = synchronized(monitor) {
+        check(mutable.value == expected && next.ordinal == expected.ordinal + 1)
+        check(expected.ordinal >= LocalOperationState.KEY_DESTRUCTION_PENDING.ordinal && next != LocalOperationState.CORRUPT)
+        persist(next)
+    }
+
+    internal fun reopenVerifiedFresh() = synchronized(monitor) {
+        check(mutable.value == LocalOperationState.COMPLETE && jobs.isEmpty())
+        // Only reached after coordinator verification. A failed clear never opens this process.
+        mutable.value=LocalOperationState.CORRUPT
+        journal.clearCompleted()
+        check(journal.read()==LocalOperationState.NONE)
+        mutable.value=LocalOperationState.NONE
     }
 
     internal fun quiesced() = synchronized(monitor) {

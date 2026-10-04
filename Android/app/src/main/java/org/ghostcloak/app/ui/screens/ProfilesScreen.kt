@@ -33,15 +33,32 @@ import org.ghostcloak.protocol.GhostCloakIds
             DetailRow(Glyph.PERSON,"Display name",state.identity?.displayName.orEmpty())
             state.ghostCloakId?.let { id ->
                 DetailRow(Glyph.SHIELD,"Ghost Cloak ID",GhostCloakIds.display(id))
-                TextButton(onClick={copySensitive(context,GhostCloakIds.display(id))}) {Text("Copy ID")}
-                TextButton(onClick={
-                    val share = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, "Add me on Ghost Cloak:\n${GhostCloakIds.display(id)}")
-                    }
-                    context.startActivity(Intent.createChooser(share, "Share Ghost Cloak ID"))
-                }) {Text("Share ID")}
-                TextButton(onClick=showQr) {Text("Show QR")}
+                Row(Modifier.fillMaxWidth(), horizontalArrangement=Arrangement.spacedBy(GhostDimensions.controlGap)) {
+                    val actionModifier = Modifier.weight(1f).heightIn(min=GhostDimensions.touchTarget)
+                    val actionPadding = PaddingValues(horizontal=GhostDimensions.tiny)
+                    OutlinedButton(
+                        onClick={copySensitive(context,GhostCloakIds.display(id))},
+                        modifier=actionModifier,
+                        contentPadding=actionPadding,
+                    ) { Text("Copy ID", maxLines=1) }
+                    OutlinedButton(
+                        onClick={
+                            val share = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, "Add me on Ghost Cloak:\n${GhostCloakIds.display(id)}")
+                            }
+                            context.startActivity(Intent.createChooser(share, "Share Ghost Cloak ID"))
+                        },
+                        modifier=actionModifier,
+                        contentPadding=actionPadding,
+                    ) { Text("Share ID", maxLines=1) }
+                    OutlinedButton(
+                        onClick=showQr,
+                        modifier=actionModifier,
+                        contentPadding=actionPadding,
+                    ) { Text("Show QR", maxLines=1) }
+                }
+                HorizontalDivider(color=MaterialTheme.colorScheme.outlineVariant)
             }
             DetailRow(Glyph.SHIELD,"Device identity","Your profile belongs to this device. Editing your name keeps your keys and conversations.")
         }

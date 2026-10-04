@@ -3,6 +3,7 @@ package org.ghostcloak.app
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import org.ghostcloak.app.application.AppState
+import org.ghostcloak.app.application.SafetyNumberPresentation
 import org.ghostcloak.app.ui.screens.*
 import org.ghostcloak.app.ui.theme.GhostCloakTheme
 import org.ghostcloak.identity.*
@@ -37,7 +38,7 @@ class ScreenTest {
     }
     @Test fun verificationRequiresConfirmation() {
         var verified = false
-        val state = AppState(loading = false, fingerprint = "12345 12345 12345 12345 12345 12345 12345 12345 12345 12345 12345 12345")
+        val state = AppState(loading = false, safetyNumber = SafetyNumberPresentation("fixture-device", "fixture-contact", false, "12345 12345 12345 12345 12345 12345 12345 12345 12345 12345 12345 12345"))
         compose.setContent { GhostCloakTheme { ContactSecurityScreen(state,
             ContactStatus(contact, RemoteIdentityStatus(IdentityTrustState.UNVERIFIED), SessionLifecycle.ACTIVE), {}, {}, { verified = true }, {}, {}) } }
         compose.onNodeWithText("Mark verified").performScrollTo().performClick()
@@ -47,7 +48,7 @@ class ScreenTest {
     }
     @Test fun verifiedContactNoLongerOffersMarkVerified() {
         val trust = androidx.compose.runtime.mutableStateOf(IdentityTrustState.UNVERIFIED)
-        val state = AppState(loading = false, fingerprint = "12345 12345 12345 12345 12345 12345 12345 12345 12345 12345 12345 12345")
+        val state = AppState(loading = false, safetyNumber = SafetyNumberPresentation("fixture-device", "fixture-contact", false, "12345 12345 12345 12345 12345 12345 12345 12345 12345 12345 12345 12345"))
         compose.setContent { GhostCloakTheme { ContactSecurityScreen(state,
             ContactStatus(contact, RemoteIdentityStatus(trust.value), SessionLifecycle.ACTIVE),
             {}, {}, { trust.value = IdentityTrustState.VERIFIED }, {}, {}) } }
@@ -56,6 +57,34 @@ class ScreenTest {
         compose.onNodeWithText("✓ Verified").assertIsDisplayed()
         compose.onNodeWithText("Mark verified").assertDoesNotExist()
         compose.onNodeWithText("You marked this identity verified after comparing its safety number. Ghost Cloak will warn you if the identity changes.").assertExists()
+    }
+    @Test fun securityScreenNeverDisplaysOrApprovesAnotherContactsNumberDuringRapidNavigation() {
+        val b=ContactStatus(contact,RemoteIdentityStatus(IdentityTrustState.UNVERIFIED),SessionLifecycle.ACTIVE)
+        val c=ContactStatus(contact.copy(contactId="contact-c",remoteDeviceId="device-c",displayName="Charlie"),
+            RemoteIdentityStatus(IdentityTrustState.UNVERIFIED),SessionLifecycle.ACTIVE)
+        val shown=androidx.compose.runtime.mutableStateOf(b)
+        val state=androidx.compose.runtime.mutableStateOf(AppState(loading=false))
+        val bNumber="11111 11111 11111"
+        val cNumber="22222 22222 22222"
+        var approved:String?=null
+        compose.setContent { GhostCloakTheme {
+            ContactSecurityScreen(state.value,shown.value,{}, {}, { approved=it }, {}, {})
+        } }
+        compose.runOnIdle { state.value=state.value.copy(safetyNumber=SafetyNumberPresentation("fixture-device","fixture-contact",false,bNumber)) }
+        compose.onNodeWithText("Mark verified").assertIsEnabled().performScrollTo().performClick()
+        compose.onNodeWithText("I compared it · Verify").assertExists()
+        compose.runOnIdle { shown.value=c }
+        compose.onNodeWithText("I compared it · Verify").assertDoesNotExist()
+        compose.onNodeWithText("Loading safety number…").assertExists()
+        compose.onNodeWithText("Mark verified").assertIsNotEnabled()
+        compose.runOnIdle { shown.value=b }
+        compose.onNodeWithText("Mark verified").assertIsEnabled()
+        compose.runOnIdle { shown.value=c }
+        compose.onNodeWithText("Loading safety number…").assertExists()
+        compose.runOnIdle { state.value=state.value.copy(safetyNumber=SafetyNumberPresentation("device-c","contact-c",false,cNumber)) }
+        compose.onNodeWithText("Mark verified").assertIsEnabled().performScrollTo().performClick()
+        compose.onNodeWithText("I compared it · Verify").performClick()
+        assertEquals(cNumber,approved)
     }
     @Test fun contactDetailsKeepPublicIdVisibleAfterRemoteNameAndAlias() {
         val named=contact.copy(displayName="Robert",localAlias="Bob - Work",ghostCloakId="7K4M9Q2FX8DR")

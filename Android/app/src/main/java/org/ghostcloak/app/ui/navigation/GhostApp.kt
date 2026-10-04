@@ -119,8 +119,10 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable
                         val contact = state.contacts.firstOrNull { it.contact.remoteDeviceId == id } ?: return@composable
-                        ContactSecurityScreen(state, contact, { nav.popBackStack() }, { model.loadFingerprint(id, it) },
-                            { model.verify(id, it) }, { model.trust(id, it) },
+                        val contactId = contact.contact.contactId
+                        DisposableEffect(id, contactId) { onDispose { model.leaveSecurity(id) } }
+                        ContactSecurityScreen(state, contact, { nav.popBackStack() }, { model.loadFingerprint(id, contactId, it) },
+                            { model.verify(id, contactId, it) }, { model.trust(id, contactId, it) },
                             { blocked -> model.block(id, blocked) {
                                 if(blocked) nav.navigate("contacts") { popUpTo("contacts"); launchSingleTop=true }
                             } },

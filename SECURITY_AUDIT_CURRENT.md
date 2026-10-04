@@ -2,6 +2,8 @@
 
 Source snapshot: `e14bf5b` (2026-10-04). This is a source and generated-manifest audit, not a penetration test or an inspection of a running VPS or either physical phone. Uncommitted Android Studio icon/dependency edits in the local checkout are outside this snapshot. Findings distinguish a demonstrated code path from a conditional risk. No production behavior was changed for this audit.
 
+**New Q-10 security blocker (2026-10-04):** A physical three-client report found A displaying the same safety number for distinct contacts B and C. The original nine-finding inventory below remains the historical audit snapshot; Q-10 is an additional **High / BLOCK RELEASE** finding. Source remediation and synthetic tests are described under Q-10. Contact Security remains untrusted for release until the operator completes the three-client physical retest; no physical account was inspected or reset by Codex.
+
 **Phase 1Q.1 follow-up (2026-10-04):** The original findings below remain an audit record. Status updates in this paragraph and under affected findings describe subsequent source changes and operator-reported evidence; they do not retroactively change the audited snapshot. The operator reports a controlled V007 cutover, database/blob backups and digests, schema checks, and successful two-phone post-cutover operation. We did not access the VPS or database to verify these statements. Backup restore has **not** been rehearsed. Q-01 is operationally mitigated for that reported cutover, but a future V007 target still requires the current runbook's preflight and explicit data-loss decision. Q-02 and Q-03 remain open.
 
 **Phase 1Q.2 source follow-up (2026-10-04):** Q-02 and Q-03 are addressed in source by material-scoped preauthentication budgets plus a broad global ceiling, and by separating non-consuming exact-ID discovery from authenticated idempotent prekey allocation. See [the Q.2 design and rollout note](infrastructure/ABUSE_RESISTANCE_Q2.md). These findings remain operationally open until the operator deploys the compatible backend and additive V008, then confirms the controlled two-client flow. No VPS or physical phone was accessed in this source follow-up.
@@ -38,6 +40,14 @@ The adversary may know a public Ghost Cloak ID, send protocol requests, own anot
 None established by this audit.
 
 ## High
+
+### Q-10 — Contact Security can display another contact's safety number — BLOCK RELEASE pending physical retest
+
+**Follow-up status: REMEDIATED_IN_SOURCE; PHYSICAL THREE-CLIENT CONFIRMATION OPEN.** `AppState.fingerprint` was a single global value. Opening a different Contact Security route could render that value before its asynchronous load completed; an older result could also overwrite a newer contact's value. The screen used the displayed value as the expected value for verification. The engine's `validateApproval` checked the pinned key for the requested device and rejected a mismatched number, but displaying the wrong number undermined manual comparison and could lead to a false user decision. Treat earlier Contact Security readings as untrusted.
+
+The source now binds each presentation to the exact remote device ID, local contact record ID, and current/pending trust mode. The screen displays a number only when all three match; otherwise it shows “Loading safety number…”. A generation check discards results after navigation, including B → C → B → C, and leaving security invalidates the request. The confirmation action rechecks the displayed number; the ViewModel checks contact binding before invoking verification, and the crypto engine still compares the expected number against the current pin. Synthetic three-party tests confirm distinct device IDs and public keys, correct per-device pins, symmetric pair numbers, three different pair numbers, and wrong-contact verification rejection. Compose UI and generation tests cover delayed results and rapid navigation on a disposable AVD. Mutable display names and aliases do not enter the Signal fingerprint primitive. No identities, pins, protocol framing, backend code, or database schema were changed.
+
+**Release gate:** manually compare all six directions using the existing physical A, simulator B, and physical C: A→B = B→A = X; A→C = C→A = Y; B→C = C→B = Z; X, Y, and Z must be pairwise different. Do not log the actual numbers. Repeat after navigating rapidly between B and C, and confirm neither can be verified with the other's number. **Backend deployment:** no. **Server DB migration:** no. **Android DB migration:** no.
 
 ### Q-01 — Destructive V007 rollout can erase existing server accounts — BLOCK RELEASE
 

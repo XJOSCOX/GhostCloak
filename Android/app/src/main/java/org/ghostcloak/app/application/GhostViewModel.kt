@@ -22,7 +22,7 @@ data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? =
     val disappearingPolicies: Map<String, Int> = emptyMap(),
     val unreadExpiries: Map<String, List<ExpiryDeadline>> = emptyMap(),
     val unreadCount: Int = 0, val unreadByConversation: Map<String, Int> = emptyMap(), val contacts: List<ContactStatus> = emptyList(), val previews: Map<String, Message> = emptyMap(), val messages: List<Message> = emptyList(),
-    val error: String? = null, val errorImportant: Boolean = false, val errorTransient: Boolean = false, val card: String = "", val fingerprint: String = "",
+    val error: String? = null, val errorImportant: Boolean = false, val errorTransient: Boolean = false, val card: String = "", val safetyNumber: SafetyNumberPresentation? = null,
     val demo: Boolean = false, val protection: String = "", val ready: Boolean = false,
     val networkRequiresConnect:Boolean=true, val networkConfigured:Boolean=false,val networkStatus:NetworkStatus=NetworkStatus.DISABLED) {
     val networkConnected get() = networkStatus == NetworkStatus.CONNECTED
@@ -35,14 +35,15 @@ class GhostViewModel internal constructor(application: Application, private val 
     val state = mutable.asStateFlow()
     val developerAvailable get() = runtime.developerAvailable
     @Volatile private var selected: String? = null
+    private val safetyNumberSelection = SafetyNumberSelection()
     private var workCount = 0
     private val unregisterOwner = (application as? GhostApplication)?.registerUiOwner {
         viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin()
-        selected=null; mutable.value=AppState()
+        selected=null; safetyNumberSelection.clear(); mutable.value=AppState()
     }
     override fun onCleared() {
         unregisterOwner?.invoke()
-        selected=null; mutable.value=AppState()
+        selected=null; safetyNumberSelection.clear(); mutable.value=AppState()
         super.onCleared()
     }
     init {
@@ -153,13 +154,42 @@ class GhostViewModel internal constructor(application: Application, private val 
     }
     fun create(displayName: String) = run(activity = NetworkStatus.CONNECTING) { runtime.create(it, displayName); null }
     fun rename(displayName: String) = run { it.rename(displayName); null }
-    fun select(id: String) { selected = id; mutable.value = mutable.value.copy(messages = emptyList(), fingerprint = ""); refresh() }
+    fun select(id: String) { selected = id; safetyNumberSelection.clear(); mutable.value = mutable.value.copy(messages = emptyList(), safetyNumber = null); refresh() }
     fun leaveConversation(id: String) { if (selected == id) selected = null }
     fun exportCard() = run { mutable.value = mutable.value.copy(card = it.exportCard(fresh = true)); null }
     fun importCard(text: String, success: () -> Unit) = run { it.importCard(text); withContext(Dispatchers.Main) { success() }; null }
-    fun loadFingerprint(id: String, pending: Boolean) = run { mutable.value = mutable.value.copy(fingerprint = it.fingerprint(id, pending)); null }
-    fun verify(id: String, expected: String) = run { it.verify(id, expected); null }
-    fun trust(id: String, expected: String) = run { it.trustReplacement(id, expected); null }
+    fun loadFingerprint(id: String, contactId: String, pending: Boolean): kotlinx.coroutines.Job {
+        val (generation, loading) = safetyNumberSelection.begin(id, contactId, pending)
+        mutable.value = mutable.value.copy(safetyNumber = loading)
+        return run {
+            val number = it.fingerprint(id, pending)
+            withContext(Dispatchers.Main.immediate) {
+                if (mutable.value.contacts.any { status -> status.contact.remoteDeviceId == id && status.contact.contactId == contactId }) {
+                    safetyNumberSelection.complete(generation, loading.copy(fingerprint = number))?.let { current ->
+                        mutable.value = mutable.value.copy(safetyNumber = current)
+                    }
+                }
+            }
+            null
+        }
+    }
+    fun leaveSecurity(id: String) {
+        if (safetyNumberSelection.leave(id)) mutable.value = mutable.value.copy(safetyNumber = null)
+    }
+    fun verify(id: String, contactId: String, expected: String) = run {
+        if (!safetyNumberSelection.approves(id, contactId, false, expected) ||
+            mutable.value.contacts.none { status -> status.contact.remoteDeviceId == id && status.contact.contactId == contactId })
+            throw CryptoFailure(CryptoError.VerificationFailed)
+        it.verify(id, expected)
+        null
+    }
+    fun trust(id: String, contactId: String, expected: String) = run {
+        if (!safetyNumberSelection.approves(id, contactId, true, expected) ||
+            mutable.value.contacts.none { status -> status.contact.remoteDeviceId == id && status.contact.contactId == contactId })
+            throw CryptoFailure(CryptoError.VerificationFailed)
+        it.trustReplacement(id, expected)
+        null
+    }
     fun block(id: String, blocked: Boolean, success: () -> Unit = {}) = run {
         it.block(id, blocked); withContext(Dispatchers.Main) { success() }; null
     }
@@ -202,8 +232,8 @@ class GhostViewModel internal constructor(application: Application, private val 
         it.consumeViewOnce(id,localId)
         null
     }
-    fun startDemo() = run { runtime.startDemo(); selected = null; mutable.value = mutable.value.copy(card = "", fingerprint = ""); null }
-    fun leaveDemo() = run { runtime.leaveDemo(); selected = null; mutable.value = mutable.value.copy(card = "", fingerprint = ""); null }
+    fun startDemo() = run { runtime.startDemo(); selected = null; safetyNumberSelection.clear(); mutable.value = mutable.value.copy(card = "", safetyNumber = null); null }
+    fun leaveDemo() = run { runtime.leaveDemo(); selected = null; safetyNumberSelection.clear(); mutable.value = mutable.value.copy(card = "", safetyNumber = null); null }
     private fun networkError(error: org.ghostcloak.protocol.ApiFailure) = when {
         error.code == "recovery_required" -> "Ghost Cloak found an existing device identity but its account connection needs to be restored."
         error.code == "recovery_failed" -> "Account recovery could not be verified."

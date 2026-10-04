@@ -11,6 +11,40 @@ import org.junit.Test
 
 class MessagingTest {
     private fun service(r: MemoryRecords = MemoryRecords()) = ConversationService(SignalProtocolEngine(r), LocalRepository(r))
+    @Test fun threeIndependentSignalIdentitiesProducePairSpecificSymmetricSafetyNumbers() = runBlocking {
+        val records = List(3) { MemoryRecords() }
+        val peers = records.map(::service)
+        val identities = peers.mapIndexed { index, peer -> peer.create("Peer $index") }
+        assertEquals(3, identities.map { it.deviceId }.toSet().size)
+        assertEquals(3, identities.map { it.publicKey.toList() }.toSet().size)
+        val cards = peers.map { it.exportCard() }
+        val decoded = cards.map(ContactCardCodec::decode)
+        assertEquals(3, decoded.map { it.ghostCloakId }.toSet().size)
+        peers.forEachIndexed { local, peer ->
+            cards.forEachIndexed { remote, card -> if (local != remote) peer.importCard(card) }
+            assertEquals(2, peer.contacts().map { it.contact.remoteDeviceId }.toSet().size)
+            identities.forEachIndexed { remote, identity -> if (local != remote) {
+                val contact=peer.contacts().single { it.contact.ghostCloakId == decoded[remote].ghostCloakId }.contact
+                assertEquals(identity.deviceId, contact.remoteDeviceId)
+                assertArrayEquals(identity.publicKey, records[local].read("trust/${identity.deviceId}/1"))
+            } }
+        }
+        suspend fun pair(first: Int, second: Int) = peers[first].fingerprint(identities[second].deviceId)
+        val ab = pair(0, 1)
+        val ac = pair(0, 2)
+        val bc = pair(1, 2)
+        assertEquals(ab, pair(1, 0))
+        assertEquals(ac, pair(2, 0))
+        assertEquals(bc, pair(2, 1))
+        assertEquals(3, setOf(ab, ac, bc).size)
+        peers[0].rename("New display name")
+        assertEquals(ab, pair(0, 1))
+        assertEquals(ac, pair(0, 2))
+        try { peers[0].verify(identities[2].deviceId, ab); fail("B's safety number verified C") }
+        catch (e: CryptoFailure) { assertEquals(CryptoError.VerificationFailed, e.error) }
+        assertEquals(IdentityTrustState.UNVERIFIED,
+            peers[0].contacts().single { it.contact.remoteDeviceId == identities[2].deviceId }.identity!!.trustState)
+    }
     @Test fun verifiedReplacementDisablesSendingUntilExplicitApproval() = runBlocking<Unit> {
         val ar = MemoryRecords(); val a = service(ar); val b = service()
         a.create("Alice"); val bob = b.create("Bob"); a.importCard(b.exportCard())

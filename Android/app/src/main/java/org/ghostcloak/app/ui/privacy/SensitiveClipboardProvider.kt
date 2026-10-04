@@ -8,6 +8,7 @@ import androidx.compose.ui.text.AnnotatedString
 /** Marks legacy text-field Copy/Cut as sensitive without replacing Compose's native Clipboard.
  * Current Compose text selection casts LocalClipboard to its Android implementation when showing
  * Paste. Delegating that interface breaks the cast and crashes on repeated editor taps.
+ * Sensitive editable fields also suppress native Copy/Cut via noSensitiveCopyCut().
  */
 @Composable fun SensitiveClipboardProvider(content: @Composable () -> Unit) {
     val context = LocalContext.current

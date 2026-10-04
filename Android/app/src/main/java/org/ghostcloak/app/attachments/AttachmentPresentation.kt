@@ -28,7 +28,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
     private val session = MutableStateFlow(0L)
     val presentationSession = session.asStateFlow()
     private var transferEligible = false
-    private val root = File(app.noBackupFilesDir,"media-presentation").apply { mkdirs() }
+    private val scratch = PlaintextScratch(File(app.noBackupFilesDir,"media-presentation"))
     private var file: File? = null
     private var blob: String? = null
     private var job: Job? = null
@@ -51,21 +51,25 @@ class AttachmentPresentation(private val app: GhostApplication) {
                 currentCoroutineContext().ensureActive(); check(allowed())
                 check(app.runtime.attachmentAvailableNow(conversation,message))
             }
-        } finally { target.delete() }
+        } finally { scratch.delete(target) }
     }
-    init { root.listFiles()?.filter { it.isFile }?.forEach { it.delete() } }
     internal val presentationVisible get() = visible
-    private fun allowed() = !app.localOperationGate.blocked && visible && app.appLock.state.value.canShowContent && app.runtime.attachmentTransfersAllowed
+    private fun allowed() = scratch.clean && !app.localOperationGate.blocked && visible && app.appLock.state.value.canShowContent && app.runtime.attachmentTransfersAllowed
     private fun check(expected: Long) { check(expected == epoch && allowed()) { "attachment_unavailable" } }
     private fun check(expected: Long, trace: PhotoTrace?) {
         try { check(expected) }
         catch(failure: Exception) { trace?.begin(PhotoOperation.ACCESS_CHECK);throw failure }
     }
-    private fun temporary() = File(root,AttachmentFormat.newId())
-    fun start() { app.localOperationGate.requireNormal(); visible = true; session.value++; revokeLease() }
-    private fun sweepPresentation() { root.listFiles()?.filter { it.isFile && it!=lease?.second }?.forEach { it.delete() } }
-    fun stop() { if(app.localOperationGate.blocked) return; visible = false; photos.clear(); clear(); sweepPresentation() }
-    fun locked() { if(app.localOperationGate.blocked) return; photos.clear(); clear(); revokeLease(); sweepPresentation() }
+    private fun temporary() = scratch.newFile()
+    fun start() {
+        app.localOperationGate.requireNormal()
+        revokeLease()
+        if (!scratch.clean) scratch.sweep()
+        visible = scratch.clean
+        session.value++
+    }
+    fun stop() { if(app.localOperationGate.blocked) return; visible = false; photos.clear(); clear(); scratch.sweep() }
+    fun locked() { if(app.localOperationGate.blocked) return; visible = false; photos.clear(); clear(); scratch.sweep() }
     fun clear() {
         if(app.localOperationGate.blocked) return
         val consumed=mutable.value.takeIf {it.viewOnce && it.message!=null}
@@ -76,7 +80,8 @@ class AttachmentPresentation(private val app: GhostApplication) {
         job?.cancel(); job=null
         revoked.first?.cancel()
         try { revoked.second?.close() } catch (_: Exception) {}
-        file?.delete(); file=null; blob=null
+        revokeLease()
+        file?.let(scratch::delete); file=null; blob=null
         // Removing references prevents the UI from presenting it after background/lock.
         mutable.value=MediaUi()
         consumed?.let { current -> scope.launch {
@@ -104,7 +109,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
             catch (failure: OutOfMemoryError) {
                 trace?.failed(failure)
                 if(mutable.value.photo) PhotoDiagnostics.failed(PhotoFailureReason.MEMORY)
-                if(expected==epoch) { file?.delete();file=null;mutable.value=mutable.value.copy(busy=false,ready=false,preview=null,sending=mutable.value.uploadPrepared,error=PhotoFailureReason.MEMORY.userMessage) }
+                if(expected==epoch) { file?.let(scratch::delete);file=null;mutable.value=mutable.value.copy(busy=false,ready=false,preview=null,sending=mutable.value.uploadPrepared,error=PhotoFailureReason.MEMORY.userMessage) }
             }
             catch (failure: Exception) {
                 trace?.failed(failure)
@@ -117,7 +122,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
                         else -> PhotoFailureReason.NORMALIZE
                     })
                 }
-                if (expected == epoch && blob == null && mutable.value.message == null) { file?.delete(); file=null }
+                if (expected == epoch && blob == null && mutable.value.message == null) { file?.let(scratch::delete); file=null }
                 if (expected == epoch) mutable.value=mutable.value.copy(busy=false,ready=false,
                     sending=mutable.value.sending && blob!=null,
                     error=when {
@@ -186,7 +191,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
                     if (photo) {
                         prepared=temporary()
                         PhotoPreparation.normalizeTraced(staged,prepared!!,trace!!) { check(expected,trace) }
-                        staged.delete()
+                        scratch.delete(staged)
                     } else prepared=staged
                     label
                 }
@@ -197,8 +202,8 @@ class AttachmentPresentation(private val app: GhostApplication) {
                 mutable.value=mutable.value.copy(filename=name,bytes=prepared!!.length(),preview=preview,busy=false,ready=true)
                 if(photo) PhotoDiagnostics.emit(PhotoEvent.OK)
             } finally {
-                staged.takeIf { it != file }?.delete()
-                prepared?.takeIf { it != file }?.delete()
+                staged.takeIf { it != file }?.let(scratch::delete)
+                prepared?.takeIf { it != file }?.let(scratch::delete)
                 // No persistable URI grant is taken. Drop any transient read grant when practical.
                 try { app.revokeUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
             }
@@ -219,7 +224,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
                 val descriptor=app.runtime.prepareAttachment(source.inputStream(),source.length(),
                     if(before.photo) AttachmentKind.IMAGE else AttachmentKind.DOCUMENT,duration,
                     if(before.photo) null else before.filename)
-                check(expected); blob=descriptor.id;file?.delete();file=null
+                check(expected); blob=descriptor.id;file?.let(scratch::delete);file=null
                 mutable.value=mutable.value.copy(uploadPrepared=true)
             }
             val id=blob!!
@@ -256,10 +261,10 @@ class AttachmentPresentation(private val app: GhostApplication) {
                 val preview=if(photo) withContext(Dispatchers.IO) { PhotoPreparation.decode(target) } else null
                 check(expected)
                 check(app.runtime.attachmentAvailableNow(conversation,message))
-                if(photo) target.delete() else file=target
+                if(photo) scratch.delete(target) else file=target
                 mutable.value=mutable.value.copy(busy=false,ready=true,bytes=target.length(),preview=preview)
                 refresh()
-            } finally { if(file!=target) target.delete() }
+            } finally { if(file!=target) scratch.delete(target) }
         }
     }
     fun reconcile(messages: Set<String>) {
@@ -276,8 +281,14 @@ class AttachmentPresentation(private val app: GhostApplication) {
     }
     private fun revokeLease() {
         if(app.localOperationGate.blocked) return
-        lease?.let { (uri,source) -> try { app.revokeUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION) } finally { source.delete() } }
+        val current=lease
         lease=null; leaseMessage=null
+        current?.let { (uri,source) ->
+            try { app.revokeUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            catch (_: Exception) { scratch.invalidate() }
+            closeOwnedViewerHandles()
+            scratch.delete(source)
+        }
     }
     /** Explicit external-view handoff only; it may retain a copy outside our control. */
     suspend fun documentIntent(): Intent = app.localOperationGate.operation {
@@ -300,6 +311,10 @@ class AttachmentPresentation(private val app: GhostApplication) {
         Intent.createChooser(view,"Open document").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     private val providerHandles = mutableListOf<android.os.ParcelFileDescriptor>()
+    private fun closeOwnedViewerHandles() {
+        val handles=synchronized(providerHandles) { providerHandles.toList().also { providerHandles.clear() } }
+        handles.forEach { try { it.close() } catch (_: Exception) { scratch.invalidate() } }
+    }
     internal fun openLease(uri: Uri): android.os.ParcelFileDescriptor = app.localOperationGate.access {
         android.os.ParcelFileDescriptor.open(leaseFile(uri),android.os.ParcelFileDescriptor.MODE_READ_ONLY).also {
             synchronized(providerHandles) { providerHandles.add(it) }
@@ -320,8 +335,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
         val viewer=lease
         viewer?.let { app.revokeUriPermission(it.first,Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         lease=null; leaseMessage=null
-        synchronized(providerHandles) { providerHandles.toList() }.forEach { it.close() }
-        synchronized(providerHandles) { providerHandles.clear() }
+        closeOwnedViewerHandles()
         scope.coroutineContext[Job]!!.cancelAndJoin()
         job=null; file=null; blob=null
     }

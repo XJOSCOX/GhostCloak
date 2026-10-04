@@ -19,6 +19,7 @@ import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.privacy.copySensitive
+import org.ghostcloak.app.ui.privacy.noSensitiveCopyCut
 import org.ghostcloak.messaging.ContactCardCodec
 import org.ghostcloak.protocol.GhostCloakIds
 import org.ghostcloak.protocol.GhostCloakContactQr
@@ -49,7 +50,7 @@ import org.ghostcloak.app.ui.qr.SecureQrCaptureActivity
             Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer) {
                 Box(Modifier.fillMaxWidth().padding(GhostDimensions.heroInset),contentAlignment=androidx.compose.ui.Alignment.Center) { AppIcon(Glyph.PERSON,modifier=Modifier.size(GhostDimensions.touchTarget),tint=MaterialTheme.colorScheme.primary) }
             }
-            OutlinedTextField(ghostCloakId,{if(it.length<=14) ghostCloakId=it},label={Text("Ghost Cloak ID")},singleLine=true,modifier=Modifier.fillMaxWidth())
+            OutlinedTextField(ghostCloakId,{if(it.length<=14) ghostCloakId=it},label={Text("Ghost Cloak ID")},singleLine=true,modifier=Modifier.fillMaxWidth().noSensitiveCopyCut())
             OutlinedButton(onClick = {
                 invalidQr = false; cameraDenied = false
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
@@ -79,7 +80,7 @@ import org.ghostcloak.app.ui.qr.SecureQrCaptureActivity
             InfoPanel("Exchange public material", "Cards contain public identity and prekeys only. Share through a trusted channel, then compare your safety number.")
             SectionLabel("IMPORT THEIR CARD")
             OutlinedTextField(draft, onValueChange = { tooLarge = it.length > ContactCardCodec.MAX_TEXT; if (!tooLarge) draft = it },
-                label = { Text("Paste contact card") }, modifier = Modifier.fillMaxWidth(), minLines = 3, maxLines = 5,
+                label = { Text("Paste contact card") }, modifier = Modifier.fillMaxWidth().noSensitiveCopyCut(), minLines = 3, maxLines = 5,
                 isError = tooLarge, supportingText = { Text(if (tooLarge) "Card exceeds 8,192 characters. Nothing was imported." else "GHOSTCLOAK:2:…") })
             FullButton("Import contact", !state.loading && draft.isNotBlank() && !tooLarge) { import(draft) }
 

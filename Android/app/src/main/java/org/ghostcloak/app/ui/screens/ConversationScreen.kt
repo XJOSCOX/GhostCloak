@@ -1,4 +1,5 @@
 package org.ghostcloak.app.ui.screens
+import org.ghostcloak.app.ui.privacy.noSensitiveCopyCut
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -149,7 +150,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(GhostDimensions.controlGap)) {
                 if(state.networkConfigured && !state.demo) AttachmentComposer(status.contact.remoteDeviceId,active && !state.loading,refresh)
                 OutlinedTextField(draft, onValueChange = { rejectedPaste = it.length > 65536; if (!rejectedPaste) draft = it },
-                    enabled = active && !state.loading, modifier = Modifier.weight(1f), placeholder = { Text("Write a message…") }, maxLines = 5,
+                    enabled = active && !state.loading, modifier = Modifier.weight(1f).noSensitiveCopyCut(), placeholder = { Text("Write a message…") }, maxLines = 5,
                     colors=OutlinedTextFieldDefaults.colors(unfocusedBorderColor=androidx.compose.ui.graphics.Color.Transparent,unfocusedContainerColor=MaterialTheme.colorScheme.surface,focusedContainerColor=MaterialTheme.colorScheme.surface),
                     shape = RoundedCornerShape(GhostDimensions.spacious), isError = size > ConversationPayload.MAX_TEXT)
                 FilledIconButton(onClick = {

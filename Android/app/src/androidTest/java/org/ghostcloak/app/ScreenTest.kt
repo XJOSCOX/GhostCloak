@@ -62,7 +62,8 @@ class ScreenTest {
         compose.setContent { GhostCloakTheme { ContactSecurityScreen(AppState(loading=false),
             ContactStatus(named,RemoteIdentityStatus(IdentityTrustState.UNVERIFIED),SessionLifecycle.ACTIVE),
             {},{},{},{},{}) } }
-        compose.onNodeWithText("Bob - Work").assertExists()
+        // The alias is shown in both the heading and the local-name detail.
+        compose.onAllNodesWithText("Bob - Work").onFirst().assertExists()
         compose.onNodeWithText("GHOST CLOAK ID").assertExists()
         compose.onNodeWithText("7K4M-9Q2F-X8DR").assertExists()
     }

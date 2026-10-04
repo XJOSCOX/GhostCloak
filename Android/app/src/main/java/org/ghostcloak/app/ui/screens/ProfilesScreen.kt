@@ -12,6 +12,7 @@ import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.privacy.copySensitive
+import org.ghostcloak.app.ui.privacy.noSensitiveCopyCut
 import androidx.compose.ui.platform.LocalContext
 import org.ghostcloak.protocol.GhostCloakIds
 
@@ -65,7 +66,7 @@ import org.ghostcloak.protocol.GhostCloakIds
     }
     if(editing) AlertDialog(onDismissRequest={editing=false},title={Text("Edit your name")},text={
         Column(verticalArrangement=Arrangement.spacedBy(GhostDimensions.medium)) {
-            OutlinedTextField(displayName,{if(it.length<=32) displayName=it},singleLine=true,label={Text("Display name")})
+            OutlinedTextField(displayName,{if(it.length<=32) displayName=it},singleLine=true,label={Text("Display name")},modifier=Modifier.noSensitiveCopyCut())
             Text("This changes your local name and the name shared in future encrypted messages. Your Ghost Cloak ID and keys stay the same.")
         }
     },confirmButton={TextButton(onClick={rename(displayName);editing=false},enabled=!state.loading && displayName.isNotBlank() && displayName!=state.identity?.displayName) {Text("Save name")}},dismissButton={TextButton(onClick={editing=false}) {Text("Cancel")}})

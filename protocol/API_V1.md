@@ -1,5 +1,7 @@
 # Phase 1C.1 local API v1
 
+> **HISTORICAL PROTOTYPE — not the current account API or deployment guide.** Current account/auth/directory/mailbox source uses `/v2` and V007 random Ghost Cloak IDs; usernames described below were retired. The normal attachment blob route remains under `/v1/attachments`. See the [current deployment runbook](../infrastructure/DEPLOYMENT.md) and [current audit register](../SECURITY_AUDIT_CURRENT.md). Do not apply old migration or username instructions to a live target.
+
 Status: local prototype; no deployment. The Android UI remains the Phase 1B local experience. JVM integration clients exercise the real HTTP adapter. Production UI/server configuration is not part of this phase.
 
 ## Encoding and transport

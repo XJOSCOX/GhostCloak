@@ -15,6 +15,7 @@ import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.app.ui.theme.GhostLayout
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
+import org.ghostcloak.app.ui.privacy.noSensitiveCopyCut
 
 @Composable fun ContactsScreen(state: AppState, add: () -> Unit, open: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, directory: Boolean = false) {
     var query by remember { mutableStateOf("") }
@@ -34,7 +35,7 @@ import org.ghostcloak.app.ui.components.*
             Column(Modifier.weight(1f).padding(horizontal = GhostLayout.pageInset)) {
             if(directory || searching) OutlinedTextField(query,{if(it.length<=64) query=it},singleLine=true,placeholder={Text(if(directory) "Search contacts" else "Search conversations")},
                 leadingIcon={AppIcon(Glyph.SEARCH)},trailingIcon=if(query.isEmpty()) null else {{IconButton(onClick={query=""}) {AppIcon(Glyph.CLOSE,"Clear search")}}},
-                shape=RoundedCornerShape(GhostDimensions.fieldCorner),modifier=Modifier.fillMaxWidth(),
+                shape=RoundedCornerShape(GhostDimensions.fieldCorner),modifier=Modifier.fillMaxWidth().noSensitiveCopyCut(),
                 colors=OutlinedTextFieldDefaults.colors(unfocusedBorderColor=Color.Transparent,focusedBorderColor=MaterialTheme.colorScheme.primary,
                     unfocusedContainerColor=MaterialTheme.colorScheme.surface,focusedContainerColor=MaterialTheme.colorScheme.surface))
             Spacer(Modifier.height(GhostLayout.dividerGap))

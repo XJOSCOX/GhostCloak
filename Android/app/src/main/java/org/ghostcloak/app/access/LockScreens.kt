@@ -29,6 +29,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.launch
 import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.theme.GhostLayout
+import org.ghostcloak.app.ui.privacy.noSensitiveCopyCut
 
 val LocalAppLock = staticCompositionLocalOf<AppLockController?> { null }
 
@@ -71,7 +72,7 @@ val LocalAppLock = staticCompositionLocalOf<AppLockController?> { null }
 
 @Composable internal fun PinInput(value: String, label: String, enabled: Boolean, modifier: Modifier = Modifier, changed: (String) -> Unit) {
     OutlinedTextField(value, onValueChange = { if (it.length <= 64 && it.all { c -> c in '0'..'9' }) changed(it) },
-        modifier = modifier.fillMaxWidth(), label = { Text(label) }, enabled = enabled, singleLine = true,
+        modifier = modifier.fillMaxWidth().noSensitiveCopyCut(), label = { Text(label) }, enabled = enabled, singleLine = true,
         visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword))
 }
 

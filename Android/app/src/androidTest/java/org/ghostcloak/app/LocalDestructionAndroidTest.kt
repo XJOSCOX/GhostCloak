@@ -28,6 +28,28 @@ class LocalDestructionAndroidTest {
         check(BuildConfig.DEBUG && BuildConfig.API_ORIGIN.isEmpty() && android.os.Build.HARDWARE=="ranchu") {"destructive_tests_require_offline_emulator"}
     }
     private val target get()=InstrumentationRegistry.getInstrumentation().targetContext
+    @Test fun offlineSameBootInactivityExpiryUsesExistingRecoveryAndClearsTimingRecord()=runBlocking {
+        val f=Fixture(target)
+        try {
+            f.seedSimple()
+            val store=DurableInactivityStore(f)
+            var elapsed=1000L
+            val policy=InactivityProtection(store,{InactivityObservation(3,elapsed,1_700_000_000_000L)},
+                {f.gate.armForProvenInactivity()})
+            assertEquals(InactivityAccess.DISABLED,policy.check())
+            assertTrue(policy.configure(InactivityPeriod.DAYS_7))
+            elapsed+=InactivityPeriod.DAYS_7.millis-1
+            assertEquals(InactivityAccess.VALID,policy.check())
+            elapsed++
+            assertEquals(InactivityAccess.EXPIRED,policy.check())
+            assertEquals(LocalOperationState.ARMED,f.journal.read())
+            f.restart() // A new process reconstructs the durable gate and coordinator.
+            LocalOperationCoordinator(f.gate,f.engine()) {}.resume()
+            assertEquals(LocalOperationState.NONE,f.journal.read())
+            assertNull(DurableInactivityStore(f).read())
+            assertTrue(f.own.all {f.real.absent(it)})
+        } finally {f.retireKeys()}
+    }
     private class Crash : RuntimeException("synthetic_interruption")
     private class Fixture(context: Context) : ContextWrapper(context), LocalStateAccessOwner {
         val id=RandomIdentifiers.create()

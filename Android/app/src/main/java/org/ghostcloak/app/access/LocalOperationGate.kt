@@ -55,6 +55,9 @@ class LocalOperationGate internal constructor(private val journal: LocalOperatio
     // Credential caller is build-gated; the debug simulator uses the same durable transition.
     internal fun armForSimulation() = armAfterCredential()
 
+    /** A same-boot elapsedRealtime deadline is independent of the emergency credential. */
+    internal fun armForProvenInactivity() = armAfterCredential()
+
     internal fun armAfterCredential() = synchronized(monitor) {
         if (mutable.value == LocalOperationState.NONE) persist(LocalOperationState.ARMED)
     }

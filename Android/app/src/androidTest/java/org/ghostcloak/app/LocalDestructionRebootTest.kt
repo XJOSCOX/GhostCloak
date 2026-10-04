@@ -40,6 +40,7 @@ class LocalDestructionRebootTest {
         assumeTrue(InstrumentationRegistry.getArguments().getString("safeExitRebootStage")=="prepare")
         val f=fixture(); val journal=DurableLocalOperationJournal(f); assertEquals(LocalOperationState.NONE,journal.read())
         EncryptedEndpointStore.open(f,endpoint).use {it.transaction {it.write("synthetic-private",byteArrayOf(1,2,3))}}
+        DurableInactivityStore(f).write(InactivityRecord(InactivityPeriod.DAYS_7,3,1000L,1_700_000_000_000L,1_700_000_000_000L))
         KeystoreDeviceAuth().publicKey(auth,true)
         val gate=LocalOperationGate(journal); gate.armAfterCredential()
         val engine=AndroidLocalDestruction(f,keys(),{if(it==DestructionCheckpoint.KEY_DELETED) throw java.io.IOException("synthetic_crash")})

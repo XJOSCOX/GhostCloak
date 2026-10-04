@@ -12,7 +12,7 @@ import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 
 @Composable fun SettingsScreen(state: AppState, developerAvailable: Boolean,
-    demo: () -> Unit, leave: () -> Unit, connect:()->Unit={}, sync:()->Unit={}, publish:()->Unit={}, logout:()->Unit={}, appLock:()->Unit={}, requestPrivacy:(Boolean)->Unit={}, blockedContacts:()->Unit={}, emergencyWipe:()->Unit={}) {
+    demo: () -> Unit, leave: () -> Unit, connect:()->Unit={}, sync:()->Unit={}, publish:()->Unit={}, logout:()->Unit={}, appLock:()->Unit={}, requestPrivacy:(Boolean)->Unit={}, blockedContacts:()->Unit={}, emergencyWipe:()->Unit={}, inactiveProtection:()->Unit={}) {
     var advanced by remember { mutableStateOf(false) }
     PageContent("Settings") {
         ErrorNotice(state.error, important = state.errorImportant)
@@ -30,6 +30,7 @@ import org.ghostcloak.app.ui.components.*
             Text("Screenshots and task previews are protected. Optional app lock controls access to your screens; background delivery continues.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             if (org.ghostcloak.app.access.LocalAppLock.current != null) {
                 OutlinedButton(onClick = appLock) { Text("App lock") }
+                OutlinedButton(onClick = inactiveProtection) { Text("Inactive Device Protection") }
                 if (org.ghostcloak.app.BuildConfig.EMERGENCY_PIN_ARMING_ENABLED) {
                     OutlinedButton(onClick=emergencyWipe) { Text("Safe Exit") }
                 }

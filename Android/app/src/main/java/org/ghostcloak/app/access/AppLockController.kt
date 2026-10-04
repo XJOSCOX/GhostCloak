@@ -19,6 +19,7 @@ data class LockViewState(
     val visible: Boolean = false, val presentation: Long = 0,
     val emergencyEnabled: Boolean = false,
     val settingsGranted: Boolean = false, val emergencyAdministrationGranted: Boolean = false,
+    val inactivityPeriod: InactivityPeriod = InactivityPeriod.OFF,
 )
 
 /** Process-owned; UI/lifecycle calls run on Main. Slow KDF/records operations run off Main. */
@@ -29,6 +30,10 @@ class AppLockController internal constructor(
     private val armEmergency: (() -> Unit)? = null,
     // Test seam counts equivalent primitive invocations, not wall-clock timing.
     private val checkPin: (PinVerifier, CharArray) -> Boolean = { verifier, pin -> verifier.matches(pin) },
+    private val inactivityAuthenticated: suspend () -> Boolean = { true },
+    private val inactivityEnabled: () -> Boolean = { false },
+    private val inactivityPeriod: () -> InactivityPeriod = { InactivityPeriod.OFF },
+    private val configureInactivityStore: (InactivityPeriod) -> Boolean = { false },
 ) {
     private val session = LockSession(now)
     private var config = LockConfiguration()
@@ -73,6 +78,7 @@ class AppLockController internal constructor(
             settingsGranted = initialized && !mutable.value.unavailable && session.canShow &&
                 (config.mode == LockMode.OFF || valid(settingsAuthorization)),
             emergencyAdministrationGranted = validEmergencyAdministration())
+        mutable.value = mutable.value.copy(inactivityPeriod = inactivityPeriod())
     }
     internal suspend fun quiesce() {
         scope.coroutineContext[Job]!!.cancelAndJoin()
@@ -82,6 +88,14 @@ class AppLockController internal constructor(
         }
     }
     fun start() { timer?.cancel(); session.start(); update(null) }
+    /** Revoke a prior in-memory grant before showing a protected time-uncertain screen. */
+    fun requireFreshUnlock() {
+        if (config.mode == LockMode.OFF) return
+        session.configure(config.mode, config.timing)
+        management=null; settingsAuthorization=null; enrollment=null; emergencyAdministration=null; prompt=null
+        automaticPromptConsumed=false; presentation++
+        update(null)
+    }
     fun stop(changingConfiguration: Boolean = false) {
         if (session.started && !changingConfiguration) { automaticPromptConsumed = false; presentation++ }
         session.stop(changingConfiguration); managementTimer?.cancel(); settingsAuthorization=null; settingsTimer?.cancel(); emergencyAdministration=null; prompt = null; management = null; enrollment = null
@@ -94,6 +108,7 @@ class AppLockController internal constructor(
         try {
             val bytes = persistence.read()
             config = if (bytes == null) LockConfiguration() else try { LockConfiguration.decode(bytes) } finally { bytes.fill(0) }
+            check(!inactivityEnabled() || config.mode != LockMode.OFF)
             if (config.boot != boot() && config.cooldownDuration > 0) {
                 config = config.copy(boot = boot(), cooldownUntil = now() + config.cooldownDuration)
                 persist(config)
@@ -165,6 +180,9 @@ class AppLockController internal constructor(
                         false
                     } else if (matches) {
                         config = config.copy(failures = 0, cooldownUntil = 0, cooldownDuration = 0); persist(config)
+                        if (purpose == UnlockPurpose.UNLOCK && !inactivityAuthenticated()) {
+                            failClosed(); return@withLock false
+                        }
                         val accepted = grant(purpose, ticket, epoch); update(null); accepted
                     } else { update("Incorrect PIN. ${if (wait > 0) "Try again in ${wait / 1000} seconds." else "Try again."}"); false }
                 } catch (e: CancellationException) { throw e }
@@ -199,6 +217,9 @@ class AppLockController internal constructor(
         if (attempt.second != session.generation || !session.started) return@withLock false
         try {
             if (config.failures > 0) { config = config.copy(failures = 0, cooldownUntil = 0, cooldownDuration = 0); persist(config) }
+            if (attempt.third == UnlockPurpose.UNLOCK && !inactivityAuthenticated()) {
+                failClosed(); return@withLock false
+            }
             val accepted = grant(attempt.third, attempt.second, epoch)
             if (accepted && attempt.third == UnlockPurpose.MANAGE) enrollment = session.generation to now() + 60_000
             update(null); accepted
@@ -305,6 +326,9 @@ class AppLockController internal constructor(
                 if (!initialized || mutable.value.unavailable || !session.canShow || (config.mode != LockMode.OFF && !valid(management))) {
                     update("Authenticate again to change app lock."); return@withLock false
                 }
+                if (mode == LockMode.OFF && inactivityEnabled()) {
+                    update("Disable Inactive Device Protection before turning off App Lock."); return@withLock false
+                }
                 if (mode.biometric && !valid(enrollment)) { update("Confirm your strong biometric first."); return@withLock false }
                 if (mode.pin && (!PinVerifier.valid(pin) || !pin.contentEquals(confirmation))) {
                     update("Use matching PINs with 6–64 digits."); return@withLock false
@@ -326,5 +350,32 @@ class AppLockController internal constructor(
                 finally { mutable.value = mutable.value.copy(busy = false) }
             }
         } finally { pin.fill('\u0000'); confirmation.fill('\u0000') }
+    }
+
+    /** A fresh MANAGE proof is separate from Settings access and shared with Safe Exit administration. */
+    suspend fun configureInactivity(next: InactivityPeriod, acknowledged: Boolean, confirmedDisable: Boolean): Boolean = operations.withLock {
+        val current = inactivityPeriod()
+        if (!initialized || mutable.value.unavailable || config.mode == LockMode.OFF || !session.canShow || !valid(management)) {
+            update("Authenticate again to manage Inactive Device Protection."); return@withLock false
+        }
+        if (current == InactivityPeriod.OFF && next != InactivityPeriod.OFF && !acknowledged) {
+            update("Acknowledge possible permanent local data loss."); return@withLock false
+        }
+        if (next == InactivityPeriod.OFF && !confirmedDisable) {
+            update("Confirm disabling Inactive Device Protection."); return@withLock false
+        }
+        if (current != InactivityPeriod.OFF && (next == InactivityPeriod.OFF || next.days > current.days) &&
+            config.emergency != null && !validEmergencyAdministration()) {
+            update("Confirm your current Safe Exit PIN first."); return@withLock false
+        }
+        mutable.value = mutable.value.copy(busy = true)
+        try {
+            val saved = withContext(Dispatchers.IO) { configureInactivityStore(next) }
+            if (!saved) { failClosed(); return@withLock false }
+            management=null; emergencyAdministration=null; enrollment=null
+            update(null); true
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { failClosed(); false }
+        finally { mutable.value = mutable.value.copy(busy = false) }
     }
 }

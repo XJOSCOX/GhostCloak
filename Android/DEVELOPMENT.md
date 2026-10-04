@@ -2,12 +2,12 @@
 
 ## Phase 1M status
 
-Inactive Device Protection is **not implemented or enabled**. The Phase 1M
-offline, cross-reboot, rollback-resistant deadline has a security stop-condition
-blocker; see [INACTIVE_DEVICE_PROTECTION_DESIGN.md](INACTIVE_DEVICE_PROTECTION_DESIGN.md).
-Do not describe the existing Safe Exit engine as an active inactivity timer or
-test automatic expiry on a physical phone. No Phase 1M APK, backend migration,
-Android DB migration, or server deployment is required from this audit.
+Inactive Device Protection is opt-in and Off by default. Same-boot expiry uses
+`elapsedRealtime()` and the existing Safe Exit recovery engine. Every cross-boot
+case stays TIME_UNCERTAIN until successful normal App Lock authentication.
+See [INACTIVE_DEVICE_PROTECTION_DESIGN.md](INACTIVE_DEVICE_PROTECTION_DESIGN.md).
+Only a disposable AVD may run automated destructive validation. No backend,
+server DB or Android DB migration is required.
 
 ## Phase 1L pre-release identity cutover
 

@@ -10,6 +10,12 @@ import kotlinx.coroutines.cancelAndJoin
 class GhostApplication : Application(), androidx.work.Configuration.Provider, org.ghostcloak.storage.LocalStateAccessOwner {
     private val localOperationJournal by lazy { org.ghostcloak.app.access.DurableLocalOperationJournal(this) }
     val localOperationGate by lazy { org.ghostcloak.app.access.LocalOperationGate(localOperationJournal) }
+    private fun newInactivityOwner() = lazy { org.ghostcloak.app.access.InactivityProtection(
+        org.ghostcloak.app.access.DurableInactivityStore(this),
+        { org.ghostcloak.app.access.androidInactivityClock(this) },
+        { localOperationGate.armForProvenInactivity() }) }
+    private var inactivityOwner = newInactivityOwner()
+    internal val inactivity get() = inactivityOwner.value
     override val localStateAccess get() = localOperationGate
     private var lockScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate)
     private var lifecycleScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate)
@@ -72,12 +78,27 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
     val media get() = localOperationGate.access { mediaOwner.value }
     private fun newLockOwner(): Lazy<org.ghostcloak.app.access.AppLockController> = lazy {
         org.ghostcloak.app.access.AppLockController(object : org.ghostcloak.app.access.LockPersistence {
-            override suspend fun read() = runtime.readAppLock()
-            override suspend fun write(bytes: ByteArray) = runtime.writeAppLock(bytes)
+            override suspend fun read() = if(inactivity.needsIsolatedAuthentication) isolatedLockRecord() else runtime.readAppLock()
+            override suspend fun write(bytes: ByteArray) = if(inactivity.needsIsolatedAuthentication) writeIsolatedLockRecord(bytes) else runtime.writeAppLock(bytes)
         }, lockScope,
             android.os.SystemClock::elapsedRealtime,
             { android.provider.Settings.Global.getInt(contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0) },
-            armEmergency = { localOperationGate.armAfterCredential() })
+            armEmergency = { localOperationGate.armAfterCredential() },
+            inactivityAuthenticated = { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { inactivity.authenticated() } },
+            inactivityEnabled = { inactivity.enabled }, inactivityPeriod = { inactivity.period },
+            configureInactivityStore = { inactivity.configure(it) })
+    }
+    private suspend fun isolatedLockRecord(): ByteArray? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        check(java.io.File(noBackupFilesDir,"local.db").exists() && java.io.File(noBackupFilesDir,"local.wrapped").exists())
+        org.ghostcloak.storage.EncryptedEndpointStore.open(this@GhostApplication,"local").use { store ->
+            store.transaction { checkNotNull(store.read("app/access-lock")) }
+        }
+    }
+    private suspend fun writeIsolatedLockRecord(bytes: ByteArray) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        check(java.io.File(noBackupFilesDir,"local.db").exists() && java.io.File(noBackupFilesDir,"local.wrapped").exists())
+        org.ghostcloak.storage.EncryptedEndpointStore.open(this@GhostApplication,"local").use { store ->
+            store.transaction { store.write("app/access-lock",bytes) }
+        }
     }
     private var lockOwner = newLockOwner()
     val appLock: org.ghostcloak.app.access.AppLockController get() = localOperationGate.access { lockOwner.value }
@@ -98,18 +119,28 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
         lockScope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+kotlinx.coroutines.Dispatchers.Main.immediate)
         lifecycleScope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+kotlinx.coroutines.Dispatchers.Main.immediate)
         backgroundScope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+kotlinx.coroutines.Dispatchers.IO)
+        inactivityOwner=newInactivityOwner(); inactivity.check()
         lockOwner=newLockOwner(); mediaOwner=newMediaOwner(); runtimeOwner=newRuntimeOwner()
         freshRevision.value++ // New lazy owners; do not open them before journal reset.
     }
     override fun onCreate() {
         super.onCreate()
+        if (!localOperationGate.blocked && getSystemService(android.os.UserManager::class.java).isUserUnlocked) inactivity.check()
+        if (!localOperationGate.blocked && !inactivity.normalAccessAllowed) {
+            recoveryScope.launch { try { BackgroundSyncSchedule.cancelForLocalOperation(this@GhostApplication) } catch (_: Exception) { } }
+            try { getSystemService(android.app.NotificationManager::class.java).cancelAll() } catch (_: Exception) { }
+        }
         recoveryScope.launch {localOperationGate.state.collect {state->
-            if(state==org.ghostcloak.app.access.LocalOperationState.NONE) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {startNormalOwners()}
-            else if(state!=org.ghostcloak.app.access.LocalOperationState.CORRUPT && getSystemService(android.os.UserManager::class.java).isUserUnlocked) resumeLocalOperation()
+            if(state==org.ghostcloak.app.access.LocalOperationState.NONE && inactivity.normalAccessAllowed) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {startNormalOwners()}
+            else if(state!=org.ghostcloak.app.access.LocalOperationState.NONE && state!=org.ghostcloak.app.access.LocalOperationState.CORRUPT && getSystemService(android.os.UserManager::class.java).isUserUnlocked) resumeLocalOperation()
         }}
+        recoveryScope.launch { inactivity.state.collect { access ->
+            if (access in setOf(org.ghostcloak.app.access.InactivityAccess.DISABLED,org.ghostcloak.app.access.InactivityAccess.VALID) && !localOperationGate.blocked)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) { startNormalOwners() }
+        } }
     }
     private fun startNormalOwners() {
-        if(localOperationGate.blocked || normalGeneration==freshRevision.value) return
+        if(localOperationGate.blocked || !inactivity.normalAccessAllowed || normalGeneration==freshRevision.value) return
         normalGeneration=freshRevision.value
         lifecycleScope.launch {
             appLock.state.collect { if (!it.canShowContent) {
@@ -123,7 +154,8 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
             // One local cleanup loop, no network/alarms/wake lock. Android may suspend it.
             backgroundScope.launch {
                 while (true) {
-                    try { runtime.reconcileLocalExpiry()
+                    try { if(inactivity.check()==org.ghostcloak.app.access.InactivityAccess.EXPIRED) break
+                        runtime.reconcileLocalExpiry()
                         if (mediaOwner.isInitialized()) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { media.reconcileStored() }
                     }
                     catch (e: kotlinx.coroutines.CancellationException) { throw e }

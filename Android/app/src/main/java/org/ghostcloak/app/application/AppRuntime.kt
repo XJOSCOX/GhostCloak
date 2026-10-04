@@ -25,9 +25,13 @@ class AppRuntime internal constructor(
     private val operationGate: org.ghostcloak.app.access.LocalOperationGate? =
         (context.applicationContext as? GhostApplication)?.localOperationGate,
 ) : AutoCloseable {
-    internal val operationBlocked get() = operationGate?.blocked == true
+    internal val operationBlocked get() = operationGate?.blocked == true ||
+        (context.applicationContext as? GhostApplication)?.inactivity?.normalAccessAllowed == false
     private suspend fun <T> guarded(block: suspend () -> T): T = if (operationGate != null) operationGate.operation(block) else block()
-    private fun requireNormal() { operationGate?.requireNormal() }
+    private fun requireNormal() {
+        operationGate?.requireNormal()
+        check(!operationBlocked) { "local_access_blocked" }
+    }
     private val expiryChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
     val expiryRevision: kotlinx.coroutines.flow.StateFlow<Long> get() = expiryChanges
     fun expiryNow() = expiryClock.now()

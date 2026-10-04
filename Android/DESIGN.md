@@ -285,3 +285,6 @@ old local state is inaccessible, and confirmed fresh onboarding after reboot
 without reconnecting the old account. See the
 [release validation record](SAFE_EXIT_RELEASE_VALIDATION.md#phase-1k4e-completed-on-a-fresh-disposable-avd).
 No backend, protocol or database migration is involved.
+# Phase 1N contact QR
+
+Profile ID copy/share and the local camera QR flow are specified in [QR_CONTACT_DESIGN.md](QR_CONTACT_DESIGN.md). Scanning enters the existing exact-ID contact path and does not verify identity or disclose display names to the server.

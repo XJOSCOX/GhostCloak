@@ -26,7 +26,7 @@ Phase 1L.1B adds framed E2EE payload type 4, a standalone profile update with a 
 
 This is not a read receipt: it contains no read/open time or message ID. A peer can infer that the recipient explicitly accepted a request from the arrival time of this encrypted response; normal server mailbox timing and routing metadata also remain visible. There is no additional plaintext acceptance field or server profile storage. The backend and server schema remain unchanged, and the new encrypted-store key needs no Android SQL migration. Older clients cannot decode type 4 and may leave it unACKed until mailbox retention; text remains compatible, so upgrade both endpoints for automatic profile sync.
 
-Local/demo contact cards use version 2 and contain a public ID plus cryptographic contact material, without a display name. Their locally random ID is a demo-only placeholder, not a registered directory handle; the connected UI uses server-assigned IDs and does not export those cards. A bare ID or card never marks a contact verified. A future QR/deep-link flow needs a separately reviewed parser and identity-verification UX.
+Local/demo contact cards use version 2 and contain a public ID plus cryptographic contact material, without a display name. Their locally random ID is a demo-only placeholder, not a registered directory handle; the connected UI uses server-assigned IDs and does not export those cards. A bare ID or card never marks a contact verified. Phase 1N adds a versioned, ID-only QR with an exact parser and local camera scanner; it is not an identity-verification QR or an Android deep link. See [QR_CONTACT_DESIGN.md](QR_CONTACT_DESIGN.md).
 
 ## Threat model and residual metadata
 

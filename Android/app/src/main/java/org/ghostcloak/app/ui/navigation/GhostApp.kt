@@ -15,6 +15,7 @@ import org.ghostcloak.app.application.withoutExpired
 import org.ghostcloak.app.application.nextExpiryUiDelay
 import org.ghostcloak.app.ui.screens.*
 import org.ghostcloak.app.ui.components.*
+import org.ghostcloak.app.ui.qr.ContactQrScreen
 
 @Composable fun GhostApp(model: GhostViewModel, chatsRequest: Int = 0) {
     val snapshot by model.state.collectAsState()
@@ -72,8 +73,12 @@ import org.ghostcloak.app.ui.components.*
                 else NavHost(nav, startDestination = "contacts") {
                     composable("contacts") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork) }
                     composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
-                    composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard, {name->model.addNetwork(name) {nav.popBackStack()}},model::unblock,{nav.navigate("blocked")}) { text -> model.importCard(text) { nav.popBackStack() } } }
-                    composable("profiles") { ProfilesScreen(state, model::rename) }
+                    composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard,
+                        {name->model.addNetwork(name) {nav.popBackStack()}},model::unblock,{nav.navigate("blocked")},
+                        { text -> model.importCard(text) { nav.popBackStack() } },
+                        { id -> nav.navigate("conversation/$id") }) }
+                    composable("profiles") { ProfilesScreen(state, model::rename) { nav.navigate("contact-qr") } }
+                    composable("contact-qr") { state.ghostCloakId?.let { ContactQrScreen(it) { nav.popBackStack() } } }
                     composable("settings") { protectSettings { SettingsScreen(state, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork, { nav.navigate("app-lock") },model::requestPrivacy,{nav.navigate("blocked")}, {nav.navigate("emergency-wipe")}, {nav.navigate("inactive-protection")}) } }
                     composable("inactive-protection") { protectSettings {
                         org.ghostcloak.app.access.LocalAppLock.current?.let { controller ->

@@ -77,6 +77,11 @@ tasks.withType<Test>().configureEach {
 }
 
 dependencies {
+    // Local QR encoding/decoding and camera capture; no cloud scanning service.
+    implementation("com.google.zxing:core:3.5.4")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0") {
+        exclude(group = "com.google.zxing", module = "core")
+    }
     // Biometric needs FragmentActivity; its old transitive Fragment rejects Activity Result request codes.
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.biometric)

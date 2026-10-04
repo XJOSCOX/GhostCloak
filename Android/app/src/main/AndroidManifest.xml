@@ -4,6 +4,7 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
 
     <application
@@ -17,6 +18,8 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.GhostCloak">
+        <activity android:name=".ui.qr.SecureQrCaptureActivity" android:exported="false"
+            android:screenOrientation="unspecified" />
         <receiver android:name=".application.NotificationDismissReceiver" android:exported="false" android:directBootAware="false" />
         <provider android:name=".attachments.AttachmentViewerProvider"
             android:authorities="${applicationId}.attachment-view" android:exported="false"

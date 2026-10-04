@@ -1,5 +1,6 @@
 package org.ghostcloak.app.ui.screens
 
+import android.content.Intent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -14,7 +15,7 @@ import org.ghostcloak.app.ui.privacy.copySensitive
 import androidx.compose.ui.platform.LocalContext
 import org.ghostcloak.protocol.GhostCloakIds
 
-@Composable fun ProfilesScreen(state: AppState, rename: (String) -> Unit) {
+@Composable fun ProfilesScreen(state: AppState, rename: (String) -> Unit, showQr: () -> Unit = {}) {
     var displayName by remember(state.identity?.displayName) { mutableStateOf(state.identity?.displayName.orEmpty()) }
     var editing by remember { mutableStateOf(false) }
     val context=LocalContext.current
@@ -33,6 +34,14 @@ import org.ghostcloak.protocol.GhostCloakIds
             state.ghostCloakId?.let { id ->
                 DetailRow(Glyph.SHIELD,"Ghost Cloak ID",GhostCloakIds.display(id))
                 TextButton(onClick={copySensitive(context,GhostCloakIds.display(id))}) {Text("Copy ID")}
+                TextButton(onClick={
+                    val share = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, "Add me on Ghost Cloak:\n${GhostCloakIds.display(id)}")
+                    }
+                    context.startActivity(Intent.createChooser(share, "Share Ghost Cloak ID"))
+                }) {Text("Share ID")}
+                TextButton(onClick=showQr) {Text("Show QR")}
             }
             DetailRow(Glyph.SHIELD,"Device identity","Your profile belongs to this device. Editing your name keeps your keys and conversations.")
         }

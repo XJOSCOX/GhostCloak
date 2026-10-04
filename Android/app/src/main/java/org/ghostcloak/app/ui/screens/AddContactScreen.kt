@@ -1,5 +1,13 @@
 package org.ghostcloak.app.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -13,25 +21,54 @@ import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.privacy.copySensitive
 import org.ghostcloak.messaging.ContactCardCodec
 import org.ghostcloak.protocol.GhostCloakIds
+import org.ghostcloak.protocol.GhostCloakContactQr
+import org.ghostcloak.app.ui.qr.SecureQrCaptureActivity
 
 @Composable fun AddContactScreen(state: AppState, back: () -> Unit, export: () -> Unit, lookup:((String)->Unit)?=null,
-    unblock:(String)->Unit={}, manageBlocked:()->Unit={}, import: (String) -> Unit) {
+    unblock:(String)->Unit={}, manageBlocked:()->Unit={}, import: (String) -> Unit,
+    openExisting:(String)->Unit={}) {
     var draft by remember { mutableStateOf("") }; var tooLarge by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
     var unblockTarget by remember {mutableStateOf<String?>(null)}
     val context = LocalContext.current
+    var ghostCloakId by rememberSaveable { mutableStateOf("") }
+    var invalidQr by remember { mutableStateOf(false) }
+    var cameraDenied by remember { mutableStateOf(false) }
+    val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
+        result.contents?.let { payload ->
+            val id = GhostCloakContactQr.decode(payload)
+            if (id == null) invalidQr = true else { ghostCloakId = id; invalidQr = false }
+        }
+    }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        cameraDenied = !granted
+        if (granted) scanner.launch(contactScanOptions())
+    }
     PageContent("New chat", if (state.networkConfigured && !state.demo) "Find someone on Ghost Cloak." else "Exchange a public contact card.", back) {
         if(state.networkConfigured && !state.demo && lookup!=null) {
-            var ghostCloakId by remember {mutableStateOf("")}
             Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer) {
                 Box(Modifier.fillMaxWidth().padding(GhostDimensions.heroInset),contentAlignment=androidx.compose.ui.Alignment.Center) { AppIcon(Glyph.PERSON,modifier=Modifier.size(GhostDimensions.touchTarget),tint=MaterialTheme.colorScheme.primary) }
             }
             OutlinedTextField(ghostCloakId,{if(it.length<=14) ghostCloakId=it},label={Text("Ghost Cloak ID")},singleLine=true,modifier=Modifier.fillMaxWidth())
+            OutlinedButton(onClick = {
+                invalidQr = false; cameraDenied = false
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+                    scanner.launch(contactScanOptions())
+                else permission.launch(Manifest.permission.CAMERA)
+            }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
+            if (cameraDenied) Text("Camera access is needed to scan. You can still enter an ID manually.")
+            if (invalidQr) Text("Invalid Ghost Cloak QR code.", color = MaterialTheme.colorScheme.error)
             val canonical=runCatching {GhostCloakIds.normalize(ghostCloakId)}.getOrNull()
             val blocked=state.blockedContacts.firstOrNull {it.ghostCloakId==canonical && canonical!=null}
-            if(blocked!=null) {
+            val existing=state.contacts.firstOrNull {it.contact.ghostCloakId==canonical && canonical!=null}
+            if(canonical!=null && canonical==state.ghostCloakId) {
+                Text("This is your Ghost Cloak ID.")
+            } else if(blocked!=null) {
                 Text("This contact is blocked.")
                 FullButton("Unblock",!state.loading) {unblockTarget=blocked.remoteDeviceId}
+            } else if(existing!=null) {
+                Text("This contact is already on this device.")
+                FullButton("Open contact",!state.loading) {openExisting(existing.contact.remoteDeviceId)}
             } else FullButton("Find and add contact",!state.loading && canonical!=null) {lookup(canonical!!)}
             if(ghostCloakId.isNotBlank() && canonical==null) Text("Use 12 ID characters, optionally grouped 4-4-4.",color=MaterialTheme.colorScheme.error)
             Text("Your first message arrives as a request. Safety-number verification is optional; use it to confirm who you are talking to.",style=MaterialTheme.typography.bodyMedium)
@@ -61,3 +98,10 @@ import org.ghostcloak.protocol.GhostCloakIds
     }
     unblockTarget?.let {id->UnblockConfirmation({unblockTarget=null}) {unblockTarget=null;unblock(id)}}
 }
+
+private fun contactScanOptions() = ScanOptions()
+    .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+    .setBeepEnabled(false)
+    .setBarcodeImageEnabled(false)
+    .setPrompt("Scan a Ghost Cloak contact QR")
+    .setCaptureActivity(SecureQrCaptureActivity::class.java)

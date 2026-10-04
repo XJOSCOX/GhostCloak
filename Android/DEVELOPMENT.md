@@ -714,3 +714,6 @@ uses `release-acceptance.init.gradle`, an unreachable fixture origin and a
 disposable AVD. Its local debug-certificate signing override is strictly for
 testing; production release signing is unchanged. Never use the release
 acceptance fixture with a real account or physical device.
+# Phase 1N contact QR
+
+The connected Profile screen offers Copy ID, Share ID and Show QR. Add Contact offers Scan QR in addition to manual ID entry. The v1 payload and strict parser are documented in [QR_CONTACT_DESIGN.md](QR_CONTACT_DESIGN.md). Test QR display/scan on a disposable AVD or manual two-phone setup; do not run aggregate connected tests with a physical phone attached. No backend or database migration is needed.

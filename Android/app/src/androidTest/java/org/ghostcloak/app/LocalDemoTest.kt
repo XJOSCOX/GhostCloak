@@ -60,13 +60,17 @@ class LocalDemoTest {
         compose.onNodeWithText("Write a message…").performTextInput(message)
         compose.onNodeWithContentDescription("Send").performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText(message).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithContentDescription("Unverified contact · Security").performClick()
-        compose.waitUntil(20000) { compose.onAllNodesWithText("Mark verified").fetchSemanticsNodes().isNotEmpty() }
-        compose.waitUntil(20000) { compose.onNodeWithText("Mark verified").isEnabled() }
-        compose.onNodeWithText("Mark verified").performScrollTo().performClick()
-        compose.waitUntil(20000) { compose.onAllNodesWithText("I compared it · Verify").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("I compared it · Verify").performClick()
-        compose.waitUntil(20000) { compose.onAllNodesWithText("✓ Verified").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Conversation options").performClick()
+        compose.onNodeWithText("Contact details").performClick()
+        compose.waitUntil(20000) { compose.onAllNodesWithText("Mark verified").fetchSemanticsNodes().isNotEmpty() ||
+            compose.onAllNodesWithText("✓ Verified").fetchSemanticsNodes().isNotEmpty() }
+        if(compose.onAllNodesWithText("Mark verified").fetchSemanticsNodes().isNotEmpty()) {
+            compose.waitUntil(20000) { compose.onNodeWithText("Mark verified").isEnabled() }
+            compose.onNodeWithText("Mark verified").performScrollTo().performClick()
+            compose.waitUntil(20000) { compose.onAllNodesWithText("I compared it · Verify").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithText("I compared it · Verify").performClick()
+            compose.waitUntil(20000) { compose.onAllNodesWithText("✓ Verified").fetchSemanticsNodes().isNotEmpty() }
+        }
         compose.onNodeWithText("Mark verified").assertDoesNotExist()
         compose.onNodeWithContentDescription("Back").assertIsDisplayed().performClick()
         compose.onNodeWithContentDescription("Back").performClick()

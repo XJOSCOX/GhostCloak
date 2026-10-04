@@ -8,7 +8,7 @@
 
 ## Authoritative relationship model
 
-`relationshipState` derives UNKNOWN, REQUEST_PENDING, ACCEPTED_CONTACT, DORMANT_UNACCEPTED and BLOCKED from existing encrypted records. `isActiveContact` means exactly ACCEPTED_CONTACT: an existing contact with request=false and blocked=false. Pending requests are visible separately. Blocked accepted contacts remain visible for existing explicit unblock management; they are not active and cannot send/download or bypass Block through Add.
+`relationshipState` derives UNKNOWN, REQUEST_PENDING, ACCEPTED_CONTACT, DORMANT_UNACCEPTED and BLOCKED from existing encrypted records. `isActiveContact` means exactly ACCEPTED_CONTACT: an existing contact with request=false and blocked=false. Pending requests are visible separately. Phase 1O moved all blocked contacts to Settings → Blocked contacts and makes Unblock return to DORMANT_UNACCEPTED, including older accepted-and-blocked rows; they cannot send/download or bypass Block through Add.
 
 Raw rows remain appropriate for identity binding, ambiguity checks, retained-row capacity limits, receipt/outbox handling and cleanup. Their existence is not a duplicate Add decision. No serialized schema change is needed.
 

@@ -57,9 +57,9 @@ Settings → Privacy & Security → Blocked contacts uses the shared header, pag
 and existing app-lock private subtree. It reads only encrypted local Contact.blocked
 state and retained names, without directory refreshes or identifier fallbacks.
 Unblock requires confirmation, removes the committed entry immediately, preserves
-pins/session/replay state and performs no network request. Unaccepted identities
-remain dormant until a fresh request or explicit Add; accepted relationships retain
-their existing acceptance metadata. Discarded messages/attachments never return.
+pins/session/replay state and performs no network request. All unblocked identities
+remain unaccepted until a fresh request or explicit Add, including contacts that
+were accepted before Block. Discarded messages/attachments never return.
 See [request privacy](REQUEST_PRIVACY_DESIGN.md#phase-1j2-blocked-contact-management).
 
 ## Supplied UI icon pack
@@ -189,7 +189,7 @@ Automatic biometric presentation is owned by AppLockController, separately from 
 
 ## Phase 1H.1 — local message deletion
 
-“Delete” means LOCAL DEVICE ONLY. Long-press an incoming or outgoing bubble, choose Delete, then confirm “Delete message?” / “This removes the message from this device only.” Conversation options → Clear conversation uses a separate confirmation and keeps the contact. Both actions use the existing root app-lock gate, theme and dialogs. They do not recall, unsend, delete remotely, notify the recipient, or alter the recipient's copy. There is no guarantee of erasure from backups, memory or flash remnants outside the live encrypted record store.
+“Delete” means LOCAL DEVICE ONLY. Long-press an incoming or outgoing bubble, choose Delete, then confirm “Delete message?” / “This removes the message from this device only.” Conversation options or Contact details → Delete conversation uses a separate confirmation and keeps the contact. Both actions use the existing root app-lock gate, theme and dialogs. They do not recall, unsend, delete remotely, notify the recipient, or alter the recipient's copy. There is no guarantee of erasure from backups, memory or flash remnants outside the live encrypted record store.
 
 `LocalRepository.delete` transactionally removes the visible message record, its local read marker and notification eligibility in every ledger state (pending, posting, announced). `clear` removes the conversation's visible records, read marker and notification ledger in one transaction, including stale eligibility references. AppRuntime's existing serialized operation completion reconciles the single aggregate notification; no eligible messages means it is cancelled. Unrelated messages are not marked read by deletion. ViewModel refresh immediately updates history, previews and unread counts.
 
@@ -197,7 +197,7 @@ Deletion deliberately preserves `app/accepted` envelope hashes and the engine's 
 
 Outgoing delivery receipt polling is derived from remaining visible SERVER_ACCEPTED messages. Removing history therefore removes those submissions from future receipt batches; the existing modulo rotation handles a smaller list. No separate receipt ledger or backend retention change is needed. Unfinished durable outbox operations are retained and may still complete delivery using their existing submission ID/ciphertext. Retry updates history only when its visible record still exists, then removes finished outbox records. Deletion is not cancellation of an in-flight or queued send, and the recipient may still receive it. Transient delivery material remains until normal outbox completion/expiry even after its visible record is removed.
 
-Clear does not modify contacts, accepted/request relationships, blocking, verification, safety numbers, Signal sessions, credentials or device/account identity. General Remove contact remains unimplemented. Existing message-request “Block & delete” is a distinct action retaining a blocked contact tombstone; its history cleanup now uses the same transactional clear. Backend, cryptography, ACK semantics, foreground/background cadence, generic notifications and app-lock policy are unchanged.
+Clear does not modify contacts, accepted/request relationships, blocking, verification, safety numbers, Signal sessions, credentials or device/account identity. Existing message-request Reject remains distinct from accepted-contact removal. Backend, cryptography, ACK semantics, foreground/background cadence, generic notifications and app-lock policy are unchanged.
 
 ## Phase 1H.2 — E2EE disappearing messages
 
@@ -288,3 +288,13 @@ No backend, protocol or database migration is involved.
 # Phase 1N contact QR
 
 Profile ID copy/share and the local camera QR flow are specified in [QR_CONTACT_DESIGN.md](QR_CONTACT_DESIGN.md). Scanning enters the existing exact-ID contact path and does not verify identity or disclose display names to the server.
+
+## Phase 1O accepted-contact management
+
+Contact details combines the existing safety number and read-only Ghost Cloak ID with Manage contact. An encrypted `Contact` row remains the identity-continuity anchor. The authoritative local relationship is derived from its `request` and `blocked` flags plus the existing request lifecycle: `ACCEPTED_CONTACT → DORMANT_UNACCEPTED` on Remove, `ACCEPTED_CONTACT → BLOCKED` on Block, `BLOCKED → DORMANT_UNACCEPTED` on Unblock, and `DORMANT_UNACCEPTED → REQUEST_PENDING → ACCEPTED_CONTACT` on a new authenticated message and explicit Accept. A removed peer can also be explicitly re-added by exact ID/card using the retained pinned identity and session; the same contact row is reused. No display name determines membership.
+
+Delete conversation transactionally removes local messages, attachment descriptors, read markers and notification eligibility while keeping acceptance, contact, local alias, Signal state, identity pin and replay receipts. AppRuntime reconciles unreferenced encrypted attachment cache files after the commit. It does not cancel a previously queued outbox send or delete the peer's copy. Future messages from that accepted peer appear directly in the conversation.
+
+Remove contact hides the contact from accepted lists but retains old encrypted history and local alias. The old history is unavailable through normal UI while unaccepted and is revealed if the user later explicitly accepts or re-adds that same pinned identity. A retained-history boundary lets Reject/expiry of a later request discard only that request's new messages. Prior unread/notification state is cleared. A private per-peer marker makes new requests hidden after Remove or Block/Unblock, even if the optional immediate-visible request preference is off. No peer notification or relationship API call is made.
+
+Block reuses the existing `Contact.blocked` sink. It ends acceptance, hides the contact from normal lists, retains old encrypted history, and suppresses future text/attachment presentation while authenticated envelope processing, ratchet/replay commit and ordinary device ACK continue. The blocked list can show a retained local alias or public ID; alias never enters network content. Unblock ends suppression but remains unaccepted. Neither old blocked messages nor attachment bodies reappear; a genuinely new message can start a new request. Previously verified identity pins, sessions, and deduplication evidence survive every action. An old accepted-and-blocked row is normalized to unaccepted on Unblock. No backend deployment or server/Android SQL migration is needed.

@@ -17,14 +17,15 @@ import org.ghostcloak.protocol.GhostCloakIds
 
 @Composable fun ContactSecurityScreen(state: AppState, contact: ContactStatus, back: () -> Unit,
     load: (Boolean) -> Unit, verify: (String) -> Unit, trust: (String) -> Unit, block: (Boolean) -> Unit,
-    importUpdatedCard: (() -> Unit)? = null) {
+    clear: () -> Unit = {}, remove: () -> Unit = {}, importUpdatedCard: (() -> Unit)? = null) {
     val changed = contact.identity?.trustState == IdentityTrustState.CHANGED
     val verified = contact.identity?.trustState == IdentityTrustState.VERIFIED
     val previouslyVerified = contact.identity?.previousTrustState == IdentityTrustState.VERIFIED
     var confirmation by remember { mutableStateOf<String?>(null) }
     var confirmUnblock by remember {mutableStateOf(false)}
+    var manageAction by remember {mutableStateOf<String?>(null)}
     LaunchedEffect(contact.contact.remoteDeviceId, changed) { load(changed) }
-    PageContent("Contact security", "Verify the person behind the name.", back) {
+    PageContent("Contact details", "Verify the person behind the name.", back) {
         Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.spacedBy(GhostDimensions.regular),verticalAlignment=Alignment.CenterVertically) {
             Avatar(contact.contact.visibleName)
             Column(verticalArrangement = Arrangement.spacedBy(GhostDimensions.small)) {
@@ -38,6 +39,14 @@ import org.ghostcloak.protocol.GhostCloakIds
                     verticalArrangement = Arrangement.spacedBy(GhostDimensions.small)) {
                     SectionLabel("GHOST CLOAK ID")
                     Text(GhostCloakIds.display(id), style = MaterialTheme.typography.titleMedium)
+                }
+            }
+        }
+        contact.contact.localAlias?.takeIf { !contact.contact.request }?.let { alias ->
+            Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface) {
+                Column(Modifier.fillMaxWidth().padding(GhostDimensions.regular)) {
+                    SectionLabel("LOCAL ALIAS")
+                    Text(alias, style = MaterialTheme.typography.titleMedium)
                 }
             }
         }
@@ -56,10 +65,22 @@ import org.ghostcloak.protocol.GhostCloakIds
         if (changed && importUpdatedCard != null) TextButton(onClick = importUpdatedCard) { Text("Import updated contact card") }
         ErrorNotice(state.error, important = state.errorImportant)
         HorizontalDivider()
-        SectionLabel("LOCAL CONTROLS")
-        Text("Blocking hides new incoming messages on this device. It preserves the contact and cryptographic identity.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedButton(onClick = { if(contact.contact.blocked) confirmUnblock=true else block(true) }, enabled = !state.loading, modifier = Modifier.fillMaxWidth().heightIn(min = GhostDimensions.avatar)) {
-            Text(if (contact.contact.blocked) "Unblock contact" else "Block on this device")
+        SectionLabel(if(contact.contact.request || contact.contact.blocked) "LOCAL CONTROLS" else "MANAGE CONTACT")
+        if(!contact.contact.request && !contact.contact.blocked) {
+            OutlinedButton(onClick={manageAction="delete"},enabled=!state.loading,modifier=Modifier.fillMaxWidth().heightIn(min=GhostDimensions.avatar)) {
+                Text("Delete conversation")
+            }
+            OutlinedButton(onClick={manageAction="remove"},enabled=!state.loading,modifier=Modifier.fillMaxWidth().heightIn(min=GhostDimensions.avatar)) {
+                Text("Remove contact")
+            }
+            OutlinedButton(onClick={manageAction="block"},enabled=!state.loading,modifier=Modifier.fillMaxWidth().heightIn(min=GhostDimensions.avatar)) {
+                Text("Block contact")
+            }
+        } else {
+            OutlinedButton(onClick = { if(contact.contact.blocked) confirmUnblock=true else manageAction="block" }, enabled = !state.loading,
+                modifier = Modifier.fillMaxWidth().heightIn(min = GhostDimensions.avatar)) {
+                Text(if (contact.contact.blocked) "Unblock contact" else "Block contact")
+            }
         }
     }
     confirmation?.let { expected ->
@@ -70,4 +91,17 @@ import org.ghostcloak.protocol.GhostCloakIds
             dismissButton = { TextButton(onClick = { confirmation = null }) { Text("Cancel") } })
     }
     if(confirmUnblock) UnblockConfirmation({confirmUnblock=false}) {confirmUnblock=false;block(false)}
+    manageAction?.let { action ->
+        AlertDialog(onDismissRequest={manageAction=null},
+            title={Text(when(action) {"delete"->"Delete this conversation?";"remove"->"Remove this contact?";else->"Block this contact?"})},
+            text={Text(when(action) {
+                "delete"->"This removes the local message history from this device."
+                "remove"->"Future messages from this person will arrive as new message requests."
+                else->"Future messages will be hidden and discarded on this device."
+            })},
+            confirmButton={TextButton(onClick={manageAction=null;when(action) {"delete"->clear();"remove"->remove();else->block(true)}}) {
+                Text(when(action) {"delete"->"Delete";"remove"->"Remove";else->"Block"})
+            }},
+            dismissButton={TextButton(onClick={manageAction=null}) {Text("Cancel")}})
+    }
 }

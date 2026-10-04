@@ -160,8 +160,13 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun loadFingerprint(id: String, pending: Boolean) = run { mutable.value = mutable.value.copy(fingerprint = it.fingerprint(id, pending)); null }
     fun verify(id: String, expected: String) = run { it.verify(id, expected); null }
     fun trust(id: String, expected: String) = run { it.trustReplacement(id, expected); null }
-    fun block(id: String, blocked: Boolean) = run { it.block(id, blocked); null }
+    fun block(id: String, blocked: Boolean, success: () -> Unit = {}) = run {
+        it.block(id, blocked); withContext(Dispatchers.Main) { success() }; null
+    }
     fun unblock(id:String)=run {it.unblock(id);null}
+    fun removeContact(id:String,success:()->Unit)=run {
+        it.removeContact(id); withContext(Dispatchers.Main) { success() }; null
+    }
     fun delete(id: String, localId: String) = run { it.delete(id, localId); null }
     fun clearConversation(id: String) = run { it.clearConversation(id); null }
     fun setDisappearing(id: String, seconds: Int) = run {

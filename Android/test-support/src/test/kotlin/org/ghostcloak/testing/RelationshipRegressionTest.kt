@@ -39,6 +39,10 @@ class RelationshipRegressionTest {
             profile=SenderProfile(ai.userId,aid,org.ghostcloak.identity.RandomIdentifiers.create(),"7K4M9Q2FX8DR")
             a.importCard(b.exportCard());b.serverReference(1000000)
         }
+        suspend fun accept() {
+            b.importCard(a.exportCard())
+            profile=SenderProfile(profile.accountId,aid,profile.routingId,repo.contact(aid).ghostCloakId!!)
+        }
         suspend fun receive(attachment:Boolean=false):EncryptedEnvelope {
             val bytes=if(attachment) {
                 val d=org.ghostcloak.attachments.AttachmentDescriptor(
@@ -116,6 +120,115 @@ class RelationshipRegressionTest {
         try {p.b.importCard(ContactCardCodec.encode(forged));fail()} catch(e:CryptoFailure) {assertEquals(CryptoError.IdentityChanged,e.error)}
         assertFalse(p.repo.isActiveContact(p.aid));assertEquals(pin,p.b.fingerprint(p.aid))
         assertNotNull(p.repo.pending(p.aid))
+    }
+    @Test fun deletingAcceptedConversationKeepsRelationshipPinAndFutureDirectDelivery()=runBlocking {
+        val p=Pair();p.open();p.accept()
+        val first=p.receive();val pin=p.b.fingerprint(p.aid)
+        val session=p.br.transaction {p.br.keys("session/").associateWith {p.br.read(it)!!}}
+        assertEquals(1,p.b.messagesForUi(p.aid).size)
+        p.b.clearConversation(p.aid)
+        assertTrue(p.b.messagesForUi(p.aid).isEmpty())
+        assertEquals(RelationshipState.ACCEPTED_CONTACT,p.repo.relationshipState(p.aid))
+        assertEquals(pin,p.b.fingerprint(p.aid))
+        session.forEach {(key,value)->assertArrayEquals(value,p.br.transaction {p.br.read(key)})}
+        p.b.acceptNetwork(first,p.profile,1000000)
+        assertTrue(p.b.messages(p.aid).isEmpty())
+        val second=p.receive()
+        assertEquals(second.envelopeId,p.b.messagesForUi(p.aid).single().localId)
+        assertFalse(p.repo.contact(p.aid).request)
+    }
+    @Test fun removingAcceptedContactRetainsOldHistoryAndMakesNextMessageHiddenRequest()=runBlocking {
+        val p=Pair();p.open();p.accept()
+        val first=p.receive();val pin=p.b.fingerprint(p.aid)
+        val contactId=p.repo.contact(p.aid).contactId
+        p.repo.requireRequestConfirmation(false)
+        p.b.removeContact(p.aid)
+        assertEquals(RelationshipState.DORMANT_UNACCEPTED,p.repo.relationshipState(p.aid))
+        assertTrue(p.b.contacts().isEmpty());assertTrue(p.b.blockedContacts().isEmpty())
+        assertEquals(first.envelopeId,p.b.messages(p.aid).single().localId)
+        p.b=ConversationService(p.be,p.repo);p.b.open()
+        p.b.acceptNetwork(first,p.profile,1000000)
+        assertTrue(p.b.contacts().isEmpty())
+        val second=p.receive()
+        assertEquals(RelationshipState.REQUEST_PENDING,p.repo.relationshipState(p.aid))
+        assertTrue(p.b.messagesForUi(p.aid).isEmpty())
+        assertEquals(pin,p.b.fingerprint(p.aid))
+        p.b.deleteRequest(p.aid)
+        assertEquals(listOf(first.envelopeId),p.b.messages(p.aid).map {it.localId})
+        p.b.importCard(p.a.exportCard())
+        assertEquals(RelationshipState.ACCEPTED_CONTACT,p.repo.relationshipState(p.aid))
+        assertEquals(contactId,p.repo.contact(p.aid).contactId)
+        assertEquals(pin,p.b.fingerprint(p.aid))
+        assertEquals(listOf(first.envelopeId),p.b.messagesForUi(p.aid).map {it.localId})
+    }
+    @Test fun blockingAcceptedContactRetainsOldHistoryAndUnblockDoesNotReaccept()=runBlocking {
+        val p=Pair();p.open();p.accept()
+        val first=p.receive();val pin=p.b.fingerprint(p.aid)
+        p.b.block(p.aid,true)
+        assertEquals(RelationshipState.BLOCKED,p.repo.relationshipState(p.aid))
+        assertTrue(p.b.contacts().isEmpty())
+        assertEquals(1,p.b.blockedContacts().size)
+        val blockedText=p.receive();val blockedPhoto=p.receive(true)
+        assertEquals(listOf(first.envelopeId),p.b.messages(p.aid).map {it.localId})
+        assertFalse(p.repo.hasAttachment(p.aid,blockedPhoto.envelopeId))
+        p.b=ConversationService(p.be,p.repo);p.b.open();p.b.unblock(p.aid)
+        assertEquals(RelationshipState.DORMANT_UNACCEPTED,p.repo.relationshipState(p.aid))
+        assertTrue(p.b.contacts().isEmpty())
+        p.b.acceptNetwork(blockedText,p.profile,1000000)
+        assertEquals(1,p.b.messages(p.aid).size)
+        p.receive()
+        assertEquals(RelationshipState.REQUEST_PENDING,p.repo.relationshipState(p.aid))
+        assertTrue(p.b.messagesForUi(p.aid).isEmpty())
+        assertEquals(pin,p.b.fingerprint(p.aid))
+    }
+    @Test fun legacyBlockedAcceptedRowBecomesDormantOnUnblock()=runBlocking {
+        val p=Pair();p.open();p.accept();p.receive()
+        val accepted=p.repo.contact(p.aid)
+        p.repo.save(accepted.copy(blocked=true,request=false))
+        p.b.unblock(p.aid)
+        assertEquals(RelationshipState.DORMANT_UNACCEPTED,p.repo.relationshipState(p.aid))
+        assertTrue(p.b.contacts().isEmpty())
+        assertEquals(1,p.b.messages(p.aid).size)
+    }
+    @Test fun unblockForcesHiddenNewRequestEvenWithVisibleRequestPreference()=runBlocking {
+        val p=Pair();p.open();p.repo.requireRequestConfirmation(false)
+        p.receive();p.b.block(p.aid,true);p.b.unblock(p.aid)
+        p.receive()
+        assertEquals(RelationshipState.REQUEST_PENDING,p.repo.relationshipState(p.aid))
+        assertTrue(p.b.messagesForUi(p.aid).isEmpty())
+    }
+    @Test fun sameDisplayNameManagementTargetsOnlySelectedDevice() {
+        val repo=LocalRepository(MemoryRecords())
+        val one=Contact("one","account-one","Alex","device-one")
+        val two=Contact("two","account-two","Alex","device-two")
+        repo.save(one);repo.save(two)
+        repo.removeContact(one.remoteDeviceId)
+        assertEquals(RelationshipState.DORMANT_UNACCEPTED,repo.relationshipState(one.remoteDeviceId))
+        assertEquals(RelationshipState.ACCEPTED_CONTACT,repo.relationshipState(two.remoteDeviceId))
+        repo.block(two.remoteDeviceId,true)
+        assertEquals(RelationshipState.BLOCKED,repo.relationshipState(two.remoteDeviceId))
+        assertFalse(repo.contact(one.remoteDeviceId).blocked)
+    }
+    @Test fun failedRelationshipCommitLeavesAcceptedHistoryAndFlagsIntact() {
+        val memory=MemoryRecords();var fail=false
+        val records=object:EndpointRecords by memory {
+            override fun write(key:String,value:ByteArray) {
+                memory.write(key,value)
+                if(fail && key.startsWith("app/request/")) throw EndpointStorageFailure()
+            }
+        }
+        val repo=LocalRepository(records);val id="device"
+        repo.save(Contact("contact","account","Alex",id))
+        repo.save(Message("message",id,Direction.INCOMING,"private",1,MessageState.RECEIVED))
+        fail=true
+        assertThrows(EndpointStorageFailure::class.java) {repo.removeContact(id)}
+        assertEquals(RelationshipState.ACCEPTED_CONTACT,repo.relationshipState(id))
+        assertEquals(1,repo.messages(id).size)
+        assertThrows(EndpointStorageFailure::class.java) {repo.block(id,true)}
+        assertEquals(RelationshipState.ACCEPTED_CONTACT,repo.relationshipState(id))
+        assertFalse(repo.contact(id).blocked)
+        fail=false;repo.removeContact(id)
+        assertEquals(RelationshipState.DORMANT_UNACCEPTED,repo.relationshipState(id))
     }
     @Test fun rejectedPhotoThenNewPhotoRemainsHiddenAndUnavailableUntilAcceptance()=runBlocking {
         val p=Pair();p.open();val first=p.receive(true);p.b.deleteRequest(p.aid)

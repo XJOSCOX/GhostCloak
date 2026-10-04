@@ -72,7 +72,7 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                 if (state.identity == null) FirstLaunchScreen(state, model::create)
                 else NavHost(nav, startDestination = "contacts") {
                     composable("contacts") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork) }
-                    composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
+                    composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("security/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
                     composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard,
                         {name->model.addNetwork(name) {nav.popBackStack()}},model::unblock,{nav.navigate("blocked")},
                         { text -> model.importCard(text) { nav.popBackStack() } },
@@ -117,7 +117,13 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                         val id = backStack.arguments?.getString("id") ?: return@composable
                         val contact = state.contacts.firstOrNull { it.contact.remoteDeviceId == id } ?: return@composable
                         ContactSecurityScreen(state, contact, { nav.popBackStack() }, { model.loadFingerprint(id, it) },
-                            { model.verify(id, it) }, { model.trust(id, it) }, { model.block(id, it) }, { nav.navigate("add") })
+                            { model.verify(id, it) }, { model.trust(id, it) },
+                            { blocked -> model.block(id, blocked) {
+                                if(blocked) nav.navigate("contacts") { popUpTo("contacts"); launchSingleTop=true }
+                            } },
+                            { model.clearConversation(id) },
+                            { model.removeContact(id) { nav.navigate("contacts") { popUpTo("contacts"); launchSingleTop=true } } },
+                            { nav.navigate("add") })
                     }
                 }
                 if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))

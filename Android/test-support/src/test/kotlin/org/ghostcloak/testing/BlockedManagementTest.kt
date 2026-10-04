@@ -75,7 +75,7 @@ class BlockedManagementTest {
         b.acceptNetwork(packet(),profile);assertTrue(b.messagesForUi(ai.deviceId).isEmpty())
         b.acceptRequest(ai.deviceId);assertEquals(1,b.messagesForUi(ai.deviceId).size)
     }
-    @Test fun acceptedRelationshipSurvivesButDiscardedIncomingDoesNot()=runBlocking {
+    @Test fun acceptedHistorySurvivesButUnblockRequiresFreshRequest()=runBlocking {
         val ar=MemoryRecords();val br=MemoryRecords();val ae=SignalProtocolEngine(ar)
         val a=ConversationService(ae,LocalRepository(ar));val repo=LocalRepository(br)
         val b=ConversationService(SignalProtocolEngine(br),repo);val ai=a.create("alice");val bi=b.create("bob")
@@ -83,9 +83,12 @@ class BlockedManagementTest {
         b.acceptNetwork(ae.encrypt(bi.deviceId,ConversationPayload.encode("retained",0)))
         b.block(ai.deviceId,true);assertEquals(1,b.blockedContacts().size)
         val blocked=ae.encrypt(bi.deviceId,ConversationPayload.encode("discarded",0));b.acceptNetwork(blocked)
-        b.unblock(ai.deviceId);assertTrue(repo.isActiveContact(ai.deviceId))
-        b.acceptNetwork(blocked);assertEquals(listOf("retained"),b.messagesForUi(ai.deviceId).map {it.body})
+        b.unblock(ai.deviceId);assertEquals(RelationshipState.DORMANT_UNACCEPTED,repo.relationshipState(ai.deviceId))
+        b.acceptNetwork(blocked);assertTrue(b.messagesForUi(ai.deviceId).isEmpty())
         b.acceptNetwork(ae.encrypt(bi.deviceId,ConversationPayload.encode("new",0)))
+        assertEquals(RelationshipState.REQUEST_PENDING,repo.relationshipState(ai.deviceId))
+        assertTrue(b.messagesForUi(ai.deviceId).isEmpty())
+        b.acceptRequest(ai.deviceId)
         assertEquals(listOf("retained","new"),b.messagesForUi(ai.deviceId).map {it.body})
     }
 }

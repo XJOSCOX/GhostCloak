@@ -312,7 +312,7 @@ Automatic-prompt validation (2026-09-12): 105 JVM tests and 77 emulator tests (6
 
 ## Phase 1H.1 — testing local cleanup
 
-Delete means LOCAL DEVICE ONLY: it does not recall, unsend, notify the recipient, delete remotely or alter another participant's copy. Long-press a message → Delete → confirm. Conversation options → Clear conversation → confirm removes history and keeps the contact. Cancel must leave content unchanged. Pending outgoing sends can still finish delivery; this is not an unsend feature.
+Delete means LOCAL DEVICE ONLY: it does not recall, unsend, notify the recipient, delete remotely or alter another participant's copy. Long-press a message → Delete → confirm. Conversation options or Contact details → Delete conversation → confirm removes history and keeps the contact. Cancel must leave content unchanged. Pending outgoing sends can still finish delivery; this is not an unsend feature.
 
 On two test devices, delete an unread incoming message and check the local badge/count; clear one conversation and check other conversations remain. Send a queued message, delete its local display, then let the recipient sync: delivery should continue. The receiver's history stays intact when the sender deletes a delivered message. Check clear preserves request/accepted, verification and block state. Deletion requires the app to be unlocked and cannot be triggered by a notification intent.
 
@@ -440,10 +440,10 @@ Physical two-phone retest (user-run, no physical instrumentation):
 5. Open the blocked list, lock/background B with Immediate app lock, then return:
    no names/actions are exposed while locked or in Recents. Unlock restores the
    normal private route. Notifications remain generic.
-6. For an already accepted test contact, Block preserves the accepted relationship
-   metadata/history but suppresses new incoming presentation. Unblock restores
-   that acceptance, never discarded content. Identity-change warnings must still
-   require the existing explicit security review.
+6. Phase 1O changes the accepted-contact transition: Block keeps old encrypted
+   history and identity continuity but ends acceptance. Unblock does not restore
+   acceptance or discarded content. A new message becomes a hidden request;
+   identity-change warnings still require explicit security review.
 
 [Request privacy and retention](REQUEST_PRIVACY_DESIGN.md) requires the matching backend and existing migrations BEFORE updated Android clients. Default request content is hidden until acceptance; pending requests expire at 72 hours from recipient secure commit, and general queued envelopes expire seven days from server enqueue. See the design for clock/legacy limitations, retained receipt capacity and physical retest. No remote rollout is performed automatically. Android tests use only a dedicated disposable AVD, never account-bearing phones or emulators.
 
@@ -717,3 +717,13 @@ acceptance fixture with a real account or physical device.
 # Phase 1N contact QR
 
 The connected Profile screen offers Copy ID, Share ID and Show QR. Add Contact offers Scan QR in addition to manual ID entry. The v1 payload and strict parser are documented in [QR_CONTACT_DESIGN.md](QR_CONTACT_DESIGN.md). Test QR display/scan on a disposable AVD or manual two-phone setup; do not run aggregate connected tests with a physical phone attached. No backend or database migration is needed.
+
+# Phase 1O accepted-contact management
+
+On an accepted conversation, open the security icon or Conversation options → Contact details; a row in the Contacts tab opens the same details page. The details page shows the name/local alias, read-only Ghost Cloak ID and safety number, followed by separately confirmed Delete conversation, Remove contact and Block contact actions. Conversation options also offers the same Delete conversation operation. Settings → Privacy → Blocked contacts remains the sole unblock list. App lock gates every route.
+
+Delete conversation removes only this device's local message/attachment presentation, read markers and notification eligibility. The accepted contact, local alias, key pin, Signal session and replay evidence remain; new messages arrive directly. Remove contact hides the entry from accepted lists and preserves its encrypted old history and alias; a new message is a hidden request. Rejecting that new request removes only its new messages. Explicit exact-ID re-add reuses the existing contact row and pinned identity, without a ghost “already in contacts” result. Block ends acceptance, hides the contact from normal lists and uses the existing authenticated discard/ACK path; old encrypted history remains. Unblock returns to dormant unaccepted state. Old blocked content cannot return, and only a new message can open a request. None of these actions sends a relationship notification or changes server state. An already queued profile update or outgoing send from before the action may still complete under its existing outbox rules; relationship actions add no new outbox item.
+
+Physical two-phone retest, manually on disposable identities only: (1) accept A/B, delete A's conversation, have B send again, confirm direct delivery and B's history unchanged; (2) remove B on A, confirm B disappears and old history is hidden, have B send, confirm generic hidden request and Accept; (3) remove B again, search B's exact ID and re-add, confirm one row and the same safety number; (4) block B on A, send text and photo from B, confirm A has no presentation/download/notification while B eventually sees normal Delivered; (5) unblock on A, confirm old blocked content stays absent and a new B message starts a hidden request; (6) restart A after each action and repeat the membership check. Never run instrumentation on either physical phone.
+
+No backend deployment, server DB migration or Android DB migration is required. The encrypted endpoint store reuses existing contact and request records plus encrypted retained-history and per-peer force-hidden-request keys; no SQL table or wire field changes.

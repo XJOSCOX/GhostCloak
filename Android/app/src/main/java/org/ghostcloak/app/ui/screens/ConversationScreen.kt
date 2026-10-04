@@ -50,7 +50,9 @@ import org.ghostcloak.protocol.EnvelopeCodec
                 DropdownMenu(expanded = actions, onDismissRequest = { actions = false }) {
                     if (state.networkConfigured && !state.demo)
                         DropdownMenuItem(text = { Text("Sync") }, onClick = { actions = false; sync() })
-                    DropdownMenuItem(text = { Text("Clear conversation") }, onClick = { actions = false; clearing = true })
+                    DropdownMenuItem(text = { Text("Contact details") }, onClick = { actions = false; security() })
+                    if(!status.contact.request)
+                        DropdownMenuItem(text = { Text("Delete conversation") }, onClick = { actions = false; clearing = true })
                     if (state.networkConfigured && !state.demo && !status.contact.request)
                         DropdownMenuItem(text = { Text("Disappearing messages · ${DisappearingTimer.from(state.disappearingPolicies[status.contact.remoteDeviceId] ?: 0).label}") },
                             enabled = active && !state.loading, onClick = { actions = false; timerSelector = true })
@@ -119,9 +121,9 @@ import org.ghostcloak.protocol.EnvelopeCodec
         text = { Text("This removes the message from this device only.") },
         confirmButton = { TextButton(onClick = { deleting = null; delete(id) }) { Text("Delete") } },
         dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } }) }
-    if (clearing) AlertDialog(onDismissRequest = { clearing = false }, title = { Text("Clear conversation?") },
-        text = { Text("This removes all messages with this contact from this device. The contact will remain.") },
-        confirmButton = { TextButton(onClick = { clearing = false; clear() }) { Text("Clear") } },
+    if (clearing) AlertDialog(onDismissRequest = { clearing = false }, title = { Text("Delete this conversation?") },
+        text = { Text("This removes the local message history from this device.") },
+        confirmButton = { TextButton(onClick = { clearing = false; clear() }) { Text("Delete") } },
         dismissButton = { TextButton(onClick = { clearing = false }) { Text("Cancel") } })
     if (timerSelector) AlertDialog(onDismissRequest = { timerSelector = false }, title = { Text("Disappearing messages") },
         text = { Column {

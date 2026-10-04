@@ -69,7 +69,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         // Staged at the end of authenticated decryptAndCommit; visible only after its
         // enclosing ratchet/replay/message transaction durably succeeds.
         val commit=clock.now()
-        put("app/request/$id",RequestRecord(hidden=requireRequestConfirmation(),acceptedAt=projectedServerTime(commit),
+        put("app/request/$id",RequestRecord(hidden=requireRequestConfirmation() || read<Boolean>("app/force-hidden-request/$id")==true,
+            acceptedAt=projectedServerTime(commit),
             grace=requestDeadline(commit),lastEnvelopeAt=serverEnqueuedAt,clockVersion=1))
     }
     fun requestExpired(id:String):Boolean=records.transaction {
@@ -97,23 +98,62 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         expireRequests()
         save(c.copy(request=false));card(id,card);finishRequest(id,RequestState.ACCEPTED)
     }
+    private fun retainHistory(id:String) {
+        put("app/retained-history/$id", messages(id).map { it.localId })
+        markRead(id)
+        NotificationLedger.clear(records,id)
+    }
+    private fun endAcceptedRelationship(id:String,state:RequestState,blocked:Boolean) {
+        val c=contact(id)
+        if(c.request || c.blocked) throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        retainHistory(id)
+        save(c.copy(request=true,blocked=blocked))
+        put("app/request/$id",RequestRecord(state=state,grace=requestDeadline(),clockVersion=1))
+        put("app/force-hidden-request/$id",true)
+        records.remove("app/profile-sync/$id")
+    }
+    fun removeContact(id:String)=records.transaction {
+        endAcceptedRelationship(id,RequestState.REJECTED,false)
+    }
+    private fun clearRequestPresentation(id:String) {
+        val retained=read<List<String>>("app/retained-history/$id")?.toSet()
+        if(retained==null) clear(id)
+        else records.keys("app/message/$id/").forEach { key ->
+            if(key.removePrefix("app/message/$id/") !in retained)
+                delete(id,key.removePrefix("app/message/$id/"))
+        }
+    }
     fun finishRequest(id:String,state:RequestState)=records.transaction {
         val r=request(id); put("app/request/$id",r.copy(state=state,lastEnvelopeAt=serverNow() ?: r.lastEnvelopeAt))
-        if(state!=RequestState.ACCEPTED) clear(id)
+        if(state!=RequestState.ACCEPTED) clearRequestPresentation(id)
     }
     fun block(id:String,blocked:Boolean)=records.transaction {
         val c=contact(id)
-        save(c.copy(blocked=blocked))
-        if(blocked) records.remove("app/profile-sync/$id")
-        if(c.request && blocked) finishRequest(id,RequestState.BLOCKED)
-        // Commit suppression and its request lifecycle together, including explicit Unblock.
-        if(c.request && !blocked && request(id).state==RequestState.BLOCKED)
-            finishRequest(id,RequestState.REJECTED)
+        if(blocked) {
+            if(!c.request && !c.blocked) endAcceptedRelationship(id,RequestState.BLOCKED,true)
+            else {
+                put("app/force-hidden-request/$id",true)
+                if(!c.request) retainHistory(id)
+                save(c.copy(request=true,blocked=true))
+                records.remove("app/profile-sync/$id")
+                if(c.request) finishRequest(id,RequestState.BLOCKED)
+                else put("app/request/$id",RequestRecord(state=RequestState.BLOCKED,grace=requestDeadline(),clockVersion=1))
+            }
+        } else if(c.blocked) {
+            // Also upgrades older blocked accepted rows: Unblock never restores acceptance.
+            put("app/force-hidden-request/$id",true)
+            if(!c.request) {
+                retainHistory(id)
+                put("app/request/$id",RequestRecord(state=RequestState.REJECTED,grace=requestDeadline(),clockVersion=1))
+            }
+            save(c.copy(request=true,blocked=false))
+            if(request(id).state==RequestState.BLOCKED) finishRequest(id,RequestState.REJECTED)
+        }
     }
     fun isBlocked(id:String)=records.transaction {contact(id).blocked}
     fun listBlocked()=records.transaction {
         contacts().filter {it.blocked}.sortedWith(compareBy<Contact> {
-            it.visibleName.lowercase(java.util.Locale.ROOT)
+            it.blockedLabel.lowercase(java.util.Locale.ROOT)
         }.thenBy {it.remoteDeviceId})
     }
     fun unblock(id:String)=block(id,false)
@@ -262,6 +302,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         records.keys("app/message/$id/").forEach(records::remove)
         records.remove("app/read/$id")
         NotificationLedger.clear(records, id)
+        records.remove("app/retained-history/$id")
     }
     fun capacity() = records.transaction { if (records.keys("app/message/").size >= 5000) throw AppFailure(AppError.LOCAL_CAPACITY) }
     fun attachment(id:String,localId:String):org.ghostcloak.attachments.AttachmentDescriptor? = records.transaction {

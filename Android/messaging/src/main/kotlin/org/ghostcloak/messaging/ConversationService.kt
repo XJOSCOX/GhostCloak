@@ -74,11 +74,10 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     }
     suspend fun contacts(): List<ContactStatus> = action {
         repository.expireRequests()
-        repository.contacts().filter {
+        repository.contacts().filter { !it.blocked && (
             repository.isActiveContact(it.remoteDeviceId) ||
-                repository.relationshipState(it.remoteDeviceId)==RelationshipState.REQUEST_PENDING ||
-                (it.blocked && !it.request) // Keep existing accepted-contact unblock management reachable.
-        }
+                repository.relationshipState(it.remoteDeviceId)==RelationshipState.REQUEST_PENDING
+        ) }
             .map { ContactStatus(it, engine.getRemoteIdentityStatus(it.remoteDeviceId), engine.getSessionLifecycle(it.remoteDeviceId)) }
     }
     suspend fun blockedContacts():List<Contact> = action {repository.listBlocked()}
@@ -325,6 +324,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         repository.card(id, pending); repository.clearPending(id)
     }
     suspend fun block(id: String, blocked: Boolean) = action { repository.block(id,blocked) }
+    suspend fun removeContact(id:String) = action { repository.removeContact(id) }
     suspend fun delete(id: String, localId: String) = action { repository.contact(id); repository.delete(id, localId) }
     suspend fun clearConversation(id: String) = action { repository.contact(id); repository.clear(id) }
     suspend fun send(id: String, body: String): Message = action {

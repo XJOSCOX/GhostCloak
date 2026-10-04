@@ -51,8 +51,9 @@ Incoming disappearing expiry still starts on authenticated durable commit. A req
 Settings → Privacy → Blocked contacts lists the same encrypted `Contact.blocked`
 flag used by authenticated incoming suppression. There is no second block list,
 lookup to populate names, timestamp/history, server block state or schema change.
-Locally retained display names are sorted alphabetically using Locale.ROOT with a
-stable internal tie-break; internal IDs never appear in UI. Blank labels display
+The list sorts by the local contact label using Locale.ROOT with a stable internal
+tie-break; accepted contacts blocked in Phase 1O retain a local alias or public
+Ghost Cloak ID as their visible label. Internal device/account IDs never appear in UI. Blank labels display
 `Blocked contact`; an empty list displays `No blocked contacts`. Settings itself
 does not show names. The route is inside the existing app-lock private subtree;
 locking removes the list and confirmation dialog from accessibility/presentation.
@@ -77,13 +78,15 @@ Known local blocked names in New Chat offer explicit Unblock rather than Add;
 the repository still rejects Add/import for a blocked identity resolved through
 directory/card identity, so stale names cannot bypass suppression.
 
-Accepted contacts retain `request=false` during Block. Existing accepted-contact
-rows/history remain available for local security management with sending disabled;
-unblock restores only that provable accepted relationship. It never restores
-incoming content discarded during Block. Pins, verification/change warnings,
-Signal ratchets/sessions and replay evidence survive unblock unchanged. A changed
-identity still requires the normal explicit security review. No identity-reset or
-ratchet rewind is performed. No claim of guaranteed RAM erasure is made.
+Phase 1O supersedes the earlier accepted-contact exception: Block ends acceptance
+and keeps the pinned contact row with `request=true, blocked=true`. Existing old
+history remains encrypted locally but is hidden from normal contact UI. Unblock
+sets `request=true, blocked=false` and a dormant REJECTED request state; it does
+not restore acceptance or discarded blocked content. A new authenticated message
+starts a hidden request. A retained-history boundary prevents rejection/expiry of
+that new request from silently deleting the old accepted conversation. Pins,
+verification/change warnings, Signal ratchets/sessions and replay evidence survive
+unchanged. No identity reset or ratchet rewind is performed.
 
 Delete sets REJECTED, removes content and the active request, and does not set blocked. A genuinely new authenticated envelope can immediately start a fresh request with the current privacy preference regardless of its queue age. Existing accepted-envelope hashes and Signal replay evidence prevent old envelopes from restoring content. After reboot, missing trusted time withholds reveal/Accept. Expiry and acceptance are transactional: at evaluation time `now >= deadline`, expiry wins and failed Accept does not roll back cleanup; acceptance before the deadline protects the accepted history from subsequent request expiry. Delete and repeated expiry remain idempotent.
 

@@ -49,12 +49,12 @@ class LocalDeletionScreenTest {
             compose.onNodeWithText("First local message").assertDoesNotExist()
             compose.onNodeWithText("Second local message").assertExists(); assertEquals(1, deletes)
             compose.onNodeWithContentDescription("Conversation options").performClick()
-            compose.onNodeWithText("Clear conversation").performClick()
-            compose.onNodeWithText("This removes all messages with this contact from this device. The contact will remain.").assertIsDisplayed()
+            compose.onNodeWithText("Delete conversation").performClick()
+            compose.onNodeWithText("This removes the local message history from this device.").assertIsDisplayed()
             compose.onNodeWithText("Cancel").performClick(); assertEquals(0, clears)
             compose.onNodeWithContentDescription("Conversation options").performClick()
-            compose.onNodeWithText("Clear conversation").performClick()
-            compose.onNodeWithText("Clear").performClick(); assertEquals(1, clears)
+            compose.onNodeWithText("Delete conversation").performClick()
+            compose.onNodeWithText("Delete").performClick(); assertEquals(1, clears)
             compose.onNodeWithText("Second local message").assertDoesNotExist()
             compose.onNodeWithText("Alice").assertExists()
             withContext(Dispatchers.Main) {
@@ -64,7 +64,7 @@ class LocalDeletionScreenTest {
             compose.onNodeWithText("Unlock Ghost Cloak").assertExists()
             compose.onNodeWithContentDescription("Conversation options").assertDoesNotExist()
             compose.onNodeWithText("Delete").assertDoesNotExist()
-            compose.onNodeWithText("Clear conversation").assertDoesNotExist()
+            compose.onNodeWithText("Delete conversation").assertDoesNotExist()
         } finally { scope.cancel() }
     }
 }

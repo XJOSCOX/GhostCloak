@@ -11,6 +11,8 @@ data class Contact(val contactId: String, val publicUserId: String, val displayN
     val ghostCloakId: String? = null, val localAlias: String? = null) {
     val visibleName: String get() = if (request) ghostCloakId?.let(GhostCloakIds::display) ?: "Message request"
         else localAlias ?: displayName
+    val blockedLabel: String get() = if (request) localAlias ?: ghostCloakId?.let(GhostCloakIds::display) ?: visibleName
+        else localAlias ?: displayName
     override fun toString() = "Contact(redacted)"
 }
 data class ContactStatus(val contact: Contact, val identity: RemoteIdentityStatus?, val session: SessionLifecycle?)

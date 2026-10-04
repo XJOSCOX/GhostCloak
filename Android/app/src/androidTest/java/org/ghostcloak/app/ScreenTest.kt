@@ -45,6 +45,14 @@ class ScreenTest {
         compose.onNodeWithText("I compared it · Verify").performClick()
         assertTrue(verified)
     }
+    @Test fun contactDetailsKeepPublicIdVisibleAfterRemoteNameAndAlias() {
+        val named=contact.copy(displayName="Robert",localAlias="Bob - Work",ghostCloakId="7K4M9Q2FX8DR")
+        compose.setContent { GhostCloakTheme { ContactSecurityScreen(AppState(loading=false),
+            ContactStatus(named,RemoteIdentityStatus(IdentityTrustState.UNVERIFIED),SessionLifecycle.ACTIVE),
+            {},{},{},{},{}) } }
+        compose.onNodeWithText("Bob - Work").assertExists()
+        compose.onNodeWithText("Ghost Cloak ID · 7K4M-9Q2F-X8DR").assertExists()
+    }
     @Test fun changedIdentityBlocksComposerAndSending() {
         var sent = false
         compose.setContent { GhostCloakTheme { ConversationScreen(AppState(loading = false),

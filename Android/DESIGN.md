@@ -11,6 +11,13 @@ An ID never authorizes login or recovery; device-auth proof remains required.
 Older phase descriptions below retain their historical wording; this Phase 1L
 contract supersedes username-specific UI and API behavior.
 
+Phase 1L.1B sends a versioned, authenticated E2EE profile control after explicit
+request Accept. Acceptance and its durable outbox intent commit together, so an
+offline recipient can sync the profile later. The sender's existing contact updates
+in place without a chat message, unread badge or read receipt. Local aliases retain
+priority, and the public ID remains in details. See the identity design for timing
+metadata and legacy-client limits; no backend or database migration is added.
+
 ## Safe Exit (Phase 1K.2C protected Settings, debug-only safe arming)
 
 [Safe Exit design and internal wipe inventory](EMERGENCY_WIPE_DESIGN.md) records the local

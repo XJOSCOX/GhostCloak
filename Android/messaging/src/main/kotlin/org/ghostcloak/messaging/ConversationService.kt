@@ -176,11 +176,30 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 if (e.error in setOf(CryptoError.IdentityChanged, CryptoError.UnknownSession, CryptoError.ReauthenticationRequired)) continue
                 throw e
             }
-            val result=outbox.process(id) { repository.acceptedOutgoing(entry.deviceId, it.submissionId) }
+            val result=outbox.process(id) {
+                repository.acceptedOutgoing(entry.deviceId, it.submissionId)
+                repository.profileSynced(entry.deviceId,it.submissionId)
+            }
             repository.messages(entry.deviceId).firstOrNull {it.localId==id}?.let { message ->
                 repository.save(message.copy(state=if(result.state==OutboxState.SERVER_ACCEPTED) MessageState.SERVER_ACCEPTED else MessageState.FAILED))
             }
             if(result.state in setOf(OutboxState.SERVER_ACCEPTED,OutboxState.FAILED)) outbox.removeFinished(id)
+        }
+        // A failed pre-upload encryption or an interrupted enqueue retains the durable
+        // acceptance intent. A new submission is safe only when its old entry is absent.
+        val queued=outbox.pendingIds().toSet()
+        for((peer,submission) in repository.profileIntents()) {
+            if(submission in queued) continue
+            try { networkAllowed(peer) } catch (_: AppFailure) { continue }
+            catch (e: CryptoFailure) {
+                if(e.error in setOf(CryptoError.IdentityChanged,CryptoError.UnknownSession,CryptoError.ReauthenticationRequired)) continue
+                throw e
+            }
+            val me=identity ?: if(repository.hasIdentity()) engine.createIdentity("Local").also { identity=it }
+                else throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+            val bytes=ConversationPayload.encodeProfile(me.displayName)
+            try { outbox.enqueue(peer,bytes) { repository.profileIntent(peer,it) } }
+            finally { bytes.fill(0) }
         }
     }
     suspend fun acceptNetwork(envelope:EncryptedEnvelope, sender:SenderProfile? = null, serverAcceptedAt:Long?=null)=action {
@@ -207,12 +226,20 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             }
             return@action
         }
-        repository.capacity()
         engine.decryptAndCommit(envelope) { bytes ->
             val content = ConversationPayload.decode(bytes)
+            if(content.profileUpdate) {
+                // Unknown and still-pending relationships do not learn a profile or
+                // create a conversation. The authenticated receipt permits ACK.
+                if(contacts.any {it.remoteDeviceId==contact.remoteDeviceId} && !contact.request)
+                    repository.save(contact.copy(displayName=requireNotNull(content.displayName)))
+                repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
+                return@decryptAndCommit
+            }
             // Defer controls until this side has explicitly accepted/added the contact.
             if (content.control && (contacts.none { it.remoteDeviceId == contact.remoteDeviceId } || contact.request))
                 throw AppFailure(AppError.BLOCKED)
+            repository.capacity()
             repository.expireRequests()
             repository.save(if(content.displayName!=null) contact.copy(displayName=content.displayName) else contact)
             // A later legacy message withdraws the claim (for example after a downgrade).
@@ -238,10 +265,20 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             }
         }
     }
-    suspend fun acceptRequest(id: String) = action {
+    suspend fun acceptRequest(id: String, outbox: DurableOutbox? = null) = action {
         val contact = repository.contact(id)
         if (contact.blocked) throw AppFailure(AppError.BLOCKED)
-        if(contact.request) repository.acceptRequest(id)
+        if(contact.request) {
+            if(outbox==null) repository.acceptRequest(id)
+            else {
+                val me=identity ?: if(repository.hasIdentity()) engine.createIdentity("Local").also { identity=it }
+                    else throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+                val bytes=ConversationPayload.encodeProfile(me.displayName)
+                try { outbox.enqueue(id,bytes) { submission ->
+                    repository.acceptRequest(id) { repository.profileIntent(id,submission) }
+                } } finally { bytes.fill(0) }
+            }
+        }
     }
     suspend fun deleteRequest(id: String) = action {
         val contact = repository.contact(id)

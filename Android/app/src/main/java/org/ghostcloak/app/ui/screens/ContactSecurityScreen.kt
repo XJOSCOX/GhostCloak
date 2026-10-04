@@ -13,6 +13,7 @@ import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.identity.*
 import org.ghostcloak.messaging.ContactStatus
+import org.ghostcloak.protocol.GhostCloakIds
 
 @Composable fun ContactSecurityScreen(state: AppState, contact: ContactStatus, back: () -> Unit,
     load: (Boolean) -> Unit, verify: (String) -> Unit, trust: (String) -> Unit, block: (Boolean) -> Unit,
@@ -27,6 +28,10 @@ import org.ghostcloak.messaging.ContactStatus
             Avatar(contact.contact.visibleName)
             Column(verticalArrangement = Arrangement.spacedBy(GhostDimensions.small)) {
                 Text(contact.contact.visibleName, style = MaterialTheme.typography.titleLarge)
+                contact.contact.ghostCloakId?.let { id ->
+                    Text("Ghost Cloak ID · ${GhostCloakIds.display(id)}",
+                        style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 TrustBadge(contact.identity?.trustState)
             }
         }

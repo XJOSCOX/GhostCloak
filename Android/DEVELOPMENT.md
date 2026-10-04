@@ -13,6 +13,18 @@ new onboarding. Keep important physical devices out of automated validation.
 Historical test instructions below that say to search by username are superseded:
 use the exact formatted Ghost Cloak ID after deploying the matching backend.
 
+Phase 1L.1B adds Android-only profile sync on request Accept. Update both Android
+clients in place; no new backend deployment, server DB migration or Android DB
+migration is needed beyond the prior Phase 1L/V007 cutover. With A named Alice and
+B named Bob, A adds B by ID and sends a first message. B sees a hidden request and
+explicitly accepts. B's local acceptance succeeds offline; foreground/background
+sync retries its durable encrypted profile control. After A syncs, its existing B
+contact title changes from ID to Bob without a text reply. Confirm alias priority,
+ID in details, restart persistence, Delete/Block suppression and no notification
+or unread badge for the control. A legacy client may not decode the new control;
+use updated clients on both devices. The response timing can reveal that Accept
+occurred, but there is no read/open event or plaintext server profile field.
+
 Operator order (no deployment is performed by this source change): stop the old
 backend and ingress writes; take and verify a private pre-cutover PostgreSQL backup;
 review the V007 DELETE list and any encrypted attachment-blob files; run the new

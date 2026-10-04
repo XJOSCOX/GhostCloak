@@ -20,7 +20,8 @@ object ConversationPayload {
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
     private val magic = byteArrayOf(-1, 71, 67, 80)
     class Content(val body: String, val seconds: Int, val control: Boolean, val attachment: ByteArray? = null,
-        val supportsAttachments: Boolean = false, val displayName: String? = null) {
+        val supportsAttachments: Boolean = false, val displayName: String? = null,
+        val profileUpdate: Boolean = false) {
         override fun toString() = "Content(redacted)"
     }
     private fun profileBytes(displayName:String?):ByteArray = displayName?.let {
@@ -28,6 +29,14 @@ object ConversationPayload {
         val name=it.encodeToByteArray()
         profileMarker + byteArrayOf(name.size.toByte()) + name
     } ?: byteArrayOf()
+    /** Type 4 is a standalone, versioned profile update inside the Signal envelope. */
+    fun encodeProfile(displayName:String):ByteArray {
+        val profile=profileBytes(displayName)
+        val bytes=ByteArray(256).also { SecureRandom().nextBytes(it) }
+        ByteBuffer.wrap(bytes).put(magic).put(1).put(4).putShort(0).putInt(0).putInt(0)
+        profile.copyInto(bytes,16)
+        return bytes
+    }
     fun encodeAttachment(descriptor: org.ghostcloak.attachments.AttachmentDescriptor, displayName:String?=null): ByteArray {
         val encoded = org.ghostcloak.attachments.AttachmentFormat.encode(descriptor)
         try {
@@ -72,10 +81,11 @@ object ConversationPayload {
         if (!ByteArray(4).also { input.get(it) }.contentEquals(magic) || input.get().toInt() != 1)
             throw AppFailure(AppError.INVALID_TEXT)
         val type = input.get().toInt()
-        if (type !in 1..3 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
+        if (type !in 1..4 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
         val seconds = input.int; DisappearingTimer.from(seconds)
         val length = input.int
-        if (length !in 0..MAX_TEXT || length > input.remaining() || (type == 2 && length != 0)) throw AppFailure(AppError.INVALID_TEXT)
+        if (length !in 0..MAX_TEXT || length > input.remaining() || (type in setOf(2,4) && length != 0) ||
+            (type == 4 && (seconds != 0 || bytes.size != 256))) throw AppFailure(AppError.INVALID_TEXT)
         val text = ByteArray(length).also { input.get(it) }
         var offset=16+length
         val supports = bytes.size-offset>=attachmentSupport.size &&
@@ -94,6 +104,10 @@ object ConversationPayload {
             (if(name!=null) profileMarker.size+1+name.encodeToByteArray().size else 0)
         if(((minimum+255)/256)*256!=bytes.size)
             throw AppFailure(AppError.INVALID_TEXT)
+        if(type==4) {
+            if(name==null || supports) throw AppFailure(AppError.INVALID_TEXT)
+            return Content("",0,false,displayName=name,profileUpdate=true)
+        }
         if (type == 3) {
             try {
                 val descriptor=org.ghostcloak.attachments.AttachmentFormat.decode(text)

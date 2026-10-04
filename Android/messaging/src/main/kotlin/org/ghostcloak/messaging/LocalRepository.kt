@@ -5,6 +5,7 @@ import kotlinx.serialization.*
 import kotlinx.serialization.cbor.Cbor
 import org.ghostcloak.crypto.EndpointRecords
 import org.ghostcloak.crypto.EndpointStorageFailure
+import org.ghostcloak.identity.RandomIdentifiers
 
 /** Only the endpoint's encrypted store may back this repository in the application. */
 class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClock = ExpiryClock()) {
@@ -103,6 +104,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun block(id:String,blocked:Boolean)=records.transaction {
         val c=contact(id)
         save(c.copy(blocked=blocked))
+        if(blocked) records.remove("app/profile-sync/$id")
         if(c.request && blocked) finishRequest(id,RequestState.BLOCKED)
         // Commit suppression and its request lifecycle together, including explicit Unblock.
         if(c.request && !blocked && request(id).state==RequestState.BLOCKED)
@@ -127,18 +129,34 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         expired.forEach {finishRequest(it.remoteDeviceId,RequestState.EXPIRED)}
         expired.size
     }
-    fun acceptRequest(id:String) {
+    fun acceptRequest(id:String, onAccepted:()->Unit = {}) {
         val failure=records.transaction {
             expireRequests()
             val r=request(id)
             when {
                 r.state!=RequestState.PENDING || requestExpired(id) -> "request_expired"
                 r.grace.boot!=clock.now().boot && serverNow()==null -> "request_time_unavailable"
-                else -> {save(contact(id).copy(request=false));finishRequest(id,RequestState.ACCEPTED);null}
+                else -> {save(contact(id).copy(request=false));finishRequest(id,RequestState.ACCEPTED);onAccepted();null}
             }
         }
         // Throw outside the transaction so rejecting Accept cannot roll back expiry cleanup.
         require(failure==null) {failure!!}
+    }
+    // Profile intent and acceptance are committed together in the encrypted endpoint store.
+    fun profileIntent(id:String,submission:String)=records.transaction {
+        records.write("app/profile-sync/$id",submission.encodeToByteArray())
+    }
+    fun profileIntents():Map<String,String> = records.transaction {
+        records.keys("app/profile-sync/").associate { key ->
+            val peer=key.removePrefix("app/profile-sync/")
+            val submission=records.read(key)?.decodeToString() ?: throw EndpointStorageFailure()
+            if(!RandomIdentifiers.valid(peer) || !RandomIdentifiers.valid(submission)) throw EndpointStorageFailure()
+            peer to submission
+        }
+    }
+    fun profileSynced(id:String,submission:String)=records.transaction {
+        val key="app/profile-sync/$id"
+        if(records.read(key)?.decodeToString()==submission) records.remove(key)
     }
     fun attachmentPeer(id: String): Boolean = records.transaction {
         records.read("app/attachment-peer/$id")?.contentEquals(byteArrayOf(1)) == true ||

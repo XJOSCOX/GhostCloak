@@ -214,6 +214,10 @@ class AppRuntime internal constructor(
         demo?.deliver(message)
         return message
     }
+    suspend fun acceptRequest(service:ConversationService,id:String) {
+        if(networkConfigured && !inDemo) network!!.acceptRequest(service,id)
+        else service.acceptRequest(id)
+    }
     suspend fun connectNetwork(service: ConversationService) { network!!.connect() }
     fun ownGhostCloakId():String?=if(networkConfigured && !inDemo) network?.visibleGhostCloakId() else null
     suspend fun recoverNetwork() {

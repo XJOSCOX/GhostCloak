@@ -132,7 +132,7 @@ class GhostViewModel internal constructor(application: Application, private val 
         } finally { runtime.foregroundStopped(); foregroundMutex.unlock() }
     }
     fun requestPrivacy(required:Boolean)=run {it.requireRequestConfirmation(required);null}
-    fun acceptRequest(id: String) = run { it.acceptRequest(id); null }
+    fun acceptRequest(id: String) = run { runtime.acceptRequest(it,id); pollingWake.trySend(Unit); null }
     fun deleteRequest(id: String) = run { it.deleteRequest(id); null }
     fun refresh() = run()
     fun connectNetwork(): kotlinx.coroutines.Job {

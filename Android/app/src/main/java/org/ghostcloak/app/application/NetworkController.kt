@@ -191,6 +191,10 @@ class NetworkController(
             // Preserve request failure status when the outbox retains a pending message.
         }
     }
+    /** Local Accept and queued profile intent commit together; network delivery is best effort. */
+    suspend fun acceptRequest(service:ConversationService,id:String) {
+        service.acceptRequest(id,outbox)
+    }
     suspend fun setDisappearing(service: ConversationService, id: String, seconds: Int): Message = operation(NetworkOperation.SEND) {
         requireApi(state.registered(), "connect_required", 401)
         status = NetworkStatus.SYNCING

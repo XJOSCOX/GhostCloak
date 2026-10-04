@@ -400,6 +400,55 @@ class PostgresTest {
             assertEquals(0,f.db.transaction {f.db.prekeys.get(b.registration.deviceId)!!.pool.size})
         }
     }
+    @Test fun v008AllocationExpiryWorksOutsideAndInsideTransaction()=runBlocking {
+        Fixture().use { f ->
+            val now=System.currentTimeMillis()
+            // RetentionWorker invokes this without an enclosing transaction, including on an empty table.
+            f.db.expireAllocations(now)
+            assertEquals(0,f.db.transaction { f.db.allocations.size() })
+
+            val service=f.service()
+            val requester=register(service,"requester")
+            val target=register(service,"target")
+            val requesterId=requester.registration.deviceId
+            val targetId=target.registration.deviceId
+            val bundle=target.registration.bundles.single()
+            fun row(responseExpiry:Long,tombstoneExpiry:Long,bundlePresent:Boolean):AllocationRow {
+                val id=requesterId+"/"+RandomIdentifiers.create()
+                return AllocationRow(id,requesterId,targetId,if(bundlePresent) bundle else null,responseExpiry,tombstoneExpiry)
+            }
+            val expiredResponse=row(now-1,now+60000,true)
+            val expiredTombstone=row(now-60000,now-1,false)
+            val unexpired=row(now+60000,now+120000,true)
+            f.db.transaction {
+                listOf(expiredResponse,expiredTombstone,unexpired).forEach { f.db.allocations.put(it.id,it) }
+            }
+
+            f.db.expireAllocations(now)
+            f.db.transaction {
+                assertNull(f.db.allocations.get(expiredResponse.id)!!.bundle)
+                assertNull(f.db.allocations.get(expiredTombstone.id))
+                assertNotNull(f.db.allocations.get(unexpired.id)!!.bundle)
+            }
+            f.db.expireAllocations(now)
+            f.db.transaction { f.db.expireAllocations(now) }
+            f.db.transaction {
+                assertEquals(2,f.db.allocations.size())
+                assertNull(f.db.allocations.get(expiredResponse.id)!!.bundle)
+                assertNotNull(f.db.allocations.get(unexpired.id)!!.bundle)
+            }
+        }
+    }
+    @Test fun retentionWorkerCompletesV008CleanupWithoutBecomingUnhealthy() {
+        Fixture().use { f ->
+            RetentionWorker(f.service(),f.db).use { worker ->
+                val deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
+                while(worker.completedCycles==0L && System.nanoTime()<deadline) Thread.sleep(20)
+                assertTrue("retention worker did not complete its first cycle",worker.completedCycles>0L)
+                assertTrue("successful retention cycle must leave health ready",worker.healthy)
+            }
+        }
+    }
     @Test fun productionRejectsMissingUnsafeConfiguration() {
         for(env in listOf(emptyMap(),mapOf("GHOSTCLOAK_MODE" to "production"))) {try {ProductionConfig.environment(env);fail()} catch(_:IllegalStateException){}}
         try {ProductionConfig("production","jdbc:postgresql://0.0.0.0:5432/db","postgres","x".repeat(32),"http://example.com");fail()} catch(_:IllegalArgumentException){}

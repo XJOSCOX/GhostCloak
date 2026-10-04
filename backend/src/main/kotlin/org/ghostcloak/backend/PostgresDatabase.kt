@@ -178,8 +178,10 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
     }
     override fun expireAllocations(now:Long,limit:Int) {
         require(limit in 1..128)
-        execute("UPDATE prekey_allocations SET bundle=NULL WHERE id IN (SELECT id FROM prekey_allocations WHERE bundle IS NOT NULL AND response_expires_at<=? ORDER BY response_expires_at,id LIMIT ?)",now,limit)
-        execute("DELETE FROM prekey_allocations WHERE id IN (SELECT id FROM prekey_allocations WHERE expires_at<=? ORDER BY expires_at,id LIMIT ?)",now,limit)
+        transaction {
+            execute("UPDATE prekey_allocations SET bundle=NULL WHERE id IN (SELECT id FROM prekey_allocations WHERE bundle IS NOT NULL AND response_expires_at<=? ORDER BY response_expires_at,id LIMIT ?)",now,limit)
+            execute("DELETE FROM prekey_allocations WHERE id IN (SELECT id FROM prekey_allocations WHERE expires_at<=? ORDER BY expires_at,id LIMIT ?)",now,limit)
+        }
     }
 }
 class PostgresRateLimiter(private val db:PostgresDatabase, private val limit:Int=60):RateLimiter {

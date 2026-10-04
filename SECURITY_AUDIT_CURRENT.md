@@ -1,0 +1,140 @@
+# Ghost Cloak security and privacy audit — current source
+
+Source snapshot: `e14bf5b` (2026-10-04). This is a source and generated-manifest audit, not a penetration test or an inspection of a running VPS or either physical phone. Uncommitted Android Studio icon/dependency edits in the local checkout are outside this snapshot. Findings distinguish a demonstrated code path from a conditional risk. No production behavior was changed for this audit.
+
+# Executive Summary
+
+Nine findings: **0 Critical, 1 High, 4 Medium, 2 Low, 2 Informational**. One conditional **BLOCK RELEASE** item concerns V007 deployment over an existing database; the migration is deliberately destructive and requires a reviewed empty/disposable target or an explicit data-loss decision. No source evidence establishes account takeover by Ghost Cloak ID alone, plaintext SQLite fallback, an unsafe exported Ghost Cloak component, or a Safe Exit journal bypass. The remaining findings are availability, local metadata/clipboard/scratch hygiene, and documented architectural limits. A successful build is not proof of those runtime properties.
+
+Validation: strict Gradle dependency verification passed for app debug/release JVM tests and builds, module JVM tests, `:test-support:test`, and backend distribution. `:backend:test`, `:messaging:test`, `:identity:test`, and `:capabilities:test` report `NO-SOURCE`; cross-module scenarios live in test-support/app. The current main source was audited, while Gradle executed with unrelated local dependency edits; a clean-main dependency build is therefore an outstanding release gate. No AVD, physical phone, VPS, or database migration was used.
+
+# Threat Model Snapshot
+
+The adversary may know a public Ghost Cloak ID, send protocol requests, own another account, possess a copied app database without Android Keystore material, or read metadata visible to the TLS edge/server. Device compromise, a malicious keyboard/accessibility service, a recipient intentionally copying viewed content, and a malicious OS are stronger adversaries; current Android controls cannot promise confidentiality against them. Security goals are authenticated account/device continuity, pinned Signal identities, encrypted local/server content, fail-closed destruction and View Once, and minimal server/notification metadata.
+
+# Security Invariants
+
+* An ID is a locator, never proof of account ownership. Registration requires a signed challenge; recovery verifies the existing device-auth public key and a fresh, consumed challenge (`backend/src/main/kotlin/org/ghostcloak/backend/MailboxService.kt:94-129,162-189`).
+* Local records use SQLCipher with a random database secret wrapped by Android Keystore AES-GCM. A missing alias/file mismatch fails instead of opening ordinary SQLite (`Android/storage/src/main/kotlin/org/ghostcloak/storage/EncryptedEndpointStore.kt:59-133`). Hardware backing is observed, not required.
+* Safe Exit gates access, deletes owned Keystore aliases and verifies absence before storage cleanup; its durable journal remains until finalization (`Android/app/src/main/java/org/ghostcloak/app/access/AndroidLocalDestruction.kt:30-86`, `SafeExitRecovery.kt:42-77`). The physical Retry defect remains a regression target despite the later in-place APK retest reaching onboarding.
+* Inactivity destruction uses matching-boot `elapsedRealtime`; cross-boot uncertainty locks until normal authentication (`Android/app/src/main/java/org/ghostcloak/app/access/InactivityProtection.kt:43-80`).
+* Blocked valid envelopes advance authenticated ratchet/replay state then discard presentation; request UI masks body, name, attachment, timer, and View Once state (`Android/messaging/src/main/kotlin/org/ghostcloak/messaging/ConversationService.kt:85-104,219-281`). View Once writes `REVEALING` before reveal and restart finalizes consumption (`Android/messaging/src/main/kotlin/org/ghostcloak/messaging/LocalRepository.kt:244-280`).
+* The safety number uses Signal identities and device addresses, not mutable profile names/IDs (`Android/crypto/src/main/kotlin/org/ghostcloak/crypto/SignalProtocolEngine.kt:143-146`; symmetric test in `Android/test-support`).
+* Public IDs use `SecureRandom`, 31 symbols, 12 characters and rejection sampling; QR decoding requires the exact versioned prefix and canonical ID (`Android/protocol/src/main/kotlin/org/ghostcloak/protocol/GhostCloakIds.kt:7-33`, `GhostCloakContactQr.kt:4-25`). QR import does not mark a contact verified. Attachment content uses streaming AEAD with a bounded authenticated descriptor and random opaque blob IDs (`Android/attachments/src/main/kotlin/org/ghostcloak/attachments/AttachmentFormat.kt:20-143`); the backend verifies ciphertext digest, owner/quota and bearer capability (`backend/src/main/kotlin/org/ghostcloak/backend/BlobService.kt:59-146`).
+* MainActivity sets `FLAG_SECURE` before content (`Android/app/src/main/java/org/ghostcloak/app/MainActivity.kt:60`); local notifications use generic title/body and secret lock-screen visibility (`Android/app/src/main/java/org/ghostcloak/app/application/LocalNotifications.kt:42-56`). Background sync uses a unique generic WorkManager request and obeys the local-operation gate (`BackgroundSync.kt:19-55`). Release has no local-demo implementation or test JNI, its API origin defaults empty, Safe Exit arming/destruction flags are true, and R8 optimization is disabled (`Android/app/build.gradle.kts:9-68`). No obfuscation is relied upon for security.
+
+# Findings
+
+## Critical
+
+None established by this audit.
+
+## High
+
+### Q-01 — Destructive V007 rollout can erase existing server accounts — BLOCK RELEASE
+
+**Code:** `backend/src/main/resources/db/V007__anonymous_identity_cutover.sql:1-19` deletes rows from 13 tables, including accounts, devices, sessions, prekeys, mailboxes, dedupe receipts and blob metadata, then drops `username`; `backend/src/main/kotlin/org/ghostcloak/backend/PostgresDatabase.kt:63-70` applies it whenever `migrate` is requested and V007 is absent, without a row-count/approval guard; `infrastructure/DEPLOYMENT.md:3-31` still describes V001/V002/V003 and username-era use. **Scenario/preconditions:** an operator follows old instructions or applies V007 to a populated target without approving the reset. **Impact:** permanent loss of server account continuity and queued ciphertext; old blob files may remain until filesystem cleanup. This is a deployment/data-loss risk, not a remote SQL injection. **Tests:** migration checksum/fresh-schema code exists, but no permanent deployment gate proves the target is empty or disposable and rehearses backup/rollback. **Fix:** before any release deployment, replace the stale runbook with a V001–V007 plan, preflight row counts and artifact backup, explicit target authorization, and post-migration filesystem/constraint checks; preserve migration checksum. **Fix risk:** high operational risk; changing an already-applied migration invalidates history. **Backend deployment:** yes, controlled migration/compatible backend when this rollout occurs. **Server DB migration:** V007 itself, deliberately destructive. **Android DB migration:** no. **Physical validation:** two-phone re-registration/continuity after a staging cutover, only after authorized server work. No VPS was accessed here.
+
+## Medium
+
+### Q-02 — Anonymous challenge/recovery rate bucket is shared globally
+
+**Code:** `backend/src/main/kotlin/org/ghostcloak/backend/MailboxService.kt:11-23,50-58` uses the same `anonymous` principal for all unauthenticated requests, including recovery, with 10 recovery attempts per operation per minute. **Scenario/preconditions:** any network caller repeatedly submits valid-shaped challenge/recovery requests. **Impact:** other users can receive 429 and cannot renew/recover during the window; no ownership bypass. **Tests:** rate caps are exercised by service fixtures; no multi-client starvation test. **Fix:** design a bounded anti-abuse mechanism that does not expose client IP to application business logic and retains indistinguishable account-existence responses. **Fix risk:** privacy regression or Sybil bypass if partitioning is naive. **Backend deployment:** yes. **Server DB migration:** possibly, if bucket schema changes. **Android DB migration:** no. **Physical validation:** network recovery under controlled load, not device instrumentation.
+
+### Q-03 — Exact-ID lookup consumes a recipient prekey and reveals availability
+
+**Code:** `backend/src/main/kotlin/org/ghostcloak/backend/MailboxService.kt:197-205` returns 404 for absent/exhausted IDs and removes a bundle on successful authenticated lookup. **Scenario/preconditions:** an authenticated account already knows a target's 12-character ID and repeatedly looks it up. **Impact:** targeted prekey depletion and an availability/presence oracle for a known ID; the 31-symbol, 12-character random space makes blind enumeration impractical, and this does not grant account control. **Tests:** lookup/consumption tests exist; no sustained targeted-depletion/retention test. **Fix:** separate idempotent contact refresh from one-time prekey allocation, bound repeated lookups per caller/target without exposing social graph more widely, and preserve first-contact Signal semantics. **Fix risk:** prekey reuse or contact discovery regressions. **Backend deployment:** yes. **Server DB migration:** only if durable allocation/rate state is added. **Android DB migration:** unlikely. **Physical validation:** two-phone first-contact and refill behavior.
+
+### Q-04 — Modern Compose text selection bypasses the sensitive clipboard wrapper
+
+**Code:** `Android/app/src/main/java/org/ghostcloak/app/ui/privacy/SensitiveClipboardProvider.kt:1-21` overrides only deprecated `LocalClipboardManager`; the native `LocalClipboard` is intentionally left unchanged after a real text-selection crash. Explicit profile/contact copy calls use `copySensitive`, but modern `TextFieldSelectionManager` has a separate native clipboard path. **Scenario/preconditions:** a user uses the system Copy/Cut menu in an editable field containing an ID or draft text. **Impact:** the platform clipboard may not receive the sensitive flag, increasing preview/history exposure; this audit did not perform a device clipboard capture, so it is a coverage gap with a concrete bypass path. **Tests:** prior crash regression covers editor interaction, not the sensitivity flag on modern Copy/Cut. **Fix:** use a supported Compose-native interception API or disable Copy/Cut for sensitive fields; test both copy paths on supported API levels. **Fix risk:** text-selection crash or accessibility regression. **Backend deployment/DB migrations:** none. **Physical validation:** yes, keyboard/clipboard on Samsung and AVD.
+
+### Q-05 — Plaintext attachment scratch deletion is best effort outside Safe Exit
+
+**Code:** `Android/app/src/main/java/org/ghostcloak/app/attachments/AttachmentPresentation.kt:31,54-79,188-203,259-279` uses private `noBackupFilesDir/media-presentation` and ignores several `File.delete()` results on cancel, lock, download completion, and startup sweep. **Scenario/preconditions:** deletion fails (open handle/filesystem error) after a document/photo has been staged or decrypted. **Impact:** a plaintext scratch file can outlive the UI session within the app sandbox; it is not in external storage or Auto Backup, and Safe Exit separately verifies its storage deletion. **Tests:** cancellation/expiry paths exist, but no injected deletion-failure/next-start sweep test for presentation files. **Fix:** close leases/handles first, verify deletion or retain a fail-closed retry marker, and test failures without exposing filenames in logs. **Fix risk:** denial of viewing/temporary availability on OEM filesystems; avoid clearing state before safe cleanup. **Backend deployment/DB migrations:** none. **Physical validation:** document viewer and lock/background grant behavior on a disposable account/device.
+
+## Low
+
+### Q-06 — Add-contact draft ID enters Android saved state
+
+**Code:** `Android/app/src/main/java/org/ghostcloak/app/ui/screens/AddContactScreen.kt:34-43` uses `rememberSaveable` for the entered/scanned Ghost Cloak ID. **Scenario/preconditions:** Activity state is saved while the add-contact form contains a known ID. **Impact:** a public identifier and possible contact intent exists outside the SQLCipher endpoint store in system-managed saved state; no key/token/message body is shown in this path. **Tests:** QR/parser coverage exists, no state-bundle privacy assertion. **Fix:** use non-saveable in-memory state and reset on recreation, or document deliberate UX tradeoff. **Fix risk:** draft loss on rotation/process recreation. **Backend deployment/DB migrations:** none. **Physical validation:** optional rotation/process recreation.
+
+### Q-07 — Deployment/security documents describe retired username/API behavior
+
+**Code:** `README.md:5-25`, `infrastructure/DEPLOYMENT.md:3-31`, `protocol/API_V1.md:1-55` still describe usernames, v1 routes and older migration steps alongside current v2/V007 source. **Scenario/preconditions:** an operator uses these as a current deployment or recovery guide. **Impact:** failed rollout, mistaken troubleshooting, or the Q-01 destructive migration mistake. **Tests:** no doc-to-route/schema consistency check. **Fix:** mark historical API docs clearly archived and publish a versioned current deployment runbook. **Fix risk:** documentation review only; avoid rewriting history as if old behavior never existed. **Backend deployment/DB migrations:** none for docs alone. **Physical validation:** no.
+
+## Informational
+
+### Q-08 — TLS edge and backend retain unavoidable delivery metadata
+
+**Code:** `protocol/METADATA_PRIVACY.md`, `Android/transport/src/main/kotlin/org/ghostcloak/transport/GhostCloakTransport.kt:45-85`, `backend/src/main/resources/db/V001__foundation.sql:1-60`, `V003__encrypted_blobs.sql:1-22`. **Scenario/preconditions:** Cloudflare/edge or server operator observes legitimate traffic. **Impact:** client IP at Cloudflare; route/method/size/timing/status at TLS termination; server account↔device↔routing graph, mailbox timing and ciphertext length, prekey queries, blob sizes/owner/timing. End-to-end encryption does not hide these. **Tests:** transport bounds/auth tests cover mechanics, not traffic-analysis resistance. **Fix:** future relay/traffic-shaping/retention design with explicit costs. **Fix risk:** latency, abuse control, availability. **Backend deployment:** potentially. **Server DB migration:** potentially. **Android DB migration:** no presently. **Physical validation:** traffic trace if later implemented.
+
+### Q-09 — External viewers and managed memory cannot guarantee post-view erasure
+
+**Code:** `Android/app/src/main/java/org/ghostcloak/app/attachments/AttachmentPresentation.kt:283-328`, `AttachmentViewerProvider.kt:14-30`. **Scenario/preconditions:** the user opens a normal document in another app, or a privileged process captures runtime memory. **Impact:** an external viewer can copy bytes after a read-only grant; revocation stops future opens, not bytes already read. JVM strings/bitmaps/native Signal memory are not guaranteed to be zeroized. View Once photo has no external-viewer route. **Tests:** URI lease/revocation fixtures exist; recipient-app copying cannot be prevented by those tests. **Fix:** accurately describe the limitation; minimize in-process lifetime and do not promise remote erasure. **Fix risk:** none for documentation. **Backend deployment/DB migrations:** none. **Physical validation:** document viewer lifecycle if product copy is changed.
+
+# Server Data Inventory
+
+Current schema is V001 foundation plus V002–V007, with `username` removed by V007. Classifications can overlap; `SENSITIVE_METADATA` describes privacy significance, not a recommendation to drop a necessary field. Source: `backend/src/main/resources/db/V001__foundation.sql`, `V002__delivery_receipts.sql`, `V003__encrypted_blobs.sql`, `V004__device_binding_recovery.sql`, `V005__mailbox_retention.sql`, `V006__attachment_capabilities.sql`, `V007__anonymous_identity_cutover.sql`.
+
+| Table | Columns / classification | Retention purpose |
+|---|---|---|
+| `accounts` | `id`, `ghostcloak_id`, `device_id`: REQUIRED, SENSITIVE_METADATA | Current public locator and one-device binding; no username after V007. |
+| `devices` | `id`, `account_id`, `routing_id`: REQUIRED, SENSITIVE_METADATA; `auth_public_key`, `identity_public_key`: REQUIRED public crypto material | Recovery/identity routing. |
+| `auth_challenges` | `id`, `account_id`, `device_id`, `random_bytes`, `expires_at`, `audience`, `purpose`, `registration_hash`: TEMPORARY; IDs/hash also SENSITIVE_METADATA | One-use proof; expiry cleanup. |
+| `access_sessions` | `token_hash`, `device_id`, `expires_at`: TEMPORARY, SENSITIVE_METADATA | Short-lived bearer session; raw token not stored. |
+| `signed_prekeys` | `device_id`, `key_id`, `public_key`, `signature`: REQUIRED; device link SENSITIVE_METADATA | Public Signal bundle. |
+| `one_time_prekeys` | `device_id`, `key_id`, `public_key`: TEMPORARY; device link SENSITIVE_METADATA | One-time public EC prekey. |
+| `pq_prekeys` | `device_id`, `key_id`, `public_key`, `signature`: TEMPORARY; device link SENSITIVE_METADATA | Public PQ material. |
+| `prekey_bundles` | `device_id`, `ec_id`, `pq_id`, `signed_id`, `registration_id`, `position`, `attachment_capability`: TEMPORARY; device link SENSITIVE_METADATA | Allocatable bundle and signed capability. |
+| `mailbox_messages` | `id`, `recipient_routing_id`, `encrypted_envelope`, `received_at`, `expires_at`: TEMPORARY; routing/times/length SENSITIVE_METADATA | Undelivered ciphertext with TTL. |
+| `message_deduplication` | `id`, `sender_device_id`, `payload_hash`, `server_message_id`, `expires_at`, `acknowledged`, `mailbox_expires_at`: TEMPORARY, SENSITIVE_METADATA | Idempotency/delivery receipts surviving payload deletion. |
+| `rate_limits` | `operation`, `principal`, `window_start`, `count`: TEMPORARY, SENSITIVE_METADATA when principal is a device | Abuse budget. |
+| `attachment_blobs` | `id`, `owner_account`, `owner_device`, `encrypted_length`, `ciphertext_digest`, `capability_hash`, `created_at`, `expires_at`, `complete`, `uploading`: TEMPORARY; ownership/size/times SENSITIVE_METADATA | Opaque blob lifecycle and quota. |
+| `attachment_budgets` | `id`, `minute_bucket`, `requests`, `uploaded`, `downloaded`, `day_bucket`: TEMPORARY, SENSITIVE_METADATA | Quota/account traffic volume. |
+| `schema_history` | version/checksum/application record: REQUIRED operational metadata | Migration integrity; separately defined by migrator. |
+
+No current server column for display name, local alias, contact acceptance/block, View Once state, Safe Exit state, PIN, or private Signal key was found. `REMOVABLE` applies to expired temporary rows after policy cleanup, not current live records. V007 removes live usernames, but old database backups, dumps, logs and filesystem blobs require a separate operator retention review. Fresh install runs ordered checksummed migrations to V007; no live-schema claim was made.
+
+# Android Component Inventory
+
+Generated release manifest checked at `Android/app/build/intermediates/merged_manifest/release/processReleaseMainManifest/AndroidManifest.xml`; source at `Android/app/src/main/AndroidManifest.xml`. `allowBackup=false`, data-extraction/backup exclusions, `usesCleartextTraffic=false`, and no registered contact deep-link filter. Ghost Cloak MainActivity is exported only for MAIN/LAUNCHER. QR capture activity, notification-dismiss receiver, attachment viewer provider and Room invalidation service are nonexported. The provider permits URI grants but `openFile` is read-only, checks an exact active lease and local-operation gate; the grant is revoked on lock/background/Safe Exit and is time bounded. WorkManager SystemJobService is exported with `BIND_JOB_SERVICE`; its receivers are nonexported. AndroidX ProfileInstallReceiver is exported with `DUMP` permission, not an app-security entry point. Debug merged manifest additionally contains test/inspection components; release differs, and no release debug test activity was found. The release manifest has INTERNET, POST_NOTIFICATIONS, CAMERA, biometric, WAKE_LOCK, ACCESS_NETWORK_STATE and RECEIVE_BOOT_COMPLETED; no broad media/storage permission.
+
+# Key/Secret Inventory
+
+* `ghost-cloak.db.<endpoint>`: nonexportable AndroidKeystore AES-GCM wrapping key, created once by `EncryptedEndpointStore.kt:68-96`; `local.wrapped` contains the wrapped random SQLCipher key in `noBackupFilesDir`. Safe Exit enumerates/deletes/verifies matching aliases. A software-backed Keystore implementation is permitted and reported as `KeyProtection.SOFTWARE`; device hardware assurance is not uniform.
+* `ghostcloak.auth.<digest>.<UUID>`: nonexportable P-256 ECDSA device-auth key in `Android/storage/src/main/kotlin/org/ghostcloak/storage/KeystoreDeviceAuth.kt`; public key/server binding enables signed challenge renewal/recovery. Missing key fails closed; no ID-only replacement. Safe Exit matches and verifies deletion. Reinstall without Keystore material cannot recover merely from a copied DB.
+* Signal identity, signed/one-time/PQ private keys, sessions/ratchets, trust pins, local account/profile, tokens, app-lock PIN verifier, attachment keys/descriptors, View Once state and contact data live in SQLCipher endpoint records. Plaintext normal attachment presentation is private scratch under no-backup and subject to Q-05; notification and appearance preferences hold only non-content settings. Safe Exit/inactivity journals are durable no-backup control state, not account credentials.
+* SQLCipher uses no plaintext SQLite fallback; DB, WAL/SHM, wrapped file and owned local files are destruction targets. Keystore key deletion precedes cleanup. Hardware-backed and Samsung deletion behavior still require physical validation.
+
+# Network Metadata Inventory
+
+Android HTTPS transport rejects non-TLS remote origins, disables redirects, uses platform hostname/certificate checks, and bounds request/response bodies (`Android/transport/src/main/kotlin/org/ghostcloak/transport/GhostCloakTransport.kt:45-85`). Release API origin defaults empty and rejects the known staging host in `Android/app/build.gradle.kts:45-68`; debug defaults to staging. Certificate pinning is an optional separate policy decision, not assumed here. Cloudflare can observe client IP and HTTP route/method/size/timing/status when it terminates TLS; the backend stores links and timing listed above. URLs include opaque blob IDs, and endpoint families distinguish registration, lookup, poll, prekey, attachment and recovery activity. The tunnel/nginx templates use a private Unix TLS ingress and route allowlisting (`infrastructure/tunnel/nginx-origin.conf.template`); the separate attachment fragment and actual deployed routing, edge logs/headers, firewall, TLS certificates and filesystem permissions were **not** checked live. The backend checks `X-Forwarded-Proto=https` in production, so correctness depends on a trusted ingress stripping/supplying that header and origin isolation (`backend/src/main/kotlin/org/ghostcloak/backend/ProductionServer.kt:49-77`).
+
+# Automated Test Coverage Gaps
+
+Priority: (1) migration deployment preflight/restore rehearsal and fresh V007 schema; (2) multi-client anonymous rate starvation and targeted prekey depletion; (3) current Compose Copy/Cut sensitivity and repeated-tap crash regression; (4) injected scratch deletion failure, startup sweep, viewer lease and lock; (5) saved-state ID privacy; (6) release manifest/export/backup drift and clean-main strict dependency resolution; (7) Safe Exit process-death Retry reconstruction, real Keystore alias-absent behavior, offline fresh-onboarding, and no silent reconnect; (8) cross-boot TIME_UNCERTAIN and successful-auth reset; (9) View Once crash/replay/block/remove/request/disappearing expiry; (10) contact pin/safety-number symmetry and signed profile update with old-client compatibility. Existing JVM/app suites cover many underlying transitions, but temporary AVD/manual evidence is not a permanent regression test. No dedicated backend `:backend:test` source currently runs; backend scenarios are cross-module fixtures.
+
+# Physical Validation Gaps
+
+AVD-proven claims in earlier phase notes do not prove OEM Keystore deletion, biometrics, background scheduling, notification history, camera QR, document URI grant revocation, or process-death behavior on Samsung. A prior user-run physical in-place APK retest reached fresh onboarding after Safe Exit Retry and remained there on restart, but the earlier Android Studio-installed build was stuck; signing/build identity and exact installed artifact must be controlled in any repeat. Do not clear a populated phone for this audit. Two disposable physical accounts should eventually exercise signed recovery, identity continuity, blocked ACK behavior, View Once, safe lock, QR and normal attachment viewing. Live staging DB/ingress/retention needs separate operator validation; this report did not access it.
+
+# Documentation Staleness
+
+`README.md:5-25` still says Ghost Cloak is not anonymous, uses usernames and v1 API; `infrastructure/DEPLOYMENT.md:3-31` has V001–V003 and username-era steps; `protocol/API_V1.md` is historical but not prominently archived and includes later attachment extensions. These contradict current v2 Ghost Cloak ID/V007 source and can drive Q-01. Prior phase documents are useful historical evidence, not current deployment instructions. Current test counts/versions in prose should be generated or checked against CI rather than trusted as release evidence.
+
+# Recommended Remediation Order
+
+1. **Q.1 release operations:** freeze V007 target decision, add migration preflight/backup/rollback and current runbook; verify clean-main strict build. Do not apply V007 to existing accounts without explicit data-loss authorization.
+2. **Q.2 local privacy:** close modern clipboard coverage and scratch deletion/lease failure tests while preserving the fixed text-selection crash and fail-closed Safe Exit behavior.
+3. **Q.3 abuse resistance:** redesign shared anonymous recovery/challenge budget and targeted lookup depletion without reintroducing an account-existence oracle or client-IP collection.
+4. **Q.4 metadata/UX:** remove saved-state contact ID if acceptable, measure edge/server retention and document unavoidable external-viewer limits.
+5. **Q.5 consolidation:** current v2/V007 docs, permanent release-manifest/backup tests, controlled two-phone and live-staging validation.
+
+# Release Blockers
+
+**Q-01: BLOCK RELEASE** until the destination database is reviewed and either proven disposable/empty or its data loss explicitly approved with a tested backup/restore plan and matching backend rollout. This classification concerns deployment of V007, not an automatic prohibition on building the APK. No other Critical/High findings were established. Medium items deserve tests/remediation before a privacy-sensitive release but are not marked as proven account takeover or content exposure.
+
+# Residual Risks
+
+Source review cannot verify live edge/origin isolation, PostgreSQL permissions/retention, filesystem mode, crash reporter settings outside this repo, or a physical OEM's Keystore guarantees. Cloudflare and the server retain traffic/relationship metadata even when payloads remain encrypted. A recipient/external document viewer can copy what they legitimately open; revocation and View Once cannot erase already observed bytes. JVM/Compose/native memory has no guaranteed zeroization. The current local uncommitted dependency catalog differs from main; dependency vulnerability status and exact clean-main resolved graph require a separate pinned-build/updated advisory review, not assumptions from this audit.

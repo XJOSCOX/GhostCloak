@@ -15,6 +15,7 @@ import org.ghostcloak.app.ui.theme.GhostDimensions
 enum class Glyph(@DrawableRes val resource: Int) {
     CHAT(R.drawable.gc_chat), SEARCH(R.drawable.gc_search), SETTINGS(R.drawable.gc_settings),
     BACK(R.drawable.gc_back), SEND(R.drawable.gc_send), SHIELD(R.drawable.gc_verify),
+    UNVERIFIED(R.drawable.gc_unverified),
     CLOSE(R.drawable.gc_close), MORE(R.drawable.gc_more), PERSON(R.drawable.gc_profile),
     CONTACTS(R.drawable.gc_contacts), COMPOSE(R.drawable.gc_new_chat),
     ATTACHMENT(R.drawable.gc_attachment), ADD_CONTACT(R.drawable.gc_add_contact),

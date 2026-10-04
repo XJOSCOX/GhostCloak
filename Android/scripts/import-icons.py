@@ -36,7 +36,8 @@ def path_data(element):
 
 destination = ANDROID / "app/src/main/res/drawable"
 destination.mkdir(parents=True, exist_ok=True)
-for source in sorted((ANDROID / "design/icons/monochrome").glob("*.svg")):
+sources = sorted((ANDROID / "design/icons/monochrome").glob("*.svg"))
+for source in sources:
     svg = ET.parse(source).getroot()
     if svg.get("viewBox") != "0 0 64 64":
         raise ValueError("Unexpected icon viewport")
@@ -59,4 +60,4 @@ for source in sorted((ANDROID / "design/icons/monochrome").glob("*.svg")):
     target.write_text('<?xml version="1.0" encoding="utf-8"?>\n'
                       '<!-- Generated from Android/design/icons/monochrome; use scripts/import-icons.py. -->\n'
                       + ET.tostring(vector, encoding="unicode") + "\n", encoding="utf-8")
-print("Imported 32 Ghost Cloak vector icons.")
+print(f"Imported {len(sources)} Ghost Cloak vector icons.")

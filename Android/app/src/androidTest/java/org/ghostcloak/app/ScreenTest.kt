@@ -51,7 +51,22 @@ class ScreenTest {
             ContactStatus(named,RemoteIdentityStatus(IdentityTrustState.UNVERIFIED),SessionLifecycle.ACTIVE),
             {},{},{},{},{}) } }
         compose.onNodeWithText("Bob - Work").assertExists()
-        compose.onNodeWithText("Ghost Cloak ID · 7K4M-9Q2F-X8DR").assertExists()
+        compose.onNodeWithText("GHOST CLOAK ID").assertExists()
+        compose.onNodeWithText("7K4M-9Q2F-X8DR").assertExists()
+    }
+    @Test fun conversationSecurityIconTracksVerificationState() {
+        val trust = androidx.compose.runtime.mutableStateOf(IdentityTrustState.UNVERIFIED)
+        var securityOpened = false
+        compose.setContent { GhostCloakTheme { ConversationScreen(AppState(loading = false),
+            ContactStatus(contact, RemoteIdentityStatus(trust.value), SessionLifecycle.ACTIVE),
+            {}, { securityOpened = true }, { _, _ -> }, {}) } }
+        compose.onNodeWithContentDescription("Unverified contact · Security").assertExists().performClick()
+        assertTrue(securityOpened)
+        compose.runOnIdle { trust.value = IdentityTrustState.VERIFIED }
+        compose.onNodeWithContentDescription("Verified contact · Security").assertExists()
+        compose.onNodeWithContentDescription("Unverified contact · Security").assertDoesNotExist()
+        compose.runOnIdle { trust.value = IdentityTrustState.CHANGED }
+        compose.onNodeWithContentDescription("Identity changed · Security").assertExists()
     }
     @Test fun changedIdentityBlocksComposerAndSending() {
         var sent = false

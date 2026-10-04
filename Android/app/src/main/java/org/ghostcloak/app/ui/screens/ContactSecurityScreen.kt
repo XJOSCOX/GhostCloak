@@ -28,11 +28,16 @@ import org.ghostcloak.protocol.GhostCloakIds
             Avatar(contact.contact.visibleName)
             Column(verticalArrangement = Arrangement.spacedBy(GhostDimensions.small)) {
                 Text(contact.contact.visibleName, style = MaterialTheme.typography.titleLarge)
-                contact.contact.ghostCloakId?.let { id ->
-                    Text("Ghost Cloak ID · ${GhostCloakIds.display(id)}",
-                        style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                }
                 TrustBadge(contact.identity?.trustState)
+            }
+        }
+        contact.contact.ghostCloakId?.let { id ->
+            Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface) {
+                Column(Modifier.fillMaxWidth().padding(GhostDimensions.regular),
+                    verticalArrangement = Arrangement.spacedBy(GhostDimensions.small)) {
+                    SectionLabel("GHOST CLOAK ID")
+                    Text(GhostCloakIds.display(id), style = MaterialTheme.typography.titleMedium)
+                }
             }
         }
         if (changed) InfoPanel(if (previouslyVerified) "! Previously verified identity changed" else "! Security identity changed",

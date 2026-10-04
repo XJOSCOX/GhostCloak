@@ -7,11 +7,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.identity.IdentityTrustState
 import org.ghostcloak.app.ui.theme.avatarColors
 import org.ghostcloak.app.ui.theme.GhostEffects
 import org.ghostcloak.app.ui.theme.GhostLayout
+import org.ghostcloak.app.ui.theme.GhostPalette
 
 @Composable fun Wordmark() {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(GhostDimensions.controlGap)) {
@@ -27,9 +30,14 @@ import org.ghostcloak.app.ui.theme.GhostLayout
 }
 @Composable fun TrustBadge(state: IdentityTrustState?) {
     val text = when (state) { IdentityTrustState.VERIFIED -> "✓ Verified"; IdentityTrustState.CHANGED -> "! Identity changed"; else -> "• Unverified" }
-    val color = when (state) { IdentityTrustState.VERIFIED -> MaterialTheme.colorScheme.primary; IdentityTrustState.CHANGED -> MaterialTheme.colorScheme.error; else -> MaterialTheme.colorScheme.onSurfaceVariant }
+    val color = verificationColor(state)
     Text(text, color = color, style = MaterialTheme.typography.labelLarge)
 }
+
+@Composable fun verificationColor(state: IdentityTrustState?): Color =
+    if (state == IdentityTrustState.VERIFIED) {
+        if (MaterialTheme.colorScheme.background.luminance() < 0.5f) GhostPalette.DarkVerified else GhostPalette.LightVerified
+    } else MaterialTheme.colorScheme.error
 @Composable fun InfoPanel(title: String, body: String, warning: Boolean = false, urgent: Boolean = false) {
     Surface(shape = MaterialTheme.shapes.medium, border = if (urgent) BorderStroke(GhostDimensions.micro, MaterialTheme.colorScheme.error) else null,
         color = if (warning) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surface) {

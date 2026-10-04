@@ -7,13 +7,18 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import org.ghostcloak.app.ui.theme.GhostLayout
 
 @Composable fun HeaderAction(glyph: Glyph, label: String, action: () -> Unit) {
+    HeaderAction(glyph, label, MaterialTheme.colorScheme.primary, action)
+}
+
+@Composable fun HeaderAction(glyph: Glyph, label: String, tint: Color, action: () -> Unit) {
     IconButton(onClick = action, modifier = Modifier.size(GhostLayout.touchTarget)) {
-        AppIcon(glyph, label, Modifier.size(GhostLayout.headerIcon), tint = MaterialTheme.colorScheme.primary)
+        AppIcon(glyph, label, Modifier.size(GhostLayout.headerIcon), tint = tint)
     }
 }
 

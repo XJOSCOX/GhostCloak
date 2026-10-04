@@ -35,4 +35,6 @@ object GhostPalette {
     val LightDivider = Color(0xFFDFE4EC)
     val LightError = Color(0xFFA43E39)
     val LightErrorContainer = Color(0xFFFFEDEA)
+    val LightVerified = Color(0xFF187849)
+    val DarkVerified = Color(0xFF73D69A)
 }

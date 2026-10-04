@@ -41,7 +41,10 @@ import org.ghostcloak.protocol.EnvelopeCodec
             !active -> "Session unavailable"
             else -> null
         }, back = back, avatarName = status.contact.visibleName) {
-            HeaderAction(Glyph.SHIELD, "Security", security)
+            val verified = status.identity?.trustState == IdentityTrustState.VERIFIED
+            HeaderAction(if (verified) Glyph.SHIELD else Glyph.UNVERIFIED,
+                if (verified) "Verified contact · Security" else if (changed) "Identity changed · Security" else "Unverified contact · Security",
+                verificationColor(status.identity?.trustState), security)
             Box {
                 HeaderAction(Glyph.MORE, "Conversation options") { actions = true }
                 DropdownMenu(expanded = actions, onDismissRequest = { actions = false }) {

@@ -1,5 +1,13 @@
 # Messenger design
 
+## Phase 1L.1 anonymous contact identity (design only)
+
+[ANONYMOUS_IDENTITY_DESIGN.md](ANONYMOUS_IDENTITY_DESIGN.md) audits the current
+plaintext username dependencies and proposes a non-unique local/E2EE display name
+plus a random, public, immutable Ghost Cloak ID. The audit finds versioned wire,
+local-state and database migrations necessary before removing usernames; current
+account registration, directory, recovery, messaging and Safe Exit behavior are unchanged.
+
 ## Safe Exit (Phase 1K.2C protected Settings, debug-only safe arming)
 
 [Safe Exit design and internal wipe inventory](EMERGENCY_WIPE_DESIGN.md) records the local

@@ -1,5 +1,14 @@
 # Android Studio development
 
+## Phase 1L.1 identity migration audit
+
+This phase changes documentation only. See [ANONYMOUS_IDENTITY_DESIGN.md](ANONYMOUS_IDENTITY_DESIGN.md)
+for the complete username inventory, 31-symbol/12-character ID calculations,
+staged old-client upgrade, device-key recovery preservation and future test gates.
+The source tree currently ends at backend V006; V007 is only a candidate number.
+Do not run a schema migration, deploy a backend, or substitute display names into
+the current username registration field on an existing installation.
+
 ## Phase 1I.3.1 — inline photos
 
 Update both phones in place using Android Studio Run. No backend deployment or

@@ -45,6 +45,18 @@ class ScreenTest {
         compose.onNodeWithText("I compared it · Verify").performClick()
         assertTrue(verified)
     }
+    @Test fun verifiedContactNoLongerOffersMarkVerified() {
+        val trust = androidx.compose.runtime.mutableStateOf(IdentityTrustState.UNVERIFIED)
+        val state = AppState(loading = false, fingerprint = "12345 12345 12345 12345 12345 12345 12345 12345 12345 12345 12345 12345")
+        compose.setContent { GhostCloakTheme { ContactSecurityScreen(state,
+            ContactStatus(contact, RemoteIdentityStatus(trust.value), SessionLifecycle.ACTIVE),
+            {}, {}, { trust.value = IdentityTrustState.VERIFIED }, {}, {}) } }
+        compose.onNodeWithText("Mark verified").performScrollTo().performClick()
+        compose.onNodeWithText("I compared it · Verify").performClick()
+        compose.onNodeWithText("✓ Verified").assertIsDisplayed()
+        compose.onNodeWithText("Mark verified").assertDoesNotExist()
+        compose.onNodeWithText("You marked this identity verified after comparing its safety number. Ghost Cloak will warn you if the identity changes.").assertExists()
+    }
     @Test fun contactDetailsKeepPublicIdVisibleAfterRemoteNameAndAlias() {
         val named=contact.copy(displayName="Robert",localAlias="Bob - Work",ghostCloakId="7K4M9Q2FX8DR")
         compose.setContent { GhostCloakTheme { ContactSecurityScreen(AppState(loading=false),

@@ -19,6 +19,7 @@ import org.ghostcloak.protocol.GhostCloakIds
     load: (Boolean) -> Unit, verify: (String) -> Unit, trust: (String) -> Unit, block: (Boolean) -> Unit,
     importUpdatedCard: (() -> Unit)? = null) {
     val changed = contact.identity?.trustState == IdentityTrustState.CHANGED
+    val verified = contact.identity?.trustState == IdentityTrustState.VERIFIED
     val previouslyVerified = contact.identity?.previousTrustState == IdentityTrustState.VERIFIED
     var confirmation by remember { mutableStateOf<String?>(null) }
     var confirmUnblock by remember {mutableStateOf(false)}
@@ -43,14 +44,15 @@ import org.ghostcloak.protocol.GhostCloakIds
         if (changed) InfoPanel(if (previouslyVerified) "! Previously verified identity changed" else "! Security identity changed",
             "Sending is blocked. The key differs from the one you knew. Compare the new safety number with this person in person or through another trusted channel.", warning = true, urgent = previouslyVerified)
         else InfoPanel(if (contact.session == SessionLifecycle.ACTIVE) "Encrypted session active" else "Session unavailable",
-            "Unverified means you have not independently confirmed this identity. Successful encryption does not verify a person.")
+            if (verified) "You marked this identity verified after comparing its safety number. Ghost Cloak will warn you if the identity changes."
+            else "Unverified means you have not independently confirmed this identity. Successful encryption does not verify a person.")
         SectionLabel(if (changed) "NEW SAFETY NUMBER" else "SAFETY NUMBER")
         Surface(shape = MaterialTheme.shapes.large, color=MaterialTheme.colorScheme.primaryContainer) {
             Text(if (state.fingerprint.isEmpty()) "Loading safety number…" else state.fingerprint.split(" ").chunked(3).joinToString("\n") { it.joinToString("  ") },
                 Modifier.fillMaxWidth().padding(GhostDimensions.spacious), style = SafetyNumberStyle, color=MaterialTheme.colorScheme.onPrimaryContainer)
         }
         Text("Both people should see exactly the same number. Compare every group.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        FullButton(if (changed) "Review new identity" else "Mark verified", !state.loading && state.fingerprint.isNotEmpty()) { confirmation = state.fingerprint }
+        if (!verified) FullButton(if (changed) "Review new identity" else "Mark verified", !state.loading && state.fingerprint.isNotEmpty()) { confirmation = state.fingerprint }
         if (changed && importUpdatedCard != null) TextButton(onClick = importUpdatedCard) { Text("Import updated contact card") }
         ErrorNotice(state.error, important = state.errorImportant)
         HorizontalDivider()

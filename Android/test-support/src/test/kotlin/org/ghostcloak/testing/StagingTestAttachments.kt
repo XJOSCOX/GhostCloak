@@ -33,7 +33,7 @@ class StagingTestAttachments {
             suspend fun start() {
                 val name="test_"+UUID.randomUUID().toString().replace("-","").take(16)
                 engine.createIdentity(name)
-                registration=state.registration(name,listOf(engine.publicBundle().publicData()))
+                registration=state.registration(listOf(engine.publicBundle().publicData()))
                 NetworkAccount(client,state).run { register(registration);login(registration.accountId,registration.deviceId) }
                 service.open()
             }
@@ -49,8 +49,8 @@ class StagingTestAttachments {
         val manifest=mutableListOf<String>()
         try {
             a.start();b.start()
-            NetworkAccount(a.client,a.state).connect(b.registration.username,a.engine)
-            a.repository.save(Contact("test-contact",b.registration.accountId,b.registration.username,b.registration.deviceId))
+            NetworkAccount(a.client,a.state).connect(b.state.ghostCloakId(),a.engine)
+            a.repository.save(Contact("test-contact",b.registration.accountId,b.state.ghostCloakId(),b.registration.deviceId))
             a.service.sendNetwork(b.registration.deviceId,"Hi",a.outbox)
             b.receive();b.service.acceptRequest(a.registration.deviceId)
             assertTrue(b.service.attachmentPeer(a.registration.deviceId))

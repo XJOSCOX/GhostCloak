@@ -27,7 +27,7 @@ class AppLockStorageTest {
         var b = AppRuntime(context, "https://fixture.invalid", name, api, notifications = sink)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         try {
-            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork("bob", it) }
+            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val aid = a.use { it.open()!!.deviceId }; val identity = b.use { it.open()!! }; val logins = api.logins
             var controller = lock(b, scope)
             withContext(Dispatchers.Main) {

@@ -18,7 +18,7 @@ import java.io.File
 class MessengerDesignTest {
     @get:Rule val compose = createComposeRule()
     private val id = RandomIdentifiers.create()
-    private val contact = ContactStatus(Contact(RandomIdentifiers.create(), RandomIdentifiers.create(), "alice", id, request = true),
+    private val contact = ContactStatus(Contact(RandomIdentifiers.create(), RandomIdentifiers.create(), "alice", id, request = true, ghostCloakId = "7K4M9Q2FX8DR"),
         RemoteIdentityStatus(IdentityTrustState.UNVERIFIED), SessionLifecycle.ACTIVE)
     private val message = Message(RandomIdentifiers.create(), id, Direction.INCOMING, "Hey Bob, made it home. See you tomorrow?", System.currentTimeMillis(), MessageState.RECEIVED)
     private fun screenshot(name: String) {
@@ -33,7 +33,7 @@ class MessengerDesignTest {
         compose.setContent { GhostCloakTheme { org.ghostcloak.app.ui.components.ChatRow(contact, message,
             { opened = it; unread.value = 0 }, unreadCount = unread.value) } }
         compose.onNodeWithContentDescription("2 unread messages", useUnmergedTree = true).assertIsDisplayed()
-        compose.onNodeWithText("alice").performClick()
+        compose.onNodeWithText("7K4M-9Q2F-X8DR").performClick()
         assertEquals(id, opened)
         compose.onNodeWithContentDescription("2 unread messages", useUnmergedTree = true).assertDoesNotExist()
     }
@@ -113,14 +113,14 @@ class MessengerDesignTest {
         compose.onNodeWithText("Requests 1").assertDoesNotExist()
         compose.onNodeWithContentDescription("New chat").assertHasClickAction()
         compose.onNodeWithText("You: Sounds good. I'll bring coffee.").assertIsDisplayed()
-        compose.onNodeWithText("alice").assertIsDisplayed()
+        compose.onNodeWithText("7K4M-9Q2F-X8DR").assertIsDisplayed()
         compose.onNodeWithText("3 new messages").assertIsDisplayed()
         compose.onNodeWithContentDescription("Search conversations").performClick()
         compose.onNodeWithText("Search conversations").performTextInput("morgan")
         compose.onAllNodesWithText("morgan").assertCountEquals(2) // Search field plus matching conversation.
-        compose.onNodeWithText("alice").assertDoesNotExist()
+        compose.onNodeWithText("7K4M-9Q2F-X8DR").assertDoesNotExist()
         compose.onNodeWithContentDescription("Search conversations").performClick()
-        compose.onNodeWithText("alice").assertIsDisplayed()
+        compose.onNodeWithText("7K4M-9Q2F-X8DR").assertIsDisplayed()
         screenshot("organized-chats-light.png")
         compose.runOnIdle { dark.value = true }
         screenshot("organized-chats-dark.png")

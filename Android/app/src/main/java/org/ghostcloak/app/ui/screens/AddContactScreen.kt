@@ -12,6 +12,7 @@ import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.privacy.copySensitive
 import org.ghostcloak.messaging.ContactCardCodec
+import org.ghostcloak.protocol.GhostCloakIds
 
 @Composable fun AddContactScreen(state: AppState, back: () -> Unit, export: () -> Unit, lookup:((String)->Unit)?=null,
     unblock:(String)->Unit={}, manageBlocked:()->Unit={}, import: (String) -> Unit) {
@@ -21,16 +22,18 @@ import org.ghostcloak.messaging.ContactCardCodec
     val context = LocalContext.current
     PageContent("New chat", if (state.networkConfigured && !state.demo) "Find someone on Ghost Cloak." else "Exchange a public contact card.", back) {
         if(state.networkConfigured && !state.demo && lookup!=null) {
-            var username by remember {mutableStateOf("")}
+            var ghostCloakId by remember {mutableStateOf("")}
             Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer) {
                 Box(Modifier.fillMaxWidth().padding(GhostDimensions.heroInset),contentAlignment=androidx.compose.ui.Alignment.Center) { AppIcon(Glyph.PERSON,modifier=Modifier.size(GhostDimensions.touchTarget),tint=MaterialTheme.colorScheme.primary) }
             }
-            OutlinedTextField(username,{if(it.length<=24) username=it},label={Text("Exact username")},singleLine=true,modifier=Modifier.fillMaxWidth())
-            val blocked=state.blockedContacts.firstOrNull {it.displayName.equals(username.trim(),ignoreCase=true)}
+            OutlinedTextField(ghostCloakId,{if(it.length<=14) ghostCloakId=it},label={Text("Ghost Cloak ID")},singleLine=true,modifier=Modifier.fillMaxWidth())
+            val canonical=runCatching {GhostCloakIds.normalize(ghostCloakId)}.getOrNull()
+            val blocked=state.blockedContacts.firstOrNull {it.ghostCloakId==canonical && canonical!=null}
             if(blocked!=null) {
                 Text("This contact is blocked.")
                 FullButton("Unblock",!state.loading) {unblockTarget=blocked.remoteDeviceId}
-            } else FullButton("Find and add contact",!state.loading && username.isNotBlank()) {lookup(username)}
+            } else FullButton("Find and add contact",!state.loading && canonical!=null) {lookup(canonical!!)}
+            if(ghostCloakId.isNotBlank() && canonical==null) Text("Use 12 ID characters, optionally grouped 4-4-4.",color=MaterialTheme.colorScheme.error)
             Text("Your first message arrives as a request. Safety-number verification is optional; use it to confirm who you are talking to.",style=MaterialTheme.typography.bodyMedium)
         }
         ErrorNotice(state.error, important = state.errorImportant)
@@ -40,7 +43,7 @@ import org.ghostcloak.messaging.ContactCardCodec
             SectionLabel("IMPORT THEIR CARD")
             OutlinedTextField(draft, onValueChange = { tooLarge = it.length > ContactCardCodec.MAX_TEXT; if (!tooLarge) draft = it },
                 label = { Text("Paste contact card") }, modifier = Modifier.fillMaxWidth(), minLines = 3, maxLines = 5,
-                isError = tooLarge, supportingText = { Text(if (tooLarge) "Card exceeds 8,192 characters. Nothing was imported." else "GHOSTCLOAK:1:…") })
+                isError = tooLarge, supportingText = { Text(if (tooLarge) "Card exceeds 8,192 characters. Nothing was imported." else "GHOSTCLOAK:2:…") })
             FullButton("Import contact", !state.loading && draft.isNotBlank() && !tooLarge) { import(draft) }
 
             HorizontalDivider()

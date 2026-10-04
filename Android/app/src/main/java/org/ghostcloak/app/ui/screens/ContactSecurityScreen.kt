@@ -24,9 +24,9 @@ import org.ghostcloak.messaging.ContactStatus
     LaunchedEffect(contact.contact.remoteDeviceId, changed) { load(changed) }
     PageContent("Contact security", "Verify the person behind the name.", back) {
         Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.spacedBy(GhostDimensions.regular),verticalAlignment=Alignment.CenterVertically) {
-            Avatar(contact.contact.displayName)
+            Avatar(contact.contact.visibleName)
             Column(verticalArrangement = Arrangement.spacedBy(GhostDimensions.small)) {
-                Text(contact.contact.displayName, style = MaterialTheme.typography.titleLarge)
+                Text(contact.contact.visibleName, style = MaterialTheme.typography.titleLarge)
                 TrustBadge(contact.identity?.trustState)
             }
         }

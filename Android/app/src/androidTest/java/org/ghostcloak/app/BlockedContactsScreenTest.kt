@@ -16,7 +16,7 @@ import org.junit.Test
 
 class BlockedContactsScreenTest {
     @get:Rule val compose=createComposeRule()
-    private val contact=Contact("internal-contact","internal-account","alice","internal-device",blocked=true,request=true)
+    private val contact=Contact("internal-contact","internal-account","alice","00000000-0000-4000-8000-000000000001",blocked=true,request=false,ghostCloakId="7K4M9Q2FX8DR")
     @Test fun emptyListAndCancelThenConfirmedUnblock() {
         val state=mutableStateOf(AppState(loading=false));var calls=0
         compose.setContent {GhostCloakTheme {BlockedContactsScreen(state.value,{}, {calls++;state.value=state.value.copy(blockedContacts=emptyList())})}}
@@ -37,7 +37,7 @@ class BlockedContactsScreenTest {
         var lookups=0;var unblocks=0
         compose.setContent{GhostCloakTheme{AddContactScreen(state.value,{}, {}, {lookups++},
             unblock={unblocks++;state.value=state.value.copy(blockedContacts=emptyList())},import={})}}
-        compose.onNodeWithText("Exact username").performTextInput("alice")
+        compose.onNodeWithText("Ghost Cloak ID").performTextInput("7K4M-9Q2F-X8DR")
         compose.onNodeWithText("This contact is blocked.").assertIsDisplayed()
         compose.onNodeWithText("Find and add contact").assertDoesNotExist()
         compose.onNodeWithText("Unblock").performClick();compose.onNodeWithText("Cancel").performClick()
@@ -78,6 +78,9 @@ class BlockedContactsScreenTest {
                 val repo=LocalRepository(records);repo.save(contact);repo.startRequest(contact.remoteDeviceId,null);repo.block(contact.remoteDeviceId,true)
             }
             val before=wire.requests
+            try { runtime.use { runtime.addNetwork(contact.ghostCloakId!!, it) }; fail("Blocked ID looked up") }
+            catch (e: AppFailure) { assertEquals(AppError.BLOCKED, e.error) }
+            assertEquals(before,wire.requests)
             runtime.use{assertEquals(1,it.blockedContacts().size);it.unblock(contact.remoteDeviceId)}
             assertEquals(before,wire.requests)
             runtime.close();runtime=AppRuntime(context,"https://fixture.invalid",name,wire)

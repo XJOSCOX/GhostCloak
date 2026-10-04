@@ -27,11 +27,11 @@ class ScreenTest {
             assertEquals("synthetic public card fixture", received.getItemAt(0).text.toString())
         }
     }
-    @Test fun firstLaunchRequiresDeliberateUsernameSubmission() {
+    @Test fun firstLaunchRequiresDeliberateDisplayNameSubmission() {
         var submitted: String? = null
         compose.setContent { GhostCloakTheme { FirstLaunchScreen(AppState(loading = false, ready = true)) { submitted = it } } }
         compose.onNodeWithText("Create local identity").assertIsNotEnabled()
-        compose.onNodeWithText("Username").performTextInput("Alice")
+        compose.onNodeWithText("Display name").performTextInput("Alice")
         compose.onNodeWithText("Create local identity").performScrollTo().performClick()
         assertEquals("Alice", submitted)
     }

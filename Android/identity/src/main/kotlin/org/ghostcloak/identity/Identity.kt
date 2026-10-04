@@ -2,7 +2,7 @@ package org.ghostcloak.identity
 
 import java.util.UUID
 
-data class DeviceIdentity(val userId: String, val username: String, val deviceId: String, val publicKey: ByteArray) {
+data class DeviceIdentity(val userId: String, val displayName: String, val deviceId: String, val publicKey: ByteArray) {
     override fun toString() = "DeviceIdentity(public metadata only)"
 }
 

@@ -1,13 +1,27 @@
 # Android Studio development
 
-## Phase 1L.1 identity migration audit
+## Phase 1L pre-release identity cutover
 
-This phase changes documentation only. See [ANONYMOUS_IDENTITY_DESIGN.md](ANONYMOUS_IDENTITY_DESIGN.md)
-for the complete username inventory, 31-symbol/12-character ID calculations,
-staged old-client upgrade, device-key recovery preservation and future test gates.
-The source tree currently ends at backend V006; V007 is only a candidate number.
-Do not run a schema migration, deploy a backend, or substitute display names into
-the current username registration field on an existing installation.
+See [ANONYMOUS_IDENTITY_DESIGN.md](ANONYMOUS_IDENTITY_DESIGN.md) for the final
+display-name/ID contract, V007 reset and privacy limits. This release requires the
+new backend plus V007 before a Phase 1L Android client can register or look up
+contacts. Do not run V007 or deploy automatically: its listed disposable account,
+session, prekey, mailbox, deduplication and attachment rows are intentionally deleted.
+The old username client is incompatible. Old local test state is not silently
+converted or replaced; explicitly reset disposable local test installations before
+new onboarding. Keep important physical devices out of automated validation.
+Historical test instructions below that say to search by username are superseded:
+use the exact formatted Ghost Cloak ID after deploying the matching backend.
+
+Operator order (no deployment is performed by this source change): stop the old
+backend and ingress writes; take and verify a private pre-cutover PostgreSQL backup;
+review the V007 DELETE list and any encrypted attachment-blob files; run the new
+backend binary's `migrate` command with the dedicated migration role; verify
+`schema_history` version 7 and the name-free account schema; install the reviewed
+version-2 ingress allowlist; start the new backend with its runtime role; then
+install Phase 1L Android builds and create fresh disposable accounts. A failed
+migration/startup stays closed. Rolling back to a username binary requires restoring
+the pre-V007 database and matching old ingress/client set, losing any later test data.
 
 ## Phase 1I.3.1 — inline photos
 

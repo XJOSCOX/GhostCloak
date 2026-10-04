@@ -33,7 +33,7 @@ class BlockedEnvelopeTest {
     @Test fun actualMailboxBlockedAttachmentsAreAckedWithoutDownloadingBodies()=runBlocking {
         AttachmentTest.Fixture().use {f->
             val a=f.person("alice");val b=f.person("bob")
-            NetworkAccount(a.client,a.state).connect("bob",a.engine)
+            NetworkAccount(a.client,a.state).connect(b.state.ghostCloakId(),a.engine)
             val repo=LocalRepository(b.records);val receiver=ConversationService(b.engine,repo);receiver.open()
             val first=a.engine.encrypt(b.registration.deviceId,ConversationPayload.encode("request",0))
             a.client.call(ApiRequest.Send(first.envelopeId,b.registration.routingId,EnvelopeCodec.encode(first)))
@@ -77,7 +77,7 @@ class BlockedEnvelopeTest {
         lateinit var aid:String;lateinit var bid:String;lateinit var profile:SenderProfile
         suspend fun open() {
             val ai=a.create("alice");val bi=b.create("bob");aid=ai.deviceId;bid=bi.deviceId
-            profile=SenderProfile(ai.userId,aid,org.ghostcloak.identity.RandomIdentifiers.create(),"alice")
+            profile=SenderProfile(ai.userId,aid,org.ghostcloak.identity.RandomIdentifiers.create(),"7K4M9Q2FX8DR")
             a.importCard(b.exportCard());b.acceptNetwork(packet(),profile);b.block(aid,true)
         }
         suspend fun packet(bytes:ByteArray=ConversationPayload.encode("private",0)):EncryptedEnvelope =

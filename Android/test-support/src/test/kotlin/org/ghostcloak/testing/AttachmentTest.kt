@@ -18,7 +18,7 @@ class AttachmentTest {
     @Test fun sameVersionPeersNeedIncomingTextNotJustOutgoingDelivery()=runBlocking {
         Fixture().use { f ->
             val a=f.person("alice"); val b=f.person("bob")
-            NetworkAccount(a.client,a.state).connect("bob",a.engine)
+            NetworkAccount(a.client,a.state).connect(b.state.ghostCloakId(),a.engine)
             val ar=LocalRepository(a.records); val br=LocalRepository(b.records)
             ar.save(Contact("synthetic-contact",b.registration.accountId,"bob",b.registration.deviceId))
             val sender=ConversationService(a.engine,ar); sender.open()
@@ -45,7 +45,7 @@ class AttachmentTest {
     @Test fun authenticatedPaddingEstablishesSupportAndAttachmentUiDoesNotExposeRequestMetadata()=runBlocking {
         Fixture().use { f ->
             val a=f.person("alice");val b=f.person("bob")
-            NetworkAccount(a.client,a.state).connect("bob",a.engine)
+            NetworkAccount(a.client,a.state).connect(b.state.ghostCloakId(),a.engine)
             val ar=LocalRepository(a.records);val br=LocalRepository(b.records)
             ar.save(Contact("synthetic-contact",b.registration.accountId,"bob",b.registration.deviceId))
             val sender=ConversationService(a.engine,ar);sender.open()
@@ -106,7 +106,7 @@ class AttachmentTest {
     @Test fun attachmentOutboxExpiryAndReplayUseExistingMessageSemantics()=runBlocking {
         Fixture().use {f->
             val a=f.person("alice"); val b=f.person("bob")
-            NetworkAccount(a.client,a.state).connect("bob",a.engine)
+            NetworkAccount(a.client,a.state).connect(b.state.ghostCloakId(),a.engine)
             var time=1000000L
             val clock=ExpiryClock({time},{time},{1})
             val ar=LocalRepository(a.records,clock); val br=LocalRepository(b.records,clock)
@@ -237,7 +237,7 @@ class AttachmentTest {
         val server=ProductionHttpServer(service,{true},false,port,blobs).start()
         suspend fun person(name:String):Person {
             val person=Person(this,name); person.engine.createIdentity(name)
-            val registration=person.state.registration(name,listOf(person.engine.publicBundle().publicData()))
+            val registration=person.state.registration(listOf(person.engine.publicBundle().publicData()))
             NetworkAccount(person.client,person.state).apply { register(registration); login(registration.accountId,registration.deviceId) }
             person.registration=registration; return person
         }
@@ -256,7 +256,7 @@ class AttachmentTest {
     @Test fun twoClientsEncryptedDescriptorAckDownloadReplayAndDelete()=runBlocking {
         Fixture().use { f ->
             val a=f.person("alice"); val b=f.person("bob")
-            NetworkAccount(a.client,a.state).connect("bob",a.engine)
+            NetworkAccount(a.client,a.state).connect(b.state.ghostCloakId(),a.engine)
             val source=ByteArray(1200000) {(it*19).toByte()}
             val prepared=a.store.prepare(source.inputStream(),source.size.toLong(),AttachmentKind.DOCUMENT,30){true}
             val d=AttachmentDescriptor(id=prepared.id,capability=prepared.capability,key=prepared.key,digest=prepared.digest,

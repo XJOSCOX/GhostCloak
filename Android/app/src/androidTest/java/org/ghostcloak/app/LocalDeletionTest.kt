@@ -66,7 +66,7 @@ class LocalDeletionTest {
         val a = AppRuntime(context, "https://fixture.invalid", RandomIdentifiers.create(), api)
         var b = AppRuntime(context, "https://fixture.invalid", name, api, notifications = publisher)
         try {
-            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork("bob", it) }
+            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val aid = a.use { it.open()!!.deviceId }; val bi = b.use { it.open()!! }
             a.use { a.send(it, bi.deviceId, "local deletion") }; val replay = api.mailbox.toMap()
             assertEquals(BackgroundResult.SUCCESS, b.backgroundSync())
@@ -96,7 +96,7 @@ class LocalDeletionTest {
         val a = AppRuntime(context, "https://fixture.invalid", RandomIdentifiers.create(), transport)
         val b = AppRuntime(context, "https://fixture.invalid", RandomIdentifiers.create(), api)
         try {
-            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork("bob", it) }
+            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val aid = a.use { it.open()!!.deviceId }; val bid = b.use { it.open()!!.deviceId }
             val identity = a.use { it.open()!! }; val fingerprint = a.use { it.fingerprint(bid) }
             api.rejectSend = true

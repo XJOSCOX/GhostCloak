@@ -19,13 +19,13 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     suspend fun open(): DeviceIdentity? = action {
         if (repository.hasIdentity()) engine.createIdentity("Local").also { identity = it } else null
     }
-    suspend fun create(username: String): DeviceIdentity = action {
-        TextRules.username(username)
-        engine.createIdentity(username).also { identity = it }
+    suspend fun create(displayName: String): DeviceIdentity = action {
+        TextRules.displayName(displayName)
+        engine.createIdentity(displayName).also { identity = it }
     }
-    suspend fun rename(username: String): DeviceIdentity = action {
-        TextRules.username(username)
-        engine.renameLocalUser(username).also { identity = it; exported = null }
+    suspend fun rename(displayName: String): DeviceIdentity = action {
+        TextRules.displayName(displayName)
+        engine.renameLocalUser(displayName).also { identity = it; exported = null }
     }
     suspend fun attach(value: EncryptedMessageTransport) = action { transport = value }
     suspend fun exportCard(fresh: Boolean = false): String = action {
@@ -33,7 +33,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         exported ?: run {
             val me = identity ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
             val b = engine.publicBundle()
-            ContactCardCodec.encode(ContactCard(1, me.userId, me.username, me.deviceId, b.registrationId,
+            ContactCardCodec.encode(ContactCard(2, me.userId, GhostCloakIds.generate(), me.deviceId, b.registrationId,
                 b.identity, b.preKeyId, b.preKey, b.signedId, b.signedKey, b.signature, b.kyberId, b.kyberKey, b.kyberSignature))
                 .also { exported = it }
         }
@@ -70,7 +70,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             return@action repository.contact(card.deviceId)
         }
         repository.card(card.deviceId, text)
-        Contact(RandomIdentifiers.create(), card.userId, card.username, card.deviceId).also(repository::save)
+        Contact(RandomIdentifiers.create(), card.userId, GhostCloakIds.display(card.ghostCloakId), card.deviceId, ghostCloakId=card.ghostCloakId).also(repository::save)
     }
     suspend fun contacts(): List<ContactStatus> = action {
         repository.expireRequests()
@@ -114,7 +114,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         outbox:DurableOutbox,peerSupportsAttachments:Boolean,onEnqueued:(Message)->Unit = {}):Message=action {
         require(peerSupportsAttachments)
         networkAllowed(id); repository.capacity(); descriptor.validate()
-        val bytes=ConversationPayload.encodeAttachment(descriptor)
+        val bytes=ConversationPayload.encodeAttachment(descriptor,identity?.displayName)
         lateinit var message:Message
         val submission=try { outbox.enqueue(id,bytes) { localId ->
             message=Message(localId,id,Direction.OUTGOING,"",repository.clock.now().wall,MessageState.PENDING,
@@ -145,7 +145,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     private suspend fun enqueueNetwork(id: String, body: String, seconds: Int, control: Boolean, outbox: DurableOutbox): Message {
         networkAllowed(id)
         repository.capacity()
-        val bytes = ConversationPayload.encode(body, seconds, control)
+        val bytes = ConversationPayload.encode(body, seconds, control,identity?.displayName)
         lateinit var message: Message
         val submission = try { outbox.enqueue(id, bytes) { submission ->
             message = Message(submission, id, Direction.OUTGOING, if (control) ConversationPayload.policyText(seconds) else body,
@@ -191,11 +191,14 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             val profile = sender ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
             requireApi(profile.deviceId == envelope.senderDeviceId && profile.deviceId != identity?.deviceId)
             requireApi(listOf(profile.accountId, profile.deviceId, profile.routingId).all(RandomIdentifiers::valid))
-            requireApi(Usernames.normalize(profile.username) == profile.username)
+            requireApi(GhostCloakIds.valid(profile.ghostCloakId))
             if (contacts.size >= 200) throw AppFailure(AppError.LOCAL_CAPACITY)
             if (contacts.any { it.publicUserId == profile.accountId }) throw AppFailure(AppError.AMBIGUOUS_IDENTITY)
-            Contact(RandomIdentifiers.create(), profile.accountId, profile.username, profile.deviceId, request = true)
+            Contact(RandomIdentifiers.create(), profile.accountId, GhostCloakIds.display(profile.ghostCloakId), profile.deviceId, request = true,ghostCloakId=profile.ghostCloakId)
         }
+        if (sender != null) requireApi(sender.deviceId == contact.remoteDeviceId &&
+            sender.accountId == contact.publicUserId && GhostCloakIds.valid(sender.ghostCloakId) &&
+            (contact.ghostCloakId == null || contact.ghostCloakId == sender.ghostCloakId), "sender_mismatch")
         if(contact.blocked) {
             // Authenticate sender/bound envelope and atomically advance the ratchet and replay receipt.
             // Do not parse content, retain descriptors, create requests or enqueue notifications.
@@ -211,7 +214,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             if (content.control && (contacts.none { it.remoteDeviceId == contact.remoteDeviceId } || contact.request))
                 throw AppFailure(AppError.BLOCKED)
             repository.expireRequests()
-            repository.save(contact)
+            repository.save(if(content.displayName!=null) contact.copy(displayName=content.displayName) else contact)
             // A later legacy message withdraws the claim (for example after a downgrade).
             if (content.attachment == null) repository.attachmentPeer(contact.remoteDeviceId,content.supportsAttachments)
             val now = repository.clock.now()

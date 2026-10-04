@@ -20,7 +20,7 @@ class DeliveryExpiryTest {
         var a = sender()
         val b = AppRuntime(context, "https://fixture.invalid", RandomIdentifiers.create(), api, expiryClock = clock())
         try {
-            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork("bob", it) }
+            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val aid = a.use { it.open()!!.deviceId }; val bid = b.use { it.open()!!.deviceId }
             a.use { a.send(it, bid, "intro") }; b.backgroundSync()
             b.use { it.acceptRequest(aid); it.clearConversation(aid) }; a.use { a.syncNetwork(it); it.clearConversation(bid) }

@@ -25,11 +25,12 @@ class PrekeyMaintenanceTest {
             app.use {app.create(it,"fixture")}
             val before=app.use {it.open()!!}
             val registration=api.accounts.values.single()
+            val id=app.ownGhostCloakId()!!
             assertEquals(16,registration.bundles.size)
             val token=api.sessions.keys.single()
             repeat(16) {
-                api.execute(TransportRequest(java.net.URI("https://fixture.invalid/v1/directory/lookup"),
-                    NetworkCodec.encode<ApiRequest>(ApiRequest.Lookup("fixture")),"Bearer $token"))
+                api.execute(TransportRequest(java.net.URI("https://fixture.invalid/v2/directory/lookup"),
+                    NetworkCodec.encode<ApiRequest>(ApiRequest.Lookup(id)),"Bearer $token"))
             }
             app.close()
             EncryptedEndpointStore.open(context,endpoint).use {records->records.transaction {
@@ -43,8 +44,8 @@ class PrekeyMaintenanceTest {
             assertEquals(before.deviceId,app.use {it.open()!!.deviceId})
             assertArrayEquals(before.publicKey,app.use {it.open()!!.publicKey})
             assertEquals(1,api.registrations)
-            val response=api.execute(TransportRequest(java.net.URI("https://fixture.invalid/v1/directory/lookup"),
-                NetworkCodec.encode<ApiRequest>(ApiRequest.Lookup("fixture")),"Bearer $token"))
+            val response=api.execute(TransportRequest(java.net.URI("https://fixture.invalid/v2/directory/lookup"),
+                NetworkCodec.encode<ApiRequest>(ApiRequest.Lookup(id)),"Bearer $token"))
             assertNotNull(NetworkCodec.decode<ApiResponse>(response.body).directory)
         } finally {app.close()}
     }

@@ -42,7 +42,7 @@ class TransportPrivacyTest {
             val client = HttpGhostClient(tls.origin, Tokens())
             client.call(ApiRequest.Fetch())
             client.unauthenticated(ApiRequest.Issue("synthetic-account", "synthetic-device", "login"))
-            assertEquals("/v1/messages/fetch", seen[0].first)
+            assertEquals("/v2/messages/fetch", seen[0].first)
             assertEquals("Bearer synthetic-application-token", seen[0].second)
             assertArrayEquals(NetworkCodec.encode<ApiRequest>(ApiRequest.Fetch()), seen[0].third)
             assertNull(seen[1].second)
@@ -107,14 +107,14 @@ class TransportPrivacyTest {
             lateinit var registration: Registration
             suspend fun register() {
                 engine.createIdentity(name)
-                registration = state.registration(name, listOf(engine.publicBundle().publicData()))
+                registration = state.registration(listOf(engine.publicBundle().publicData()))
                 account.register(registration); account.login(registration.accountId, registration.deviceId)
             }
         }
         val alice = Person("alice").also { it.register() }
         val bob = Person("bob").also { it.register() }
         val charlie = Person("charlie").also { it.register() }
-        alice.account.connect("bob", alice.engine)
+        alice.account.connect(bob.state.ghostCloakId(), alice.engine)
         val packet = alice.engine.encrypt(bob.registration.deviceId, "synthetic relay message".toByteArray())
         val original = EnvelopeCodec.encode(packet)
         val sender = NetworkMailboxTransport(alice.client, alice.state)
@@ -144,7 +144,7 @@ class TransportPrivacyTest {
         }
         for (result in listOf(
             TransportResponse(200, "text/html", byteArrayOf()),
-            TransportResponse(200, NetworkLimits.CONTENT_TYPE, NetworkCodec.encode(ApiResponse(version = 2))),
+            TransportResponse(200, NetworkLimits.CONTENT_TYPE, NetworkCodec.encode(ApiResponse(version = 1))),
             TransportResponse(200, NetworkLimits.CONTENT_TYPE, NetworkCodec.encode(ApiResponse(error = "forged"))),
         )) rejected("invalid_response") {
             HttpGhostClient("https://api.synthetic.invalid", Tokens(), transport = GhostCloakTransport { result }).call(ApiRequest.Fetch())

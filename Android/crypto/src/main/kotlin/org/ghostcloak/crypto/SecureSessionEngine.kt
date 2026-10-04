@@ -18,7 +18,7 @@ class CryptoFailure(val error: CryptoError, val site: FailureSite = FailureSite.
 
 interface SecureSessionEngine {
     val events: Flow<SecurityEvent>
-    suspend fun createIdentity(username: String): DeviceIdentity
+    suspend fun createIdentity(displayName: String): DeviceIdentity
     suspend fun publicBundle(): RemoteKeyBundle
     suspend fun signAttachmentCapability(audience: String, account: String, routing: String,
         bundle: org.ghostcloak.protocol.PublicBundle, time: Long): org.ghostcloak.protocol.AttachmentCapability
@@ -41,6 +41,6 @@ interface SecureSessionEngine {
     suspend fun getSessionLifecycle(remoteDeviceId: String): SessionLifecycle?
     suspend fun reestablishSession(remote: RemoteKeyBundle, expectedFingerprint: String)
     suspend fun prepareReestablishment(remoteDeviceId: String, expectedFingerprint: String): RemoteKeyBundle
-    suspend fun renameLocalUser(username: String): DeviceIdentity
+    suspend fun renameLocalUser(displayName: String): DeviceIdentity
     val preKeys: PreKeyManager
 }

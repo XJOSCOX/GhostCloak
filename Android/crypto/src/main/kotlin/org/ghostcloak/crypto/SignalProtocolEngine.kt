@@ -86,25 +86,25 @@ class SignalProtocolEngine(private val records: EndpointRecords,
             if (!delivered) outgoingSecret?.fill(0)
         }
     }
-    private fun identity() = DeviceIdentity(text("local/user"), text("local/username"), text("local/device"), store.identityKeyPair.publicKey.serialize())
-    override suspend fun createIdentity(username: String): DeviceIdentity = operation {
-        require(username.matches(Regex("[A-Za-z0-9_]{1,32}")))
+    private fun identity() = DeviceIdentity(text("local/user"), text("local/display-name"), text("local/device"), store.identityKeyPair.publicKey.serialize())
+    override suspend fun createIdentity(displayName: String): DeviceIdentity = operation {
+        require(displayName.isNotBlank() && displayName == displayName.trim() && displayName.codePointCount(0,displayName.length) in 1..32 && displayName.encodeToByteArray().size<=128 && displayName.encodeToByteArray().decodeToString()==displayName && displayName.none {Character.isISOControl(it)})
         if (records.read("local/device") == null) {
             if (records.keys("").isNotEmpty()) throw CorruptEndpointState()
             val encoded = IdentityKeyPair.generate().serialize()
             try { records.write("local/key", encoded) } finally { encoded.fill(0) }
             records.write("local/device", RandomIdentifiers.create().encodeToByteArray())
             records.write("local/user", RandomIdentifiers.create().encodeToByteArray())
-            records.write("local/username", username.encodeToByteArray())
+            records.write("local/display-name", displayName.encodeToByteArray())
             records.write("local/registration", (SecureRandom().nextInt(16380) + 1).toString().encodeToByteArray())
             logger.record(SafeLogCode.IDENTITY_CREATED)
         }
         identity()
     }
-    override suspend fun renameLocalUser(username: String): DeviceIdentity = operation {
-        require(username.matches(Regex("[A-Za-z0-9_]{1,32}")))
+    override suspend fun renameLocalUser(displayName: String): DeviceIdentity = operation {
+        require(displayName.isNotBlank() && displayName == displayName.trim() && displayName.codePointCount(0,displayName.length) in 1..32 && displayName.encodeToByteArray().size<=128 && displayName.encodeToByteArray().decodeToString()==displayName && displayName.none {Character.isISOControl(it)})
         local()
-        records.write("local/username", username.encodeToByteArray())
+        records.write("local/display-name", displayName.encodeToByteArray())
         identity()
     }
     override suspend fun publicBundle(): RemoteKeyBundle = preKeys.createPublicationBundle()

@@ -39,7 +39,7 @@ class CombinedSyncTest {
         val w = Wire(); val a = runtime(w); val b = runtime(w)
         try {
             a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }
-            a.use { a.addNetwork("bob", it) }
+            a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val aid = a.use { it.open()!!.deviceId }; val bid = b.use { it.open()!!.deviceId }
             a.use { a.send(it, bid, "First contact") }
             w.fetches.clear(); a.use { a.syncNetwork(it) }
@@ -61,7 +61,7 @@ class CombinedSyncTest {
     @Test fun paginationQueriesReceiptsOnlyOnFirstPageAndRotatesWithoutStarvation() = runBlocking {
         val w = Wire(); val a = runtime(w); val b = runtime(w)
         try {
-            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork("bob", it) }
+            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val aid = a.use { it.open()!!.deviceId }; val bid = b.use { it.open()!!.deviceId }
             a.use { a.send(it, bid, "Introduction") }; b.use { b.syncNetwork(it); it.acceptRequest(aid) }; a.use { a.syncNetwork(it) }
             repeat(NetworkLimits.BATCH + 1) { n ->
@@ -83,7 +83,7 @@ class CombinedSyncTest {
     @Test fun invalidReceiptDoesNotUndoInboxCommitAndExpiredReceiptStillAllowsInbox() = runBlocking {
         val w = Wire(); val a = runtime(w); val b = runtime(w)
         try {
-            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork("bob", it) }
+            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val aid = a.use { it.open()!!.deviceId }; val bid = b.use { it.open()!!.deviceId }
             a.use { a.send(it, bid, "Introduction") }; b.use { b.syncNetwork(it); it.acceptRequest(aid); b.send(it, aid, "Reply") }
             w.invalidStatuses = true

@@ -25,8 +25,11 @@ class ArchitectureTest {
         val forbidden = Regex("(?:android\\.util\\.Log|\\bLog\\.|\\bprintln\\s*\\(|\\bprint\\s*\\(|System\\.out|printStackTrace\\s*\\()")
         val leaks = roots.flatMap { base -> base.walkTopDown().onEnter { it.name !in setOf("build", ".gradle", ".idea") }
             .filter { it.isFile && it.extension in setOf("kt", "java") && it.invariantSeparatorsPath.contains("/src/main/") }.toList() }
-            .filter { forbidden.containsMatchIn(it.readText()) }
+            .filter { forbidden.containsMatchIn(it.readText()) && it.name != "SafeExitRecovery.kt" }
         assertEquals("Unreviewed production logging: ${leaks.map { it.relativeTo(root) }}", emptyList<File>(), leaks)
+        val recovery = File(root, "Android/app/src/main/java/org/ghostcloak/app/access/SafeExitRecovery.kt").readText()
+        assertEquals(listOf("Log.i(TAG, event.name)", "Log.i(TAG, \"SAFE_EXIT_RECOVERY_STATE=${'$'}{state.name}\")"),
+            recovery.lines().map { it.trim() }.filter { it.contains("Log.i(") }.map { it.substringAfter("{ ").substringBeforeLast(" }") })
     }
     @Test fun routerHasNoPlaintextOrCryptoApiAndDemoIsDebugOnly() {
         val source = File(root, "Android/transport/src/main/kotlin/org/ghostcloak/transport/LocalEncryptedRouter.kt").readText()

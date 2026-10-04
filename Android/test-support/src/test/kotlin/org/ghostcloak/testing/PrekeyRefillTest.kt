@@ -22,15 +22,16 @@ internal class PrekeyFixture(val db: BackendDatabase = MemoryBackendDatabase()) 
     var eligible = true
     suspend fun start() {
         engine.createIdentity("fixture")
-        registration=state.registration("fixture",List(16) {engine.publicBundle().publicData()})
+        registration=state.registration(List(16) {engine.publicBundle().publicData()})
         val challenge=service.execute(ApiRequest.Issue(registration.accountId,registration.deviceId,"register",DeviceAuth.digest(NetworkCodec.encode(registration)))).challenge!!
         service.execute(ApiRequest.Register(registration,challenge.id,state.sign(challenge)))
         val login=service.execute(ApiRequest.Issue(registration.accountId,registration.deviceId,"login")).challenge!!
-        state.save(service.execute(ApiRequest.Verify(registration.accountId,registration.deviceId,login.id,state.sign(login))).session!!.token)
-        state.markRegistered()
+        val grant=service.execute(ApiRequest.Verify(registration.accountId,registration.deviceId,login.id,state.sign(login))).session!!
+        state.save(grant.token)
+        state.markRegistered(grant.ghostCloakId)
     }
     fun inventory()=service.execute(ApiRequest.Prekeys(registration.deviceId,emptyList(),inspect=true),state.read()).prekeyInventory!!
-    fun lookup()=service.execute(ApiRequest.Lookup("fixture"),state.read()).directory!!.bundle
+    fun lookup()=service.execute(ApiRequest.Lookup(state.ghostCloakId()),state.read()).directory!!.bundle
     fun refill()=PrekeyRefill(records,engine,"ghostcloak.local",{registration.deviceId},{r ->
         failure?.let {throw it}
         if(!r.inspect) publishes++
@@ -48,7 +49,7 @@ internal object PrekeyProbe {
         assertEquals(16,f.inventory().available)
         val consumed=List(16) {f.lookup().preKeyId}.toSet()
         assertEquals(16,consumed.size); assertEquals(0,f.inventory().available)
-        for(name in listOf("fixture","absentfixture")) {
+        for(name in listOf(f.state.ghostCloakId(), "7K4M9Q2FX8DR")) {
             try {f.service.execute(ApiRequest.Lookup(name),f.state.read());fail()}
             catch(e:ApiFailure) {assertEquals(404,e.status);assertEquals("contact_unavailable",e.code)}
         }
@@ -99,7 +100,7 @@ class PrekeyRefillTest {
         for(status in listOf(404,409)) {
             val lookup=HttpGhostClient("https://fixture.invalid",tokens,transport=GhostCloakTransport {
                 TransportResponse(status,NetworkLimits.CONTENT_TYPE,NetworkCodec.encode(ApiResponse(error="opaque")))})
-            try {lookup.lookup("fixture");fail()} catch(e:ApiFailure){assertEquals("contact_unavailable",e.code)}
+            try {lookup.lookup("7K4M9Q2FX8DR");fail()} catch(e:ApiFailure){assertEquals("contact_unavailable",e.code)}
         }
     }
 }

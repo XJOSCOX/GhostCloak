@@ -19,7 +19,7 @@ class RelationshipRegressionTest {
             val ai=a.create("alice")
             lateinit var first:org.ghostcloak.protocol.EncryptedEnvelope
             lateinit var bi:org.ghostcloak.identity.DeviceIdentity
-            val profile=SenderProfile(ai.userId,ai.deviceId,RandomIdentifiers.create(),"alice")
+            val profile=SenderProfile(ai.userId,ai.deviceId,RandomIdentifiers.create(),"7K4M9Q2FX8DR")
             EncryptedEndpointStore.open(context,bn).use {br->
                 val b=ConversationService(SignalProtocolEngine(br),LocalRepository(br))
                 bi=b.create("bob");a.importCard(b.exportCard())

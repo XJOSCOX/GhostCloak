@@ -3,10 +3,14 @@ package org.ghostcloak.messaging
 import kotlinx.serialization.Serializable
 import org.ghostcloak.identity.RemoteIdentityStatus
 import org.ghostcloak.identity.SessionLifecycle
+import org.ghostcloak.protocol.GhostCloakIds
 
 @Serializable
 data class Contact(val contactId: String, val publicUserId: String, val displayName: String,
-    val remoteDeviceId: String, val blocked: Boolean = false, val request: Boolean = false) {
+    val remoteDeviceId: String, val blocked: Boolean = false, val request: Boolean = false,
+    val ghostCloakId: String? = null, val localAlias: String? = null) {
+    val visibleName: String get() = if (request) ghostCloakId?.let(GhostCloakIds::display) ?: "Message request"
+        else localAlias ?: displayName
     override fun toString() = "Contact(redacted)"
 }
 data class ContactStatus(val contact: Contact, val identity: RemoteIdentityStatus?, val session: SessionLifecycle?)
@@ -25,13 +29,16 @@ data class Message(val localId: String, val conversationId: String, val directio
 data class AttachmentSummary(val photo: Boolean, val filename: String, val bytes: Long, val supported: Boolean = true) {
     override fun toString() = "AttachmentSummary(redacted)"
 }
-enum class AppError { INVALID_USERNAME, INVALID_CARD, DUPLICATE_CONTACT, AMBIGUOUS_IDENTITY, EMPTY_MESSAGE,
+enum class AppError { INVALID_DISPLAY_NAME, INVALID_CARD, DUPLICATE_CONTACT, AMBIGUOUS_IDENTITY, EMPTY_MESSAGE,
     MESSAGE_TOO_LARGE, INVALID_TEXT, CONTACT_UNAVAILABLE, BLOCKED, LOCAL_CAPACITY, FRESH_CARD_REQUIRED }
 class AppFailure(val error: AppError) : RuntimeException(error.name)
 
 object TextRules {
-    fun username(value: String) {
-        if (!value.matches(Regex("[A-Za-z0-9_]{1,32}"))) throw AppFailure(AppError.INVALID_USERNAME)
+    fun displayName(value: String) {
+        val bytes = value.encodeToByteArray()
+        if (value.isBlank() || value != value.trim() || value.codePointCount(0,value.length) !in 1..32 ||
+            bytes.size > 128 || bytes.decodeToString() != value || value.any {Character.isISOControl(it)})
+            throw AppFailure(AppError.INVALID_DISPLAY_NAME)
     }
     fun encode(value: String): ByteArray {
         if (value.isBlank()) throw AppFailure(AppError.EMPTY_MESSAGE)

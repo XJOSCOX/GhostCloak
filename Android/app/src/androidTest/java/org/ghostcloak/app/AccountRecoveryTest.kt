@@ -22,10 +22,10 @@ class AccountRecoveryTest {
         try {
             app.use {app.create(it,"alice")};val identity=app.use {it.open()!!}
             bob.use {bob.create(it,"bob")}
-            app.use {app.addNetwork("bob",it)};bob.use {bob.addNetwork("alice",it)}
+            app.use {app.addNetwork(bob.ownGhostCloakId()!!,it)};bob.use {bob.addNetwork(app.ownGhostCloakId()!!,it)}
             val bobId=bob.use {it.open()!!.deviceId}
             bob.use {bob.send(it,identity.deviceId,"before recovery")};app.use {app.syncNetwork(it)}
-            val original=api.accounts.values.single {it.username=="alice"};app.close()
+            val original=api.accounts.values.single {it.deviceId==identity.deviceId};app.close()
             val retained=EncryptedEndpointStore.open(context,name).use {records->records.transaction {
                 val prefix=records.keys("network/").single {it.endsWith("/registered")}.removeSuffix("registered")
                 records.remove(prefix+"registered");records.remove(prefix+"token")

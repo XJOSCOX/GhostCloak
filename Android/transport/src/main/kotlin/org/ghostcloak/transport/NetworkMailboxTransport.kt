@@ -10,7 +10,7 @@ import java.net.URI
 interface AccessTokenStore { fun read(): String?; fun save(token: String?); }
 interface RoutingDirectory { fun route(deviceId: String): String? }
 interface GhostAuthClient { suspend fun unauthenticated(request: ApiRequest): ApiResponse }
-interface GhostDirectoryClient { suspend fun lookup(username: String): DirectoryEntry; suspend fun publish(deviceId: String, bundles: List<PublicBundle>) }
+interface GhostDirectoryClient { suspend fun lookup(ghostCloakId: String): DirectoryEntry; suspend fun publish(deviceId: String, bundles: List<PublicBundle>) }
 
 /** Protocol/auth adapter. Connection policy belongs to GhostCloakTransport, never message logic. */
 class HttpGhostClient(
@@ -56,7 +56,7 @@ class HttpGhostClient(
                 requireApi(result.contentType == NetworkLimits.CONTENT_TYPE, "invalid_response", 502)
                 requireApi(result.body.size <= NetworkLimits.RESPONSE, "response_size", 502)
                 val response = NetworkCodec.decode<ApiResponse>(result.body, NetworkLimits.RESPONSE)
-                requireApi(response.version == 1, "invalid_response", 502)
+                requireApi(response.version == 2, "invalid_response", 502)
                 if (result.status !in 200..299) throw ApiFailure(result.status,
                     if (request is ApiRequest.Lookup && result.status in setOf(404, 409)) "contact_unavailable" else "server_rejected")
                 requireApi(response.error == null, "invalid_response", 502)
@@ -100,7 +100,7 @@ class HttpGhostClient(
             throw e
         }
     }
-    override suspend fun lookup(username: String) = call(ApiRequest.Lookup(Usernames.normalize(username))).directory ?: throw ApiFailure(502, "invalid_response")
+    override suspend fun lookup(ghostCloakId: String) = call(ApiRequest.Lookup(GhostCloakIds.normalize(ghostCloakId))).directory ?: throw ApiFailure(502, "invalid_response")
     override suspend fun publish(deviceId: String, bundles: List<PublicBundle>) { call(ApiRequest.Prekeys(deviceId, bundles)) }
 }
 interface IdempotentMessageTransport : EncryptedMessageTransport {

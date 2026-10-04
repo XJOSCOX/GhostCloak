@@ -81,11 +81,12 @@ class LocalDestructionAndroidTest {
         try {
             f.own+=setOf("ghost-cloak.db.$bEndpoint","ghost-cloak.db.$cEndpoint")
             a.use {a.create(it,"alice")}; b.use {b.create(it,"bob")}; c.use {c.create(it,"charlie")}
+            assertNotNull(a.ownGhostCloakId())
             val aid=a.use {it.open()!!.deviceId}; val bid=b.use {it.open()!!.deviceId}
-            a.use {a.addNetwork("bob",it); a.send(it,bid,"synthetic")}; b.use {b.syncNetwork(it)}
+            a.use {a.addNetwork(b.ownGhostCloakId()!!,it); a.send(it,bid,"synthetic")}; b.use {b.syncNetwork(it)}
             b.use {it.acceptRequest(aid); b.send(it,aid,"reply")}; a.use {a.syncNetwork(it)}
             a.use {it.acceptRequest(bid); it.block(bid,true)}
-            c.use {c.addNetwork("alice",it); c.send(it,aid,"request")}; a.use {a.syncNetwork(it)}
+            c.use {c.addNetwork(a.ownGhostCloakId()!!,it); c.send(it,aid,"request")}; a.use {a.syncNetwork(it)}
             a.use { }
             withContext(Dispatchers.Main) {
                 lock.start(); lock.initialize()
@@ -108,7 +109,7 @@ class LocalDestructionAndroidTest {
             val fresh=AppRuntime(f,"https://fixture.invalid",f.endpoint,api,operationGate=f.gate)
             val owner=ViewModelStore(); lateinit var model: GhostViewModel
             try {
-                assertNull(fresh.use {it.open()}); fresh.initializeBackground()
+                assertNull(fresh.use {it.open()}); assertNull(fresh.ownGhostCloakId()); fresh.initializeBackground()
                 assertFalse(fresh.canAutoSync); assertEquals(requestCount,api.requests)
                 withContext(Dispatchers.Main) {model=GhostViewModel(target.applicationContext as android.app.Application,fresh); owner.put("fresh",model)}
                 compose.setContent {GhostCloakTheme {FixtureAppLock {GhostApp(model)}}}

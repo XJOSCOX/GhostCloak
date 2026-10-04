@@ -33,14 +33,10 @@ class CapabilityDiscovery(private val engine: SecureSessionEngine, private val s
                 client.call(ApiRequest.Capabilities(signed),reportTransientFailure=false)
             }
         } catch(e:CancellationException) {throw e}
-        catch(_:ApiFailure) { /* Old backend, consumed-key race or offline: retry later; text stays usable. */ }
+        catch(_:ApiFailure) { /* Consumed-key race or offline: retry later; text stays usable. */ }
     }
-    suspend fun lookup(username:String): Pair<DirectoryEntry,Long?> {
-        val response=try { client.call(ApiRequest.Lookup(Usernames.normalize(username),capabilities=true),reportTransientFailure=false) }
-        catch(e:ApiFailure) {
-            if(e.status != 400) throw e
-            return client.lookup(username) to null // Legacy response has no new schema fields.
-        }
+    suspend fun lookup(ghostCloakId:String): Pair<DirectoryEntry,Long?> {
+        val response=client.call(ApiRequest.Lookup(GhostCloakIds.normalize(ghostCloakId),capabilities=true),reportTransientFailure=false)
         return (response.directory ?: throw ApiFailure(502,"invalid_response")) to response.serverTime
     }
     suspend fun accept(entry:DirectoryEntry,time:Long?,service:ConversationService) {

@@ -11,7 +11,7 @@ class RelationshipRegressionTest {
     @Test fun freshRequestAfterRejectStillUsesNormalMailboxAckAndDeliveryStatus()=runBlocking {
         AttachmentTest.Fixture().use {f->
             val a=f.person("alice");val b=f.person("bob")
-            NetworkAccount(a.client,a.state).connect("bob",a.engine)
+            NetworkAccount(a.client,a.state).connect(b.state.ghostCloakId(),a.engine)
             val receiver=ConversationService(b.engine,LocalRepository(b.records));receiver.open()
             repeat(2) { cycle ->
                 val packet=a.engine.encrypt(b.registration.deviceId,ConversationPayload.encode("private",0))
@@ -36,7 +36,7 @@ class RelationshipRegressionTest {
         suspend fun open() {
             val ai=a.create("alice");val bi=b.create("bob")
             aid=ai.deviceId;bid=bi.deviceId
-            profile=SenderProfile(ai.userId,aid,org.ghostcloak.identity.RandomIdentifiers.create(),"alice")
+            profile=SenderProfile(ai.userId,aid,org.ghostcloak.identity.RandomIdentifiers.create(),"7K4M9Q2FX8DR")
             a.importCard(b.exportCard());b.serverReference(1000000)
         }
         suspend fun receive(attachment:Boolean=false):EncryptedEnvelope {
@@ -109,7 +109,7 @@ class RelationshipRegressionTest {
         third.create("mallory")
         val original=ContactCardCodec.decode(p.a.exportCard())
         val replacement=ContactCardCodec.decode(third.exportCard())
-        val forged=ContactCard(original.version,original.userId,original.username,original.deviceId,
+        val forged=ContactCard(original.version,original.userId,original.ghostCloakId,original.deviceId,
             replacement.registrationId,replacement.identity,replacement.preKeyId,replacement.preKey,
             replacement.signedId,replacement.signedKey,replacement.signature,replacement.kyberId,
             replacement.kyberKey,replacement.kyberSignature)

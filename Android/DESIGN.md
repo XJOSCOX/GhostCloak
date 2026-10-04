@@ -1,12 +1,15 @@
 # Messenger design
 
-## Phase 1L.1 anonymous contact identity (design only)
+## Phase 1L anonymous identity cutover
 
-[ANONYMOUS_IDENTITY_DESIGN.md](ANONYMOUS_IDENTITY_DESIGN.md) audits the current
-plaintext username dependencies and proposes a non-unique local/E2EE display name
-plus a random, public, immutable Ghost Cloak ID. The audit finds versioned wire,
-local-state and database migrations necessary before removing usernames; current
-account registration, directory, recovery, messaging and Safe Exit behavior are unchanged.
+[ANONYMOUS_IDENTITY_DESIGN.md](ANONYMOUS_IDENTITY_DESIGN.md) records the implemented
+pre-release clean break: a non-unique encrypted local/E2EE display name and a
+server-assigned, random, immutable public Ghost Cloak ID. V007 drops the plaintext
+username column after resetting disposable identity-bound test records. Version-2
+registration, directory, sender profile and recovery responses carry no human name.
+An ID never authorizes login or recovery; device-auth proof remains required.
+Older phase descriptions below retain their historical wording; this Phase 1L
+contract supersedes username-specific UI and API behavior.
 
 ## Safe Exit (Phase 1K.2C protected Settings, debug-only safe arming)
 
@@ -110,8 +113,8 @@ The bottom navigation uses a compact rounded surface with a horizontal icon-and-
 - Chats: With no unread messages, a compact “Chats” title and search/compose icons on the right. When unread messages exist, Search moves left, the centered count replaces “Chats”, and Compose stays right. Only unread incoming messages contribute to the count. Search toggles a local conversation-name field; closing it clears the query. The header has no brand icon or second title. Existing avatars stay in conversation rows. An 8 dp primary-color dot beside the preview identifies each conversation with unread incoming messages, with an accessible unread count. The dot disappears when the conversation is read.
 - Contacts: the same header and insets, alphabetical contacts, local search and a header Add contact action. Pending requests remain in Chats.
 - Conversation: the same header with Back, the contact name/security status, Security and existing connection options; a compact 32 dp avatar beside the name. Back uses a rounded chevron throughout shared headers. Date separators and incoming/outgoing bubbles remain. Request acceptance and changed-key gates still control the composer.
-- New chat: exact-username lookup, with contact-card tools retained in local/demo mode.
-- Onboarding: one username and one deliberate create action, with concise device-key information.
+- New chat: exact Ghost Cloak ID lookup, with contact-card tools retained in local/demo mode.
+- Onboarding: one non-unique local display name and one deliberate create action; registration assigns the public ID.
 - Profiles: the current device profile and name editor, kept in its own screen file.
 - Settings: visual Light/Dark/Automatic selectors, privacy information, connection actions and separate developer tools. Manual Sync is here; prekey publication is under Connection details.
 - Contact security: identity state, safety-number panel, explicit verification/replacement confirmation and blocking controls.

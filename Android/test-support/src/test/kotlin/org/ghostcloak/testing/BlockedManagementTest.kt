@@ -15,14 +15,14 @@ class BlockedManagementTest {
         val b=ConversationService(SignalProtocolEngine(br),repo);val ai=a.create("alice");val bi=b.create("bob")
         a.importCard(b.exportCard())
         b.acceptNetwork(ae.encrypt(bi.deviceId,ConversationPayload.encode("first",0)),
-            SenderProfile(ai.userId,ai.deviceId,RandomIdentifiers.create(),"alice"))
+            SenderProfile(ai.userId,ai.deviceId,RandomIdentifiers.create(),"7K4M9Q2FX8DR"))
         val pin=b.fingerprint(ai.deviceId);b.block(ai.deviceId,true)
         assertThrows(AppFailure::class.java){runBlocking{b.importCard(a.exportCard())}}
         b.unblock(ai.deviceId)
         val thirdRecords=MemoryRecords();val third=ConversationService(SignalProtocolEngine(thirdRecords),LocalRepository(thirdRecords))
         third.create("mallory")
         val original=ContactCardCodec.decode(a.exportCard());val replacement=ContactCardCodec.decode(third.exportCard())
-        val forged=ContactCard(original.version,original.userId,original.username,original.deviceId,
+        val forged=ContactCard(original.version,original.userId,original.ghostCloakId,original.deviceId,
             replacement.registrationId,replacement.identity,replacement.preKeyId,replacement.preKey,
             replacement.signedId,replacement.signedKey,replacement.signature,replacement.kyberId,replacement.kyberKey,replacement.kyberSignature)
         try{b.importCard(ContactCardCodec.encode(forged));fail()}catch(e:CryptoFailure){assertEquals(CryptoError.IdentityChanged,e.error)}
@@ -31,7 +31,7 @@ class BlockedManagementTest {
         // identity deliberately gates the previous session until explicit security review.
         val cr=MemoryRecords();val c=ConversationService(SignalProtocolEngine(cr),LocalRepository(cr));val ci=c.create("carol")
         a.importCard(c.exportCard());c.acceptNetwork(ae.encrypt(ci.deviceId,ConversationPayload.encode("first",0)),
-            SenderProfile(ai.userId,ai.deviceId,RandomIdentifiers.create(),"alice"))
+            SenderProfile(ai.userId,ai.deviceId,RandomIdentifiers.create(),"7K4M9Q2FX8DR"))
         c.block(ai.deviceId,true);c.unblock(ai.deviceId);c.importCard(a.exportCard())
         assertEquals(1,c.contacts().size);assertFalse(c.contacts().single().contact.request)
     }
@@ -62,7 +62,7 @@ class BlockedManagementTest {
         val a=ConversationService(ae,LocalRepository(ar));val repo=LocalRepository(br)
         var b=ConversationService(SignalProtocolEngine(br),repo)
         val ai=a.create("alice");val bi=b.create("bob");a.importCard(b.exportCard())
-        val profile=SenderProfile(ai.userId,ai.deviceId,RandomIdentifiers.create(),"alice")
+        val profile=SenderProfile(ai.userId,ai.deviceId,RandomIdentifiers.create(),"7K4M9Q2FX8DR")
         suspend fun packet()=ae.encrypt(bi.deviceId,ConversationPayload.encode("private",0))
         b.acceptNetwork(packet(),profile);val pin=b.fingerprint(ai.deviceId);b.block(ai.deviceId,true)
         val discarded=listOf(packet(),packet());for(p in discarded)b.acceptNetwork(p,profile)

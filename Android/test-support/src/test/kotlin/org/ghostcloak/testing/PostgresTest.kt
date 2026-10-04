@@ -16,6 +16,45 @@ import java.util.concurrent.Executors
 import java.time.*
 
 class PostgresTest {
+    @Test fun v007DiscardsDisposableIdentityRowsAndEnforcesAnonymousIdSchema() = runBlocking {
+        Fixture().use { f ->
+            val a = register(f.service(), "Alex")
+            val b = register(f.service(), "Esaie")
+            f.source.connection.use { c -> c.createStatement().use { s ->
+                s.execute("ALTER TABLE accounts DROP COLUMN ghostcloak_id")
+                s.execute("ALTER TABLE accounts ADD COLUMN username varchar(24)")
+                s.execute("UPDATE accounts SET username=CASE WHEN id='${a.registration.accountId}' THEN 'alex' ELSE 'esaie' END")
+                s.execute("ALTER TABLE accounts ALTER COLUMN username SET NOT NULL")
+                s.execute("DELETE FROM schema_history WHERE version=7")
+            } }
+            assertThrows(IllegalStateException::class.java) { PostgresDatabase(f.source) }
+            val upgraded = PostgresDatabase(f.source, migrate = true)
+            assertTrue(upgraded.healthy())
+            f.source.connection.use { c -> c.createStatement().use { s ->
+                val tables = listOf("attachment_budgets", "attachment_blobs", "message_deduplication",
+                    "mailbox_messages", "prekey_bundles", "one_time_prekeys", "pq_prekeys",
+                    "signed_prekeys", "access_sessions", "auth_challenges", "rate_limits", "devices", "accounts")
+                tables.forEach { table -> s.executeQuery("SELECT count(*) FROM $table").use { r ->
+                    assertTrue(r.next()); assertEquals("$table was not reset", 0, r.getInt(1))
+                } }
+                s.executeQuery("SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='accounts'").use { r ->
+                    val columns = buildSet { while (r.next()) add(r.getString(1)) }
+                    assertTrue("ghostcloak_id" in columns)
+                    assertFalse("username" in columns)
+                    assertFalse("display_name" in columns)
+                }
+            } }
+            val fresh = register(f.service(upgraded), "Alex")
+            assertTrue(GhostCloakIds.valid(fresh.state.ghostCloakId()))
+            assertEquals(1, upgraded.transaction { upgraded.accounts.size() })
+            assertTrue(PostgresDatabase(f.source).healthy())
+            assertFalse(f.source.connection.use { c -> c.createStatement().use { s ->
+                s.executeQuery("SELECT row_to_json(a)::text FROM accounts a").use { r ->
+                    buildString { while (r.next()) append(r.getString(1)) }
+                }
+            } }.contains("Alex"))
+        }
+    }
     @Test fun exactMailboxDeadlinesRepositoryReopenAndContendingFetchAckCleanup() {
         Fixture().use {f->MailboxDeadlineProbe.exercise(f.db) {PostgresDatabase(f.source)}}
     }
@@ -173,10 +212,10 @@ class PostgresTest {
             ProductionHttpServer(backend,{true},false,port).start().use {
                 val sender=ConversationService(a.engine,LocalRepository(a.records));sender.open()
                 val receiver=ConversationService(b.engine,LocalRepository(b.records));receiver.open()
-                fun card(p:Person):String {val r=p.registration;val k=r.bundles.single();return ContactCardCodec.encode(ContactCard(1,r.accountId,r.username,k.deviceId,k.registrationId,k.identity,k.preKeyId,k.preKey,k.signedId,k.signedKey,k.signature,k.kyberId,k.kyberKey,k.kyberSignature))}
+                fun card(p:Person):String {val r=p.registration;val k=r.bundles.single();return ContactCardCodec.encode(ContactCard(2,r.accountId,p.state.ghostCloakId(),k.deviceId,k.registrationId,k.identity,k.preKeyId,k.preKey,k.signedId,k.signedKey,k.signature,k.kyberId,k.kyberKey,k.kyberSignature))}
                 sender.importCard(card(b));receiver.importCard(card(a))
                 val client=HttpGhostClient("http://127.0.0.1:$port",a.state,true)
-                a.state.remember(client.lookup("bob"))
+                a.state.remember(client.lookup(b.state.ghostCloakId()))
                 val outbox=DurableOutbox(a.records,a.engine,NetworkMailboxTransport(client,a.state))
                 // Revoked token queues locally; fresh login and sync deliver the exact saved entry.
                 call(backend,a,ApiRequest.Revoke())
@@ -200,7 +239,7 @@ class PostgresTest {
             val port=ServerSocket(0).use {it.localPort}
             ProductionHttpServer(service,{true},false,port).start().use {
                 val client=HttpGhostClient("http://127.0.0.1:$port",a.state,true)
-                NetworkAccount(client,a.state).connect("bob",a.engine)
+                NetworkAccount(client,a.state).connect(b.state.ghostCloakId(),a.engine)
                 val transport=NetworkMailboxTransport(client,a.state)
                 val outbox=DurableOutbox(a.records,a.engine,transport,{if(it==point)throw Death()})
                 try {outbox.process(outbox.enqueue(b.registration.deviceId,"hello bob".toByteArray()))} catch(_:Death){}
@@ -237,7 +276,7 @@ class PostgresTest {
     private class Person(val name:String) {
         val records=MemoryRecords(); val engine=SignalProtocolEngine(records); val state=EndpointNetworkState(records,"ghostcloak.local")
         lateinit var registration:Registration
-        suspend fun create(){engine.createIdentity(name); registration=state.registration(name,listOf(engine.publicBundle().publicData()))}
+        suspend fun create(){engine.createIdentity(name); registration=state.registration(listOf(engine.publicBundle().publicData()))}
     }
     private suspend fun register(service:MailboxService,name:String):Person=Person(name).also {p->
         p.create(); val r=p.registration
@@ -247,7 +286,8 @@ class PostgresTest {
     }
     private fun login(service:MailboxService,p:Person) {
         val c=service.execute(ApiRequest.Issue(p.registration.accountId,p.registration.deviceId,"login")).challenge!!
-        p.state.save(service.execute(ApiRequest.Verify(c.accountId,c.deviceId,c.id,p.state.sign(c))).session!!.token)
+        val grant=service.execute(ApiRequest.Verify(c.accountId,c.deviceId,c.id,p.state.sign(c))).session!!
+        p.state.save(grant.token);p.state.markRegistered(grant.ghostCloakId)
     }
     private fun call(s:MailboxService,p:Person,r:ApiRequest)=s.execute(r,p.state.read())
     @Test fun postgresHttpDeliveryRestartDedupeAckAndDump()=runBlocking {
@@ -260,7 +300,7 @@ class PostgresTest {
                 suspend fun online(name:String)=Person(name).also {p->p.create();val account=NetworkAccount(HttpGhostClient(ingress.origin,p.state),p.state);account.register(p.registration);account.login(p.registration.accountId,p.registration.deviceId)}
                 val a=online("alice"); val b=online("bob"); val c=online("charlie")
                 val client=HttpGhostClient(ingress.origin,a.state)
-                NetworkAccount(client,a.state).connect("bob",a.engine)
+                NetworkAccount(client,a.state).connect(b.state.ghostCloakId(),a.engine)
                 val transport=NetworkMailboxTransport(client,a.state)
                 var crashed=false
                 val outbox=DurableOutbox(a.records,a.engine,transport,{if(it==CrashPoint.AFTER_SERVER_ACCEPTANCE){crashed=true; throw IllegalStateException("fixture")}})
@@ -320,7 +360,7 @@ class PostgresTest {
             try {
                 val results=listOf(s1,s2).map {s->pool.submit<Boolean>{try {a.state.save(s.execute(proof).session!!.token);true} catch(_:ApiFailure){false}}}.map {it.get()}
                 assertEquals(1,results.count {it})
-                val bundles=listOf(s1,s2).map {s->pool.submit<Boolean>{try {call(s,a,ApiRequest.Lookup("bob"));true} catch(_:ApiFailure){false}}}.map {it.get()}
+                val bundles=listOf(s1,s2).map {s->pool.submit<Boolean>{try {call(s,a,ApiRequest.Lookup(b.state.ghostCloakId()));true} catch(_:ApiFailure){false}}}.map {it.get()}
                 assertEquals(1,bundles.count {it})
                 a.engine.establishSession(b.registration.bundles.single().remote())
                 val wire=EnvelopeCodec.encode(a.engine.encrypt(b.registration.deviceId,"hello bob".toByteArray()))

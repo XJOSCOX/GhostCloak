@@ -23,12 +23,12 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
     }
     fun remember(sender: SenderProfile) = records.transaction {
         requireApi(listOf(sender.accountId, sender.deviceId, sender.routingId).all(RandomIdentifiers::valid))
-        requireApi(Usernames.normalize(sender.username) == sender.username)
+        requireApi(GhostCloakIds.valid(sender.ghostCloakId))
         val key = prefix + "route/${sender.deviceId}"
         requireApi(records.read(key)?.decodeToString()?.let { it == sender.routingId } != false, "routing_changed")
         records.write(key, sender.routingId.toByteArray())
     }
-    fun registration(username: String, bundles: List<PublicBundle>): Registration = records.transaction {
+    fun registration(bundles: List<PublicBundle>): Registration = records.transaction {
         requireApi(records.read("local/device") != null, "identity_required")
         if (credential != null) {
             val legacy=records.read(prefix+"auth-private")
@@ -45,7 +45,7 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
                 records.write(prefix+"account",RandomIdentifiers.create().toByteArray()); records.write(prefix+"routing",RandomIdentifiers.create().toByteArray())
             }
             return@transaction Registration(records.read(prefix+"account")!!.decodeToString(),records.read("local/device")!!.decodeToString(),
-                records.read(prefix+"routing")!!.decodeToString(),Usernames.normalize(username),publicKey,bundles)
+                records.read(prefix+"routing")!!.decodeToString(),publicKey,bundles)
         }
         requireApi(records.read(prefix+"auth-alias")==null,"platform_credential_required")
         var encoded = records.read(prefix + "auth-private")
@@ -60,7 +60,7 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
         }
         encoded?.fill(0)
         Registration(records.read(prefix + "account")!!.decodeToString(), records.read("local/device")!!.decodeToString(),
-            records.read(prefix + "routing")!!.decodeToString(), Usernames.normalize(username), records.read(prefix + "auth-public")!!, bundles)
+            records.read(prefix + "routing")!!.decodeToString(), records.read(prefix + "auth-public")!!, bundles)
     }
     fun sign(c: Challenge): ByteArray = records.transaction {
         requireApi(c.audience == audience && c.accountId == records.read(prefix + "account")?.decodeToString() && c.deviceId == records.read("local/device")?.decodeToString(), "challenge_binding")
@@ -77,10 +77,21 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
         } finally { secret.fill(0) }
     }
     fun registered():Boolean=records.transaction {records.read(prefix+"registered")!=null}
-    fun markRegistered()=records.transaction {
+    fun ghostCloakId():String=records.transaction {records.read(prefix+"ghostcloak-id")?.decodeToString()?.takeIf(GhostCloakIds::valid) ?: throw ApiFailure(401,"credential_missing")}
+    fun markRegistered(ghostCloakId:String)=records.transaction {
+        requireApi(GhostCloakIds.valid(ghostCloakId),"invalid_ghostcloak_id")
+        val old=records.read(prefix+"ghostcloak-id")?.decodeToString()
+        requireApi(old==null || old==ghostCloakId,"identity_changed",409)
+        records.write(prefix+"ghostcloak-id",ghostCloakId.toByteArray())
         records.write(prefix+"registered",byteArrayOf(1))
         records.remove("app/new-network-account"); records.remove(prefix+"pending-registration")
         records.remove(prefix+"recovery-required"); records.remove(prefix+"logged-out")
+    }
+    fun acceptSession(grant:SessionGrant)=records.transaction {
+        requireApi(grant.token.matches(Regex("[A-Za-z0-9_-]{43}")) && grant.expiresAt>System.currentTimeMillis() &&
+            GhostCloakIds.valid(grant.ghostCloakId),"invalid_response",502)
+        markRegistered(grant.ghostCloakId)
+        save(grant.token)
     }
     fun accountId():String=records.transaction {records.read(prefix+"account")?.decodeToString() ?: throw ApiFailure(401,"credential_missing")}
     fun ownRouting():String=records.transaction {records.read(prefix+"routing")?.decodeToString() ?: throw ApiFailure(401,"credential_missing")}
@@ -89,7 +100,7 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
         when {
             records.read(prefix+"logged-out")!=null -> AccountConnectionState.LOGGED_OUT
             records.read(prefix+"recovery-required")!=null -> AccountConnectionState.RECOVERY_REQUIRED
-            registered() -> AccountConnectionState.REGISTERED
+            registered() && records.read(prefix+"ghostcloak-id")?.decodeToString()?.let(GhostCloakIds::valid)==true -> AccountConnectionState.REGISTERED
             records.read("app/new-network-account")!=null && records.keys("network/").all {it.startsWith(prefix)} -> AccountConnectionState.NEW_ACCOUNT
             else -> AccountConnectionState.RECOVERY_REQUIRED
         }
@@ -97,9 +108,9 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
     fun requireRecovery()=records.transaction {records.write(prefix+"recovery-required",byteArrayOf(1))}
     fun markLoggedOut()=records.transaction {records.write(prefix+"logged-out",byteArrayOf(1))}
     fun pendingRegistration():Registration?=records.transaction {records.read(prefix+"pending-registration")?.let {NetworkCodec.decode<Registration>(it)}}
-    fun prepareNew(username:String,bundles:List<PublicBundle>):Registration=records.transaction {
+    fun prepareNew(bundles:List<PublicBundle>):Registration=records.transaction {
         requireApi(connectionState()==AccountConnectionState.NEW_ACCOUNT,"recovery_required",401)
-        pendingRegistration() ?: registration(username,bundles).also {records.write(prefix+"pending-registration",NetworkCodec.encode(it))}
+        pendingRegistration() ?: registration(bundles).also {records.write(prefix+"pending-registration",NetworkCodec.encode(it))}
     }
     /** Never creates or replaces a key, even with missing candidate account/routing records. */
     fun recoveryPublicKey():ByteArray=records.transaction {
@@ -122,10 +133,11 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
             listOf(binding.accountId,binding.deviceId,binding.routingId).all(RandomIdentifiers::valid) &&
             setOf(binding.accountId,binding.deviceId,binding.routingId).size==3 &&
             binding.session.token.matches(Regex("[A-Za-z0-9_-]{43}")) && binding.session.expiresAt>System.currentTimeMillis() &&
+            GhostCloakIds.valid(binding.session.ghostCloakId) &&
             MessageDigest.isEqual(public,recoveryPublicKey()),"recovery_failed",401)
         records.write(prefix+"account",binding.accountId.toByteArray())
         records.write(prefix+"routing",binding.routingId.toByteArray())
-        save(binding.session.token);markRegistered()
+        save(binding.session.token);markRegistered(binding.session.ghostCloakId)
         records.remove("app/renewal-blocked/$audience")
     }
 }
@@ -134,21 +146,21 @@ class NetworkAccount(private val client: HttpGhostClient, private val state: End
         val hash = DeviceAuth.digest(NetworkCodec.encode(registration))
         val c = client.unauthenticated(ApiRequest.Issue(registration.accountId, registration.deviceId, "register", hash)).challenge ?: throw ApiFailure(502, "invalid_response")
         requireApi(c.purpose == "register" && c.registrationHash.contentEquals(hash), "challenge_binding")
-        client.unauthenticated(ApiRequest.Register(registration, c.id, state.sign(c)))
-        state.markRegistered()
+        val id=client.unauthenticated(ApiRequest.Register(registration, c.id, state.sign(c))).registeredId
+        requireApi(id!=null && GhostCloakIds.valid(id),"invalid_response",502)
     }
     suspend fun login(accountId: String, deviceId: String) {
         val c = client.unauthenticated(ApiRequest.Issue(accountId, deviceId, "login")).challenge ?: throw ApiFailure(502, "invalid_response")
         requireApi(c.purpose == "login" && c.registrationHash.isEmpty(), "challenge_binding")
         val grant = client.unauthenticated(ApiRequest.Verify(accountId, deviceId, c.id, state.sign(c))).session ?: throw ApiFailure(502, "invalid_response")
-        requireApi(grant.token.matches(Regex("[A-Za-z0-9_-]{43}")) && grant.expiresAt > System.currentTimeMillis(), "invalid_response", 502)
-        state.save(grant.token)
+        requireApi(grant.token.matches(Regex("[A-Za-z0-9_-]{43}")) && grant.expiresAt > System.currentTimeMillis() && GhostCloakIds.valid(grant.ghostCloakId), "invalid_response", 502)
+        state.acceptSession(grant)
     }
     suspend fun logout() { client.call(ApiRequest.Revoke()); state.save(null) }
-    /** Establish trust through the engine before storing routing data; usernames never bypass pins. */
-    suspend fun connect(username: String, engine: SecureSessionEngine): DirectoryEntry {
-        val entry = client.lookup(username)
-        requireApi(entry.username == Usernames.normalize(username) && entry.deviceId == entry.bundle.deviceId &&
+    /** Establish trust through the engine before storing routing data; public IDs never bypass pins. */
+    suspend fun connect(ghostCloakId: String, engine: SecureSessionEngine): DirectoryEntry {
+        val entry = client.lookup(ghostCloakId)
+        requireApi(entry.ghostCloakId == GhostCloakIds.normalize(ghostCloakId) && entry.deviceId == entry.bundle.deviceId &&
             RandomIdentifiers.valid(entry.accountId) && RandomIdentifiers.valid(entry.routingId), "directory_mismatch")
         entry.bundle.validate()
         engine.establishSession(entry.bundle.remote())

@@ -39,7 +39,7 @@ class MessagingStorageTest {
             a = ConversationService(SignalProtocolEngine(ar), LocalRepository(ar))
             val reopened = a.open()!!
             assertEquals(ai.deviceId, reopened.deviceId); assertArrayEquals(ai.publicKey, reopened.publicKey)
-            assertEquals("Robert", reopened.username)
+            assertEquals("Robert", reopened.displayName)
             assertEquals(IdentityTrustState.VERIFIED, a.contacts().single().identity!!.trustState)
             assertEquals(text, a.messages(bi.deviceId).single().body)
         } finally { ar.close(); br.close(); router.close() }

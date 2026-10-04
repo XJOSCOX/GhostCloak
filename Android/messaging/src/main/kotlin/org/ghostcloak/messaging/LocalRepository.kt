@@ -111,7 +111,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun isBlocked(id:String)=records.transaction {contact(id).blocked}
     fun listBlocked()=records.transaction {
         contacts().filter {it.blocked}.sortedWith(compareBy<Contact> {
-            it.displayName.lowercase(java.util.Locale.ROOT)
+            it.visibleName.lowercase(java.util.Locale.ROOT)
         }.thenBy {it.remoteDeviceId})
     }
     fun unblock(id:String)=block(id,false)

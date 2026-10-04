@@ -100,25 +100,25 @@ class NetworkController(
         }
         catch (e: Exception) { status = NetworkStatus.ERROR; throw e }
     }
-    suspend fun connect(username: String) = operation(NetworkOperation.AUTH) {
+    suspend fun connect() = operation(NetworkOperation.AUTH) {
         requireApi(configured, "server_not_configured")
         status = NetworkStatus.CONNECTING
         AccountRecoveryDiagnostics.snapshot(records, URI(origin).host)
         try {
             if(state.connectionState()==AccountConnectionState.NEW_ACCOUNT) {
                 val pending=state.pendingRegistration()
-                val registration=pending ?: state.prepareNew(username,List(16) { engine.publicBundle().publicData() })
+                val registration=pending ?: state.prepareNew(List(16) { engine.publicBundle().publicData() })
                 // Only a durable intent made at actual local identity creation allows registration.
                 // A retry of that intent first handles a previously lost Register response.
                 var loggedIn=false
                 if(pending!=null) try {account.login(registration.accountId,registration.deviceId); loggedIn=true}
                     catch(e:ApiFailure) {if(e.status!=401) throw e}
                 if(!loggedIn) {account.register(registration);account.login(registration.accountId,registration.deviceId)}
-                state.markRegistered()
+                state.ghostCloakId()
             } else {
                 AccountRecoveryDiagnostics.path(if(state.registered()) "CONNECT_REGISTERED_LOGIN" else "CONNECT_UNMARKED_LOGIN_FIRST")
                 // Existing or ambiguous state: no credential preparation and no registration fallback.
-                account.login(state.accountId(),device());state.markRegistered()
+                account.login(state.accountId(),device())
             }
         } catch(e:ApiFailure) {
             if(e.status in setOf(401,409)) {
@@ -163,15 +163,17 @@ class NetworkController(
             throw ApiFailure(401,"recovery_failed")
         }
     }
-    suspend fun add(username: String, service: ConversationService) {
-        val normalized = Usernames.normalize(username)
-        if(service.blockedContacts().any {it.displayName.equals(normalized,ignoreCase=true)})
-            throw AppFailure(AppError.BLOCKED)
+    fun ownGhostCloakId():String=state.ghostCloakId()
+    fun visibleGhostCloakId():String?=if(state.connectionState()==AccountConnectionState.REGISTERED) state.ghostCloakId() else null
+    suspend fun add(ghostCloakId: String, service: ConversationService) {
+        val normalized = GhostCloakIds.normalize(ghostCloakId)
+        if(service.blockedContacts().any {it.ghostCloakId==normalized}) throw AppFailure(AppError.BLOCKED)
         operation(NetworkOperation.LOOKUP) {
             val (e,time) = capabilities.lookup(normalized)
             val b = e.bundle
-            requireApi(e.deviceId == b.deviceId && e.username == normalized, "directory_mismatch")
-            val card = ContactCard(1, e.accountId, e.username, e.deviceId, b.registrationId, b.identity, b.preKeyId, b.preKey,
+            requireApi(e.deviceId == b.deviceId && e.ghostCloakId == normalized, "directory_mismatch")
+            if(service.blockedContacts().any {it.publicUserId==e.accountId || it.remoteDeviceId==e.deviceId}) throw AppFailure(AppError.BLOCKED)
+            val card = ContactCard(2, e.accountId, e.ghostCloakId, e.deviceId, b.registrationId, b.identity, b.preKeyId, b.preKey,
                 b.signedId, b.signedKey, b.signature, b.kyberId, b.kyberKey, b.kyberSignature)
             service.importCard(ContactCardCodec.encode(card)); state.remember(e)
             capabilities.accept(e,time,service)

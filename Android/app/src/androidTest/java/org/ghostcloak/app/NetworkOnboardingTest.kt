@@ -32,7 +32,7 @@ class NetworkOnboardingTest {
             val retried = app.use { it.open()!! }
             assertEquals(original.deviceId, retried.deviceId)
             assertArrayEquals(original.publicKey, retried.publicKey)
-            assertEquals("alice", retried.username)
+            assertEquals("alice", retried.displayName)
             assertEquals(1, api.registrations)
             assertEquals(NetworkStatus.CONNECTED, app.networkStatus)
             val account = api.accounts.values.single()
@@ -67,30 +67,32 @@ class NetworkOnboardingTest {
         }
         runtime(api, name).scoped { app ->
             app.use { app.connectNetwork(it) }
-            assertEquals("localalice", api.accounts.values.single().username)
+            assertEquals("LocalAlice", app.use { it.open()!!.displayName })
+            assertTrue(org.ghostcloak.protocol.GhostCloakIds.valid(app.ownGhostCloakId()!!))
             assertEquals(original.deviceId, app.use { it.open()!!.deviceId })
             assertArrayEquals(original.publicKey, app.use { it.open()!!.publicKey })
         }
     }
-    @Test fun invalidNetworkUsernameDoesNotCreateIdentity() = runBlocking {
+    @Test fun invalidDisplayNameDoesNotCreateIdentity() = runBlocking {
         val api = SyntheticNetwork()
         runtime(api).scoped { app ->
-            try { app.use { app.create(it, "a") }; fail() } catch (_: AppFailure) { }
+            try { app.use { app.create(it, "") }; fail() } catch (_: AppFailure) { }
             assertNull(app.use { it.open() })
             assertEquals(0, api.requests)
         }
     }
-    @Test fun usernameContactsSendSyncAndRestartPreserveMessagesWithoutLocalFallback() = runBlocking {
+    @Test fun idContactsSendSyncAndRestartPreserveMessagesWithoutLocalFallback() = runBlocking {
         val api = SyntheticNetwork()
         val bobName = "e0-${RandomIdentifiers.create()}"
         runtime(api).scoped { alice ->
             var bob = runtime(api, bobName)
             try {
                 alice.use { alice.create(it, "alice") }; bob.use { bob.create(it, "bob") }
-                alice.use { alice.addNetwork("bob", it) }; bob.use { bob.addNetwork("alice", it) }
-                assertEquals(listOf("bob", "alice"), api.lookedUp)
+                alice.use { alice.addNetwork(bob.ownGhostCloakId()!!, it) }; bob.use { bob.addNetwork(alice.ownGhostCloakId()!!, it) }
+                assertEquals(listOf(bob.ownGhostCloakId(), alice.ownGhostCloakId()), api.lookedUp)
                 val aliceId = alice.use { it.open()!!.deviceId }; val bobId = bob.use { it.open()!!.deviceId }
                 val bobIdentity = bob.use { it.open()!! }
+                val bobGhostCloakId = bob.ownGhostCloakId()
                 api.rejectSend = true
                 val pending = alice.use { alice.send(it, bobId, "synthetic hello bob") }
                 assertEquals(MessageState.PENDING, pending.state)
@@ -106,6 +108,7 @@ class NetworkOnboardingTest {
                 assertEquals(MessageState.SERVER_ACCEPTED, alice.use { it.messages(bobId).single().state })
                 bob.close(); bob = runtime(api, bobName)
                 bob.use { bob.syncNetwork(it) }
+                assertEquals(bobGhostCloakId, bob.ownGhostCloakId())
                 assertEquals("synthetic hello bob", bob.use { it.messages(aliceId).single().body })
                 assertEquals(MessageState.RECEIVED, bob.use { it.messages(aliceId).single().state })
                 assertTrue(api.mailbox.isEmpty()) // ACK only after accepted encrypted storage write.
@@ -143,7 +146,7 @@ class NetworkOnboardingTest {
             val original = runtime(api, name).scoped { alice ->
                 runtime(api).scoped { bob ->
                     alice.use { alice.create(it, "alice") }; bob.use { bob.create(it, "bob") }
-                    alice.use { alice.addNetwork("bob", it) }; bob.use { bob.addNetwork("alice", it) }
+                    alice.use { alice.addNetwork(bob.ownGhostCloakId()!!, it) }; bob.use { bob.addNetwork(alice.ownGhostCloakId()!!, it) }
                     val aliceId = alice.use { it.open()!!.deviceId }
                     bob.use { bob.send(it, aliceId, "synthetic reboot message") }
                     alice.use { alice.syncNetwork(it) }
@@ -154,7 +157,7 @@ class NetworkOnboardingTest {
                 records.transaction {
                     records.write("test/e0/public", original.publicKey)
                     records.write("test/e0/device", original.deviceId.toByteArray())
-                    records.write("test/e0/account", api.accounts.values.single { it.username == "alice" }.accountId.toByteArray())
+                    records.write("test/e0/account", api.accounts.values.single { it.deviceId == original.deviceId }.accountId.toByteArray())
                 }
             }
         }

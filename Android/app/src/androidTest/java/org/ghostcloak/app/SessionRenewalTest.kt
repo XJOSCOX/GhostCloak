@@ -42,7 +42,7 @@ class SessionRenewalTest {
         val b = runtime(api)
         try {
             a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }
-            a.use { a.addNetwork("bob", it) }
+            a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val identity = a.use { it.open()!! }
             val accounts = api.accounts.values.map { NetworkCodec.encode(it) }
             val bid = b.use { it.open()!!.deviceId }
@@ -108,7 +108,7 @@ class SessionRenewalTest {
         val a = runtime(api); val b = runtime(api)
         try {
             a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }
-            a.use { a.addNetwork("bob", it) }
+            a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val bid = b.use { it.open()!!.deviceId }
             val logins = api.logins
             api.offline = true

@@ -39,7 +39,7 @@ class BlockedEnvelopeTest {
         var b=AppRuntime(context,"https://fixture.invalid",bn,w,notifications=notices)
         try {
             a.use {a.create(it,"alice")};b.use {b.create(it,"bob")}
-            a.use {a.addNetwork("bob",it)}
+            a.use {a.addNetwork(b.ownGhostCloakId()!!,it)}
             val aid=a.use {it.open()!!.deviceId};val bid=b.use {it.open()!!.deviceId}
             a.use {a.send(it,bid,"first request")};b.use {b.syncNetwork(it);it.block(aid,true)}
             val beforePosts=notices.posts
@@ -65,7 +65,7 @@ class BlockedEnvelopeTest {
         var boot=1
         EncryptedEndpointStore.open(context,an).use {ar->
             val ae=SignalProtocolEngine(ar);val a=ConversationService(ae,LocalRepository(ar));val ai=a.create("alice")
-            val profile=SenderProfile(ai.userId,ai.deviceId,RandomIdentifiers.create(),"alice")
+            val profile=SenderProfile(ai.userId,ai.deviceId,RandomIdentifiers.create(),"7K4M9Q2FX8DR")
             lateinit var packet:EncryptedEnvelope
             EncryptedEndpointStore.open(context,bn).use {br->
                 var failReceipt=false

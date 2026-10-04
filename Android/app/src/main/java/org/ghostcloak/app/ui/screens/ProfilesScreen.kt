@@ -10,29 +10,37 @@ import androidx.compose.ui.Modifier
 import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
+import org.ghostcloak.app.ui.privacy.copySensitive
+import androidx.compose.ui.platform.LocalContext
+import org.ghostcloak.protocol.GhostCloakIds
 
 @Composable fun ProfilesScreen(state: AppState, rename: (String) -> Unit) {
-    var username by remember(state.identity?.username) { mutableStateOf(state.identity?.username.orEmpty()) }
+    var displayName by remember(state.identity?.displayName) { mutableStateOf(state.identity?.displayName.orEmpty()) }
     var editing by remember { mutableStateOf(false) }
+    val context=LocalContext.current
     PageContent("Profiles") {
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(GhostDimensions.regular),verticalAlignment=Alignment.CenterVertically) {
-            Avatar(state.identity?.username.orEmpty(),Modifier.size(GhostDimensions.profileAvatar))
+            Avatar(state.identity?.displayName.orEmpty(),Modifier.size(GhostDimensions.profileAvatar))
             Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
-                Text(state.identity?.username.orEmpty(),style=MaterialTheme.typography.titleLarge)
+                Text(state.identity?.displayName.orEmpty(),style=MaterialTheme.typography.titleLarge)
                 Text("Your Ghost Cloak identity",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             TextButton(onClick={editing=true}) {Text("Edit")}
         }
         ErrorNotice(state.error, important = state.errorImportant)
         SettingsGroup("Your profile") {
-            DetailRow(Glyph.PERSON,"Display name",state.identity?.username.orEmpty())
+            DetailRow(Glyph.PERSON,"Display name",state.identity?.displayName.orEmpty())
+            state.ghostCloakId?.let { id ->
+                DetailRow(Glyph.SHIELD,"Ghost Cloak ID",GhostCloakIds.display(id))
+                TextButton(onClick={copySensitive(context,GhostCloakIds.display(id))}) {Text("Copy ID")}
+            }
             DetailRow(Glyph.SHIELD,"Device identity","Your profile belongs to this device. Editing your name keeps your keys and conversations.")
         }
     }
     if(editing) AlertDialog(onDismissRequest={editing=false},title={Text("Edit your name")},text={
         Column(verticalArrangement=Arrangement.spacedBy(GhostDimensions.medium)) {
-            OutlinedTextField(username,{if(it.length<=32) username=it},singleLine=true,label={Text("Username")})
-            Text(if(state.networkConfigured && !state.demo) "Before registration, this is your network username. After registration, only your local display name changes. Your keys stay the same." else "This changes your display name only. Your keys stay the same.")
+            OutlinedTextField(displayName,{if(it.length<=32) displayName=it},singleLine=true,label={Text("Display name")})
+            Text("This changes your local name and the name shared in future encrypted messages. Your Ghost Cloak ID and keys stay the same.")
         }
-    },confirmButton={TextButton(onClick={rename(username);editing=false},enabled=!state.loading && username.isNotBlank() && username!=state.identity?.username) {Text("Save username")}},dismissButton={TextButton(onClick={editing=false}) {Text("Cancel")}})
+    },confirmButton={TextButton(onClick={rename(displayName);editing=false},enabled=!state.loading && displayName.isNotBlank() && displayName!=state.identity?.displayName) {Text("Save name")}},dismissButton={TextButton(onClick={editing=false}) {Text("Cancel")}})
 }

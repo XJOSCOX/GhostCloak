@@ -71,7 +71,7 @@ class ForegroundSyncTest {
         var loops = emptyList<Job>()
         try {
             a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }
-            a.use { a.addNetwork("bob", it) }
+            a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val aid = a.use { it.open()!!.deviceId }; val bid = b.use { it.open()!!.deviceId }
             val models = withContext(Dispatchers.Main) {
                 listOf(GhostViewModel(app, a), GhostViewModel(app, b)).also { models ->

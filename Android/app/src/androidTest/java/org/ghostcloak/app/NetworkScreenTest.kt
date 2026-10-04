@@ -56,7 +56,7 @@ class NetworkScreenTest {
                 File(context.getExternalFilesDir(null), "e0-first-launch.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
             }
             compose.onNodeWithText("Encrypted messaging via Ghost Cloak staging", substring = true).performScrollTo().assertIsDisplayed()
-            compose.onNodeWithText("Username").performScrollTo().performTextInput("alice")
+            compose.onNodeWithText("Display name").performScrollTo().performTextInput("alice")
             // Avoid a moving IME/scroll coordinate on the compact disposable AVD.
             compose.onNodeWithText("Create identity").performScrollTo().assertIsEnabled()
                 .performSemanticsAction(SemanticsActions.OnClick) { it() }
@@ -88,14 +88,14 @@ class NetworkScreenTest {
             runtime.close()
         }
     }
-    @Test fun usernameLookupIsPrimaryEvenBeforeReconnection() {
+    @Test fun ghostCloakIdLookupIsPrimaryEvenBeforeReconnection() {
         var lookedUp: String? = null
         compose.setContent { GhostCloakTheme { AddContactScreen(
             AppState(loading = false, ready = true, networkConfigured = true, networkStatus = NetworkStatus.NEEDS_CONNECT),
             {}, {}, { lookedUp = it }, import={}) } }
-        compose.onNodeWithText("Exact username").performTextInput("bob")
+        compose.onNodeWithText("Ghost Cloak ID").performTextInput("7k4m-9q2f-x8dr")
         compose.onNodeWithText("Find and add contact").performClick()
-        assertEquals("bob", lookedUp)
+        assertEquals("7K4M9Q2FX8DR", lookedUp)
         compose.onNodeWithText("Paste contact card").assertDoesNotExist()
     }
     @Test fun networkStatusAndForegroundActionsReflectOperationState() {

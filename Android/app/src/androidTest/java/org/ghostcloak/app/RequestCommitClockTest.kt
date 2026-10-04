@@ -20,7 +20,7 @@ class RequestCommitClockTest {
         EncryptedEndpointStore.open(context,an).use {ar->
             val ae=SignalProtocolEngine(ar);val a=ConversationService(ae,LocalRepository(ar));val ai=a.create("alice")
             lateinit var bi:org.ghostcloak.identity.DeviceIdentity
-            val profile=SenderProfile(ai.userId,ai.deviceId,RandomIdentifiers.create(),"alice")
+            val profile=SenderProfile(ai.userId,ai.deviceId,RandomIdentifiers.create(),"7K4M9Q2FX8DR")
             EncryptedEndpointStore.open(context,bn).use {br->
                 val b=ConversationService(SignalProtocolEngine(br),LocalRepository(br,clock))
                 bi=b.create("bob");a.importCard(b.exportCard())

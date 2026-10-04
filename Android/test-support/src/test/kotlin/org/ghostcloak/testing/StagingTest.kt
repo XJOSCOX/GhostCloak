@@ -24,14 +24,14 @@ class StagingTest {
             suspend fun start() {
                 val username="test_"+UUID.randomUUID().toString().replace("-","").take(16)
                 engine.createIdentity(username)
-                registration=state.registration(username,listOf(engine.publicBundle().publicData()))
+                registration=state.registration(listOf(engine.publicBundle().publicData()))
                 NetworkAccount(client,state).run {register(registration);login(registration.accountId,registration.deviceId)}
             }
         }
         val a=Person();val b=Person();val c=Person()
         try {
             a.start();b.start();c.start()
-            NetworkAccount(a.client,a.state).connect(b.registration.username,a.engine)
+            NetworkAccount(a.client,a.state).connect(b.state.ghostCloakId(),a.engine)
             val transport=NetworkMailboxTransport(a.client,a.state)
             val outbox=DurableOutbox(a.records,a.engine,transport)
             val id=outbox.enqueue(b.registration.deviceId,"hello bob".toByteArray())

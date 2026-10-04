@@ -20,10 +20,10 @@ class NetworkStorageTest {
         EncryptedEndpointStore.open(context,"l-${RandomIdentifiers.create()}").use {store->
             val engine=SignalProtocolEngine(store);engine.createIdentity("alice")
             val legacy=EndpointNetworkState(store,"ghostcloak.local")
-            val original=legacy.registration("alice",listOf(engine.publicBundle().publicData()))
+            val original=legacy.registration(listOf(engine.publicBundle().publicData()))
             val key=store.keys("network/").single {it.endsWith("auth-private")}
             val before=store.read(key)
-            try {EndpointNetworkState(store,"ghostcloak.local",KeystoreDeviceAuth()).registration("alice",original.bundles);fail()}
+            try {EndpointNetworkState(store,"ghostcloak.local",KeystoreDeviceAuth()).registration(original.bundles);fail()}
             catch(e:ApiFailure){assertEquals("legacy_auth_requires_reset",e.code)}
             assertArrayEquals(before,store.read(key));assertTrue(store.keys("network/").none {it.endsWith("auth-alias")})
         }
@@ -40,7 +40,7 @@ class NetworkStorageTest {
         try {
             val engine = SignalProtocolEngine(store); engine.createIdentity("alice")
             val state = EndpointNetworkState(store, "ghostcloak.local", KeystoreDeviceAuth())
-            val registration = state.registration("alice", listOf(engine.publicBundle().publicData()))
+            val registration = state.registration(listOf(engine.publicBundle().publicData()))
             assertTrue(store.keys("network/").none {it.endsWith("auth-private")})
             val alias=store.read(store.keys("network/").single {it.endsWith("auth-alias")})!!.decodeToString()
             assertNull(java.security.KeyStore.getInstance("AndroidKeyStore").apply {load(null)}.getKey(alias,null).encoded)
@@ -59,7 +59,7 @@ class NetworkStorageTest {
             assertEquals(OutboxState.LOCAL, DurableOutbox(store, SignalProtocolEngine(store), fakeTransport).get(id).state)
             assertNull(EndpointNetworkState(store, "other.example").read())
             store.transaction {store.remove(store.keys("network/").single {it.endsWith("auth-public")})}
-            try {reopened.registration("alice",registration.bundles);fail("Partial credential metadata replaced")}
+            try {reopened.registration(registration.bundles);fail("Partial credential metadata replaced")}
             catch(e:ApiFailure){assertEquals("credential_missing",e.code)}
             assertArrayEquals(registration.authPublicKey,KeystoreDeviceAuth().publicKey(alias,false))
         } finally { store.close() }

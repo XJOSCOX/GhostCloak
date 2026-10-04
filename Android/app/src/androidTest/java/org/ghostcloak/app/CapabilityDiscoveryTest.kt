@@ -18,7 +18,7 @@ class CapabilityDiscoveryTest {
         try {
             a.use {a.create(it,"alice")};b.use {b.create(it,"bob")}
             val identity=a.use {it.open()!!};val bid=b.use {it.open()!!.deviceId}
-            a.use {a.addNetwork("bob",it)}
+            a.use {a.addNetwork(b.ownGhostCloakId()!!,it)}
             assertTrue(a.supportsAttachments(bid))
             assertTrue(api.sent.isEmpty());assertEquals(2,api.registrations)
             a.close();a=AppRuntime(context,"https://fixture.invalid",endpoint,api)
@@ -43,7 +43,7 @@ class CapabilityDiscoveryTest {
         var b=AppRuntime(context,"https://fixture.invalid",endpointB,wire)
         try {
             a.use {a.create(it,"alice")};b.use {b.create(it,"bob")}
-            a.use {a.addNetwork("bob",it)}
+            a.use {a.addNetwork(b.ownGhostCloakId()!!,it)}
             val bid=b.use {it.open()!!.deviceId}
             assertFalse(a.supportsAttachments(bid))
             // Simulate upgraded process: existing SQLCipher identity/pool, no account reset.

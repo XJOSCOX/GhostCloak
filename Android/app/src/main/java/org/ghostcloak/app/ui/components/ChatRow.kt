@@ -23,10 +23,10 @@ import java.time.format.DateTimeFormatter
         color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(vertical = GhostDimensions.previewInset, horizontal = GhostDimensions.fieldCorner), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(GhostDimensions.regular)) {
-            Avatar(contact.displayName)
+            Avatar(contact.visibleName)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(GhostDimensions.tiny)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(contact.displayName, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
+                    Text(contact.visibleName, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     last?.let {
                         Text(DateTimeFormatter.ofPattern(if (Instant.ofEpochMilli(it.timestamp).atZone(ZoneId.systemDefault()).toLocalDate() == java.time.LocalDate.now()) "HH:mm" else "MMM d").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(it.timestamp)),

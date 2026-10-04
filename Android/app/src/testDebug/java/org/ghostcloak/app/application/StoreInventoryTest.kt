@@ -38,7 +38,7 @@ class StoreInventoryTest {
         }
     }
     @Test fun healthyCategoryFixtureOnlyReadsReferencedAliasAndPreservesEveryByte() {
-        val keys = listOf("local/key", "local/device", "local/user", "local/username", "local/registration",
+        val keys = listOf("local/key", "local/device", "local/user", "local/display-name", "local/registration",
             "app/contact/a", "app/message/a/b", "trust-state/a", "outbox/a", "app/disappearing/a",
             "app/attachment/a/b", "attachment/transfer/a", "attachment/delete/b", "app/access-lock") +
             listOf("account", "routing", "registered", "token", "auth-alias", "auth-public").map { prefix + it }

@@ -15,6 +15,7 @@ import org.ghostcloak.messaging.*
 import org.ghostcloak.transport.TransportFailure
 
 data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? = null,
+    val ghostCloakId:String?=null,
     val requireRequestConfirmation:Boolean=true,
     val blockedContacts:List<Contact> = emptyList(),
     val cachedAttachments: Set<String> = emptySet(),
@@ -72,7 +73,7 @@ class GhostViewModel internal constructor(application: Application, private val 
                     val contacts = if (identity != null) active.contacts() else emptyList()
                     selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.markRead(it) }
                     val unread = if (identity != null) active.unreadCounts() else emptyMap()
-                    mutable.value = mutable.value.copy(identity = identity, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
+                    mutable.value = mutable.value.copy(identity = identity, ghostCloakId=if(identity!=null) runtime.ownGhostCloakId() else null, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
                         requireRequestConfirmation=active.requireRequestConfirmation(),
                         blockedContacts=if(identity!=null) active.blockedContacts() else emptyList(),
                         cachedAttachments = runtime.cachedAttachments(selected),
@@ -147,11 +148,11 @@ class GhostViewModel internal constructor(application: Application, private val 
     }
     fun publishNetwork() = run { runtime.publishNetwork(); null }
     fun logoutNetwork() = run { runtime.logoutNetwork(); null }
-    fun addNetwork(username: String, success: () -> Unit) = run {
-        runtime.addNetwork(username, it); withContext(Dispatchers.Main) { success() }; null
+    fun addNetwork(ghostCloakId: String, success: () -> Unit) = run {
+        runtime.addNetwork(ghostCloakId, it); withContext(Dispatchers.Main) { success() }; null
     }
-    fun create(username: String) = run(activity = NetworkStatus.CONNECTING) { runtime.create(it, username); null }
-    fun rename(username: String) = run { it.rename(username); null }
+    fun create(displayName: String) = run(activity = NetworkStatus.CONNECTING) { runtime.create(it, displayName); null }
+    fun rename(displayName: String) = run { it.rename(displayName); null }
     fun select(id: String) { selected = id; mutable.value = mutable.value.copy(messages = emptyList(), fingerprint = ""); refresh() }
     fun leaveConversation(id: String) { if (selected == id) selected = null }
     fun exportCard() = run { mutable.value = mutable.value.copy(card = it.exportCard(fresh = true)); null }
@@ -188,18 +189,18 @@ class GhostViewModel internal constructor(application: Application, private val 
         error.code == "recovery_required" -> "Ghost Cloak found an existing device identity but its account connection needs to be restored."
         error.code == "recovery_failed" -> "Account recovery could not be verified."
         error.code == "legacy_auth_requires_reset" -> "This identity uses an older account credential. Your keys were preserved; follow the documented development migration."
-        error.code == "invalid_network_username" -> "Choose a valid network username in Settings, then connect again. Your identity was preserved."
+        error.code == "invalid_ghostcloak_id" -> "Enter a valid Ghost Cloak ID."
         error.status == 401 -> "Connect again to renew your session. Your identity is preserved."
         error.code == "contact_unavailable" -> "That contact is temporarily unavailable. Try again shortly."
         error.status == 409 -> "The request conflicted with existing information. Your account and history were preserved."
-        error.status == 404 -> "That username could not be found. Check the spelling and try again."
+        error.status == 404 -> "That contact is unavailable. Check the Ghost Cloak ID and try again."
         error.status == 429 -> "Please wait before trying again. Pending messages remain on this device."
         error.status == 503 -> "Could not reach Ghost Cloak. Check your connection and try Sync. Your identity and pending messages are preserved."
         else -> "The network operation could not complete. Pending messages can be retried with Sync."
     }
     private fun appError(error: AppError) = when (error) {
         AppError.FRESH_CARD_REQUIRED -> "Import this person's updated contact card before approving the replacement identity."
-        AppError.INVALID_USERNAME -> if (runtime.networkConfigured && !runtime.inDemo) "Use 3–24 letters, numbers or underscores, starting with a letter or number. Some names are reserved." else "Use 1–32 letters, numbers or underscores."
+        AppError.INVALID_DISPLAY_NAME -> "Use a display name of 1–32 characters without control characters."
         AppError.INVALID_CARD -> "This contact card is invalid or uses an unsupported version."
         AppError.DUPLICATE_CONTACT -> "This device is already in your contacts."
         AppError.AMBIGUOUS_IDENTITY -> "This card conflicts with an existing identity. It was not imported."

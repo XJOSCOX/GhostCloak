@@ -31,9 +31,9 @@ internal object CapabilityProbe {
         val refresh=f.service.execute(ApiRequest.CapabilityLookup(r.deviceId),f.state.read())
         assertNotNull(refresh.directory!!.bundle.capability)
         assertEquals(16,f.inventory().available)
-        val legacy=f.service.execute(ApiRequest.Lookup("fixture"),f.state.read())
+        val legacy=f.service.execute(ApiRequest.Lookup(f.state.ghostCloakId()),f.state.read())
         assertNull(legacy.directory!!.bundle.capability);assertNull(legacy.serverTime)
-        val modern=f.service.execute(ApiRequest.Lookup("fixture",capabilities=true),f.state.read())
+        val modern=f.service.execute(ApiRequest.Lookup(f.state.ghostCloakId(),capabilities=true),f.state.read())
         assertNotNull(modern.directory!!.bundle.capability)
         assertEquals(14,f.inventory().available)
         assertEquals(14,db.transaction {db.prekeys.get(r.deviceId)!!.pool.count {it.capability!=null}})
@@ -98,7 +98,7 @@ class CapabilityTest {
             val publisher=CapabilityDiscovery(b.engine,b.state,"ghostcloak.local",b.client)
             publisher.publish()
             val discovery=CapabilityDiscovery(a.engine,a.state,"ghostcloak.local",a.client)
-            val (entry,time)=discovery.lookup("bob")
+            val (entry,time)=discovery.lookup(b.state.ghostCloakId())
             a.engine.establishSession(entry.bundle.remote())
             val ar=LocalRepository(a.records);ar.save(Contact("fixture",entry.accountId,"bob",entry.deviceId))
             val sender=ConversationService(a.engine,ar);sender.open()
@@ -137,7 +137,7 @@ class CapabilityTest {
             // Keep a second unused bundle available for refresh after ordinary lookup.
             b.client.publish(b.registration.deviceId,listOf(b.engine.publicBundle().publicData()))
             val discovery=CapabilityDiscovery(a.engine,a.state,"ghostcloak.local",a.client)
-            val (entry,time)=discovery.lookup("bob");assertNull(entry.bundle.capability)
+            val (entry,time)=discovery.lookup(b.state.ghostCloakId());assertNull(entry.bundle.capability)
             a.engine.establishSession(entry.bundle.remote())
             val repo=LocalRepository(a.records);repo.save(Contact("fixture",entry.accountId,"bob",entry.deviceId))
             val service=ConversationService(a.engine,repo);service.open();discovery.accept(entry,time,service)
@@ -151,25 +151,26 @@ class CapabilityTest {
             assertTrue(reopened.attachmentPeer(entry.deviceId))
         }
     }
-    @Test fun legacyCanonicalFieldsRemainOmittedAndOldBackendFallbackNeverClaimsSupport()=runBlocking {
+    @Test fun canonicalFieldsRemainOmittedAndOldProtocolCannotSilentlyFallback()=runBlocking {
         val f=PrekeyFixture();f.start();val b=f.registration.bundles.first()
         assertArrayEquals(NetworkCodec.encode(b),NetworkCodec.encode(b.withCapability(null)))
         assertEquals(0xab,NetworkCodec.encode(b).first().toInt() and 255) // exactly the original eleven fields
-        assertEquals("82666c6f6f6b7570a268757365726e616d6567666978747572656776657273696f6e01",
-            java.util.HexFormat.of().formatHex(NetworkCodec.encode<ApiRequest>(ApiRequest.Lookup("fixture"))))
-        assertFalse(NetworkCodec.encode<ApiRequest>(ApiRequest.Lookup("fixture")).toString(Charsets.ISO_8859_1).contains("capabilities"))
+        val id=f.state.ghostCloakId()
+        val lookupWire=NetworkCodec.encode<ApiRequest>(ApiRequest.Lookup(id))
+        assertFalse(lookupWire.toString(Charsets.ISO_8859_1).contains("username"))
+        assertTrue(lookupWire.toString(Charsets.ISO_8859_1).contains("ghostCloakId"))
+        assertFalse(lookupWire.toString(Charsets.ISO_8859_1).contains("capabilities"))
         assertFalse(NetworkCodec.encode(b).toString(Charsets.ISO_8859_1).contains("capability"))
         var calls=0
         val client=HttpGhostClient("https://ghostcloak.local",f.state,transport=GhostCloakTransport {request ->
             calls++
-            val r=NetworkCodec.decode<ApiRequest>(request.body)
-            if(r is ApiRequest.Lookup && !r.capabilities) TransportResponse(200,NetworkLimits.CONTENT_TYPE,NetworkCodec.encode(ApiResponse(
-                directory=DirectoryEntry(f.registration.accountId,b.deviceId,f.registration.routingId,"fixture",b))))
-            else TransportResponse(400,NetworkLimits.CONTENT_TYPE,NetworkCodec.encode(ApiResponse(error="invalid_schema")))
+            TransportResponse(200,NetworkLimits.CONTENT_TYPE,NetworkCodec.encode(ApiResponse(version=1,
+                directory=DirectoryEntry(f.registration.accountId,b.deviceId,f.registration.routingId,id,b))))
         })
         val discovery=CapabilityDiscovery(f.engine,f.state,"ghostcloak.local",client)
-        discovery.publish();discovery.publish();assertEquals(1,calls)
-        val (entry,time)=discovery.lookup("fixture");assertNull(entry.bundle.capability);assertNull(time);assertEquals(3,calls)
-        assertFalse(LocalRepository(f.records).attachmentPeer(entry.deviceId))
+        try { discovery.lookup(id); fail("Accepted old protocol") }
+        catch(e:ApiFailure) { assertEquals("invalid_response",e.code) }
+        assertEquals(1,calls)
+        assertFalse(LocalRepository(f.records).attachmentPeer(b.deviceId))
     }
 }

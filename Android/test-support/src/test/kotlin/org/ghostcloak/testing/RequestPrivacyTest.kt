@@ -70,7 +70,7 @@ class RequestPrivacyTest {
     }
     @Test fun failedAuthenticatedCommitCannotLeaveRequestTimerOrReplayReceipt()=runBlocking {
         AttachmentTest.Fixture().use {f->
-            val a=f.person("alice");val b=f.person("bob");NetworkAccount(a.client,a.state).connect("bob",a.engine)
+            val a=f.person("alice");val b=f.person("bob");NetworkAccount(a.client,a.state).connect(b.state.ghostCloakId(),a.engine)
             var reject=true
             val records=object:EndpointRecords by b.records {
                 override fun write(key:String,value:ByteArray) {
@@ -81,7 +81,7 @@ class RequestPrivacyTest {
             var elapsed=0L;val repo=LocalRepository(records,ExpiryClock({1},{elapsed},{1}))
             val receiver=ConversationService(SignalProtocolEngine(records),repo);receiver.open();receiver.serverReference(1000000)
             val packet=a.engine.encrypt(b.registration.deviceId,ConversationPayload.encode("private",0))
-            val profile=SenderProfile(a.registration.accountId,a.registration.deviceId,a.registration.routingId,"alice")
+            val profile=SenderProfile(a.registration.accountId,a.registration.deviceId,a.registration.routingId,a.state.ghostCloakId())
             try {receiver.acceptNetwork(packet,profile,1);fail()}catch(e:CryptoFailure){assertEquals(CryptoError.StorageFailure,e.error)}
             records.transaction {assertTrue(records.keys("app/request/").isEmpty());assertTrue(records.keys("app/accepted/").isEmpty())}
             reject=false;elapsed=60000;receiver.acceptNetwork(packet,profile,1)
@@ -92,7 +92,7 @@ class RequestPrivacyTest {
     @Test fun offlineRequestGetsFullCommitWindowAndReplayCannotRestoreExpiredAttachment()=runBlocking {
         AttachmentTest.Fixture().use { f ->
             val a=f.person("alice");val b=f.person("bob")
-            NetworkAccount(a.client,a.state).connect("bob",a.engine)
+            NetworkAccount(a.client,a.state).connect(b.state.ghostCloakId(),a.engine)
             var elapsed=0L
             val repo=LocalRepository(b.records,ExpiryClock({1000},{elapsed},{1}));val receiver=ConversationService(b.engine,repo);receiver.open()
             val id=a.registration.deviceId;val accepted=1000000L
@@ -102,7 +102,7 @@ class RequestPrivacyTest {
                 org.ghostcloak.attachments.AttachmentKind.DOCUMENT,0,"hidden.pdf") {true}
             val bytes=ConversationPayload.encodeAttachment(descriptor)
             val packet=try {a.engine.encrypt(b.registration.deviceId,bytes)} finally {bytes.fill(0)}
-            val profile=SenderProfile(a.registration.accountId,id,a.registration.routingId,"alice")
+            val profile=SenderProfile(a.registration.accountId,id,a.registration.routingId,a.state.ghostCloakId())
             receiver.acceptNetwork(packet,profile,accepted)
             assertEquals(committed,repo.request(id).acceptedAt)
             assertEquals(RequestState.PENDING,repo.request(id).state)
@@ -126,14 +126,14 @@ class RequestPrivacyTest {
     @Test fun visibleTextStillHidesTimerAndRebootWithholdsUntilTrustedTimeReturns()=runBlocking {
         AttachmentTest.Fixture().use {f->
             val a=f.person("alice");val b=f.person("bob")
-            NetworkAccount(a.client,a.state).connect("bob",a.engine)
+            NetworkAccount(a.client,a.state).connect(b.state.ghostCloakId(),a.engine)
             var boot=1
             val repo=LocalRepository(b.records,ExpiryClock({1000000},{100},{boot}))
             val receiver=ConversationService(b.engine,repo);receiver.open();receiver.requireRequestConfirmation(false)
             receiver.serverReference(1000000)
             val packet=a.engine.encrypt(b.registration.deviceId,ConversationPayload.encode("visible text",30))
             val id=a.registration.deviceId
-            receiver.acceptNetwork(packet,SenderProfile(a.registration.accountId,id,a.registration.routingId,"alice"),1000000)
+            receiver.acceptNetwork(packet,SenderProfile(a.registration.accountId,id,a.registration.routingId,a.state.ghostCloakId()),1000000)
             val visible=receiver.messagesForUi(id).single()
             assertEquals("visible text",visible.body);assertEquals(0,visible.disappearingSeconds);assertNull(visible.expiry)
             assertEquals(30,receiver.messages(id).single().disappearingSeconds)
@@ -146,11 +146,11 @@ class RequestPrivacyTest {
     @Test fun hiddenRequestAuthenticatesBeforeRevealAndSettingOnlyAffectsFutureRequests()=runBlocking {
         AttachmentTest.Fixture().use {f->
             val a=f.person("alice");val b=f.person("bob")
-            NetworkAccount(a.client,a.state).connect("bob",a.engine)
+            NetworkAccount(a.client,a.state).connect(b.state.ghostCloakId(),a.engine)
             val repo=LocalRepository(b.records);val receiver=ConversationService(b.engine,repo);receiver.open()
             suspend fun receive(body:String):EncryptedEnvelope {
                 val packet=a.engine.encrypt(b.registration.deviceId,ConversationPayload.encode(body,0))
-                receiver.acceptNetwork(packet,SenderProfile(a.registration.accountId,a.registration.deviceId,a.registration.routingId,"alice"))
+                receiver.acceptNetwork(packet,SenderProfile(a.registration.accountId,a.registration.deviceId,a.registration.routingId,a.state.ghostCloakId()))
                 return packet
             }
             val first=receive("secret test")

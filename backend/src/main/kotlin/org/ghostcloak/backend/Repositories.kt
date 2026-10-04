@@ -29,7 +29,7 @@ interface BackendDatabase : AccountRepository, DeviceRepository, PreKeyRepositor
     val download: Long, val day: Long) {
     override fun toString() = "BlobBudget(redacted)"
 }
-@Serializable class AccountRow(val id: String, val username: String, val deviceId: String)
+@Serializable class AccountRow(val id: String, val ghostCloakId: String, val deviceId: String)
 @Serializable class DeviceRow(val id: String, val accountId: String, val routingId: String, val authPublicKey: ByteArray, val identity: ByteArray)
 @Serializable class PrekeyRow(val deviceId: String, val pool: List<PublicBundle>, val usedEc: Set<Int>, val usedPq: Set<Int>, val signed: Map<Int, ByteArray>)
 @Serializable class ChallengeRow(val challenge: Challenge)

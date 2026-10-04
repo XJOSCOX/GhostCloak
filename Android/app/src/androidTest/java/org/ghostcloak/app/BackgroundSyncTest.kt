@@ -67,7 +67,7 @@ class BackgroundSyncTest {
         val before = notifications.activeNotifications.map { it.key }.toSet()
         try {
             a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }
-            a.use { a.addNetwork("bob", it) }
+            a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val aid = a.use { it.open()!!.deviceId }; val bid = b.use { it.open()!!.deviceId }
             val identity = b.use { it.open()!! }
             a.use { a.send(it, bid, "Synthetic background message") }
@@ -214,7 +214,7 @@ class BackgroundSyncTest {
             api.execute(request)
         })
         try {
-            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork("bob", it) }
+            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val aid = a.use { it.open()!!.deviceId }; val bid = b.use { it.open()!!.deviceId }
             a.use { a.send(it, bid, "Synthetic replay backlog") }
             val delivery = api.mailbox.values.single().second

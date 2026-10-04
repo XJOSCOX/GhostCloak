@@ -21,8 +21,8 @@ class StoreInventoryTest {
             val engine = SignalProtocolEngine(records)
             engine.createIdentity("Fixture")
             val state = EndpointNetworkState(records, "ghostcloak.local", KeystoreDeviceAuth())
-            state.registration("Fixture", listOf(engine.publicBundle().publicData()))
-            state.markRegistered()
+            state.registration(listOf(engine.publicBundle().publicData()))
+            state.markRegistered("7K4M9Q2FX8DR")
             state.save("synthetic-session")
         }
         EncryptedEndpointStore.open(context, endpoint).use { records ->
@@ -35,7 +35,7 @@ class StoreInventoryTest {
             val after = records.transaction { records.keys("").associateWith { records.read(it)!! } }
             assertEquals(before.keys, after.keys)
             before.forEach { (key, value) -> assertArrayEquals(value, after[key]) }
-            for (label in listOf("LOCAL_IDENTITY_KEY", "LOCAL_DEVICE", "LOCAL_USER", "LOCAL_USERNAME",
+            for (label in listOf("LOCAL_IDENTITY_KEY", "LOCAL_DEVICE", "LOCAL_USER", "LOCAL_DISPLAY_NAME",
                 "LOCAL_SIGNAL_REGISTRATION", "NETWORK_ACCOUNT", "NETWORK_ROUTING", "NETWORK_REGISTERED_MARKER",
                 "NETWORK_TOKEN", "NETWORK_AUTH_ALIAS_RECORD", "NETWORK_AUTH_PUBLIC_RECORD", "REFERENCED_AUTH_KEYSTORE_ENTRY"))
                 assertTrue(logs.contains("${label}_PRESENT=true"))

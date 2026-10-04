@@ -16,6 +16,7 @@ internal class SyntheticNetwork : GhostCloakTransport {
     var requests = 0
     var registrations = 0
     val accounts = linkedMapOf<String, Registration>()
+    val assignedIds = mutableMapOf<String, String>()
     val sessions = mutableMapOf<String, Registration>()
     val lookedUp = mutableListOf<String>()
     val sent = mutableListOf<ByteArray>()
@@ -48,7 +49,7 @@ internal class SyntheticNetwork : GhostCloakTransport {
                     DeviceAuth.verify(existing.authPublicKey,c,r.signature),"recovery_failed",401)
                 val token=java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(random.generateSeed(32))
                 sessions.entries.removeAll {it.value.deviceId==r.deviceId};sessions[token]=existing!!
-                ApiResponse(recovered=RecoveredBinding(existing.accountId,existing.deviceId,existing.routingId,SessionGrant(token,System.currentTimeMillis()+300000)))
+                ApiResponse(recovered=RecoveredBinding(existing.accountId,existing.deviceId,existing.routingId,SessionGrant(token,System.currentTimeMillis()+300000,assignedIds.getValue(existing.accountId))))
             }
             is ApiRequest.Issue -> {
                 if (r.purpose == "login") requireApi(accounts[r.accountId]?.deviceId == r.deviceId, "unauthorized", 401)
@@ -61,12 +62,13 @@ internal class SyntheticNetwork : GhostCloakTransport {
                 val registration = r.registration
                 check(c.registrationHash.contentEquals(DeviceAuth.digest(NetworkCodec.encode(registration))))
                 check(DeviceAuth.verify(registration.authPublicKey, c, r.signature))
-                requireApi(accounts.values.none { it.username == registration.username }, "conflict", 409)
+                requireApi(registration.accountId !in accounts, "conflict", 409)
                 accounts[registration.accountId] = registration
+                assignedIds[registration.accountId] = generateSequence { GhostCloakIds.generate(random) }.first { it !in assignedIds.values }
                 prekeys[registration.deviceId] = registration.bundles.toMutableList()
                 registrations++
                 if (loseRegistrationResponse) { loseRegistrationResponse = false; throw java.io.IOException("synthetic lost response") }
-                ApiResponse()
+                ApiResponse(registeredId = assignedIds.getValue(registration.accountId))
             }
             is ApiRequest.Verify -> {
                 val c = challenges.remove(r.challengeId)!!
@@ -76,17 +78,17 @@ internal class SyntheticNetwork : GhostCloakTransport {
                 sessions.entries.removeAll { it.value.deviceId == registration.deviceId }
                 sessions[token] = registration
                 logins++
-                ApiResponse(session = SessionGrant(token, System.currentTimeMillis() + 300000))
+                ApiResponse(session = SessionGrant(token, System.currentTimeMillis() + 300000, assignedIds.getValue(registration.accountId)))
             }
             else -> {
                 if (rejectAuthenticated) throw ApiFailure(401, "unauthorized")
                 val me = sessions[request.applicationAuthorization?.removePrefix("Bearer ")] ?: throw ApiFailure(401, "unauthorized")
                 when (r) {
                     is ApiRequest.Lookup -> {
-                        lookedUp.add(r.username)
-                        val target = accounts.values.singleOrNull { it.username == r.username } ?: throw ApiFailure(404, "not_found")
+                        lookedUp.add(r.ghostCloakId)
+                        val target = accounts.values.singleOrNull { assignedIds[it.accountId] == r.ghostCloakId } ?: throw ApiFailure(404, "not_found")
                         val bundle = prekeys[target.deviceId]!!.removeAt(0)
-                        ApiResponse(directory = DirectoryEntry(target.accountId, target.deviceId, target.routingId, target.username,
+                        ApiResponse(directory = DirectoryEntry(target.accountId, target.deviceId, target.routingId, assignedIds.getValue(target.accountId),
                             if(r.capabilities) bundle else bundle.withCapability(null)),serverTime=if(r.capabilities) System.currentTimeMillis() else null)
                     }
                     is ApiRequest.Capabilities -> {
@@ -103,7 +105,7 @@ internal class SyntheticNetwork : GhostCloakTransport {
                     is ApiRequest.CapabilityLookup -> {
                         val target=accounts.values.single {it.deviceId==r.deviceId}
                         val b=prekeys[target.deviceId]!!.firstOrNull() ?: throw ApiFailure(404,"not_found")
-                        ApiResponse(directory=DirectoryEntry(target.accountId,target.deviceId,target.routingId,target.username,b),serverTime=System.currentTimeMillis())
+                        ApiResponse(directory=DirectoryEntry(target.accountId,target.deviceId,target.routingId,assignedIds.getValue(target.accountId),b),serverTime=System.currentTimeMillis())
                     }
                     is ApiRequest.Send -> {
                         sent.add(r.encryptedEnvelope.copyOf())
@@ -122,7 +124,7 @@ internal class SyntheticNetwork : GhostCloakTransport {
                         val d = it.second
                         val sender = accounts.values.single { a -> a.deviceId == EnvelopeCodec.decode(d.encryptedEnvelope).senderDeviceId }
                         Delivery(d.serverMessageId, d.encryptedEnvelope, d.receivedAt, d.expiresAt,
-                            if (r.includeSenders) SenderProfile(sender.accountId, sender.deviceId, sender.routingId, sender.username) else null)
+                            if (r.includeSenders) SenderProfile(sender.accountId, sender.deviceId, sender.routingId, assignedIds.getValue(sender.accountId)) else null)
                     }, serverTime = if (r.retention) System.currentTimeMillis() else null, statuses = r.submissionIds.map { id ->
                         val serverId = submissions[me.deviceId + id] ?: throw ApiFailure(404, "not_found")
                         DeliveryStatus(id, serverId in acknowledged)

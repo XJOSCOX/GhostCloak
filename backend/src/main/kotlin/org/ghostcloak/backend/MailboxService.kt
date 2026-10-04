@@ -7,7 +7,7 @@ import java.security.MessageDigest
 import java.time.Clock
 import java.util.Base64
 
-enum class ServerOperation { REGISTER, CHALLENGE, VERIFY, REVOKE, RENAME, LOOKUP, PREKEYS, SEND, FETCH, ACK, RECOVER_ISSUE, RECOVER_VERIFY }
+enum class ServerOperation { REGISTER, CHALLENGE, VERIFY, REVOKE, LOOKUP, PREKEYS, SEND, FETCH, ACK, RECOVER_ISSUE, RECOVER_VERIFY }
 fun interface RateLimiter { fun allow(operation: ServerOperation, principal: String, now: Long): Boolean }
 /** Fixed-window prototype control. No IP or device fingerprint collection. */
 class DevelopmentRateLimiter(private val limit: Int = 60) : RateLimiter {
@@ -31,7 +31,8 @@ class BackendPolicy(val audience: String = "ghostcloak.local", val challengeTtl:
 }
 class MailboxService(private val db: BackendDatabase, private val clock: Clock = Clock.systemUTC(),
     val policy: BackendPolicy = BackendPolicy(), private val rate: RateLimiter = DevelopmentRateLimiter(),
-    private val logger: ServerLogger = ServerLogger { _, _ -> }) {
+    private val logger: ServerLogger = ServerLogger { _, _ -> },
+    private val newGhostCloakId: () -> String = { GhostCloakIds.generate() }) {
     private val random = SecureRandom()
     private fun now() = clock.millis()
     private fun freshBytes() = ByteArray(32).also(random::nextBytes)
@@ -42,7 +43,7 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         is ApiRequest.RecoveryVerify -> ServerOperation.RECOVER_VERIFY
         is ApiRequest.Issue -> ServerOperation.CHALLENGE; is ApiRequest.Register -> ServerOperation.REGISTER
         is ApiRequest.Verify -> ServerOperation.VERIFY; is ApiRequest.Revoke -> ServerOperation.REVOKE
-        is ApiRequest.Rename -> ServerOperation.RENAME; is ApiRequest.Lookup, is ApiRequest.CapabilityLookup -> ServerOperation.LOOKUP
+        is ApiRequest.Lookup, is ApiRequest.CapabilityLookup -> ServerOperation.LOOKUP
         is ApiRequest.Prekeys, is ApiRequest.Capabilities -> ServerOperation.PREKEYS; is ApiRequest.Send -> ServerOperation.SEND
         is ApiRequest.Fetch -> ServerOperation.FETCH; is ApiRequest.Ack -> ServerOperation.ACK
     }
@@ -51,7 +52,7 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         val r = NetworkCodec.decode<ApiRequest>(NetworkCodec.encode(request))
         val op = operation(r)
         try {
-            requireApi(r.version == 1, "unsupported_version")
+            requireApi(r.version == 2, "unsupported_version")
             val principal = if (token == null || r is ApiRequest.RecoveryIssue || r is ApiRequest.RecoveryVerify) "anonymous" else db.transaction { db.sessions.get(tokenHash(token))?.deviceId ?: "anonymous" }
             requireApi(rate.allow(op, principal, now()), "rate_limited", 429)
             cleanup()
@@ -104,17 +105,23 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
     private fun register(r: ApiRequest.Register, c: Challenge): ApiResponse {
         val v = r.registration
         requireApi(listOf(v.accountId, v.deviceId, v.routingId).all(RandomIdentifiers::valid) && setOf(v.accountId, v.deviceId, v.routingId).size == 3)
-        val name = Usernames.normalize(v.username); requireApi(name == v.username)
         DeviceAuth.publicKey(v.authPublicKey)
         requireApi(MessageDigest.isEqual(c.registrationHash, DeviceAuth.digest(NetworkCodec.encode(v))), "invalid_proof", 401)
         proof(c, v.accountId, v.deviceId, "register", v.authPublicKey, r.signature)
         requireApi(db.accounts.size() < 1000, "capacity", 429)
-        requireApi(db.accounts.get(v.accountId) == null && db.accounts.all().none { it.username == name } && db.devices.get(v.deviceId) == null && db.devices.all().none { it.routingId == v.routingId || it.authPublicKey.contentEquals(v.authPublicKey) }, "conflict", 409)
+        requireApi(db.accounts.get(v.accountId) == null && db.devices.get(v.deviceId) == null && db.devices.all().none { it.routingId == v.routingId || it.authPublicKey.contentEquals(v.authPublicKey) }, "conflict", 409)
         validateBundles(v.deviceId, v.bundles, null)
-        db.accounts.put(v.accountId, AccountRow(v.accountId, name, v.deviceId))
+        var assigned: String? = null
+        for (attempt in 1..5) {
+            val candidate = newGhostCloakId()
+            requireApi(GhostCloakIds.valid(candidate), "invalid_ghostcloak_id")
+            if (db.accounts.all().none { it.ghostCloakId == candidate }) { assigned = candidate; break }
+        }
+        requireApi(assigned != null, "capacity", 503)
+        db.accounts.put(v.accountId, AccountRow(v.accountId, assigned!!, v.deviceId))
         db.devices.put(v.deviceId, DeviceRow(v.deviceId, v.accountId, v.routingId, v.authPublicKey, v.bundles.first().identity))
         upload(v.deviceId, v.bundles)
-        return ApiResponse()
+        return ApiResponse(registeredId = assigned)
     }
     private fun login(r: ApiRequest.Verify, c: Challenge): ApiResponse {
         val device = db.devices.get(r.deviceId) ?: throw ApiFailure(401, "invalid_proof")
@@ -125,7 +132,7 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         val token = Base64.getUrlEncoder().withoutPadding().encodeToString(freshBytes())
         val hash = tokenHash(token); val expires = now() + policy.sessionTtl
         db.sessions.put(hash, SessionRow(hash, device.id, expires))
-        return ApiResponse(session = SessionGrant(token, expires))
+        return ApiResponse(session = SessionGrant(token, expires, db.accounts.get(device.accountId)!!.ghostCloakId))
     }
     private fun validateBundles(deviceId: String, bundles: List<PublicBundle>, existing: PrekeyRow?) {
         requireApi(bundles.size in 1..NetworkLimits.BUNDLES && (existing?.pool?.size ?: 0) + bundles.size <= 32)
@@ -179,26 +186,22 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         val token=Base64.getUrlEncoder().withoutPadding().encodeToString(freshBytes())
         val expiry=now()+policy.sessionTtl
         db.sessions.put(tokenHash(token),SessionRow(tokenHash(token),existing.id,expiry))
-        return ApiResponse(recovered=RecoveredBinding(existing.accountId,existing.id,existing.routingId,SessionGrant(token,expiry)))
+        return ApiResponse(recovered=RecoveredBinding(existing.accountId,existing.id,existing.routingId,SessionGrant(token,expiry,db.accounts.get(existing.accountId)!!.ghostCloakId)))
     }
     private fun authenticated(r: ApiRequest, token: String): ApiResponse {
         val hash = tokenHash(token)
         val device = authenticateSession(token)
         return when(r) {
             is ApiRequest.Revoke -> { db.sessions.remove(hash); ApiResponse() }
-            is ApiRequest.Rename -> {
-                val name = Usernames.normalize(r.username)
-                requireApi(db.accounts.all().none { it.username == name && it.id != device.accountId }, "conflict", 409)
-                db.accounts.put(device.accountId, AccountRow(device.accountId, name, device.id)); ApiResponse()
-            }
             is ApiRequest.Lookup -> {
-                val name = Usernames.normalize(r.username)
-                val account = db.accounts.all().firstOrNull { it.username == name } ?: throw ApiFailure(404, "contact_unavailable")
+                val id = GhostCloakIds.normalize(r.ghostCloakId)
+                requireApi(id == r.ghostCloakId, "invalid_ghostcloak_id")
+                val account = db.accounts.all().firstOrNull { it.ghostCloakId == id } ?: throw ApiFailure(404, "contact_unavailable")
                 val target = db.devices.get(account.deviceId)!!
                 val keys = db.prekeys.get(target.id)!!
                 val bundle = keys.pool.firstOrNull() ?: throw ApiFailure(404, "contact_unavailable")
                 db.prekeys.put(target.id, PrekeyRow(target.id, keys.pool.drop(1), keys.usedEc, keys.usedPq, keys.signed))
-                ApiResponse(directory = DirectoryEntry(account.id, target.id, target.routingId, name,
+                ApiResponse(directory = DirectoryEntry(account.id, target.id, target.routingId, id,
                     if(r.capabilities) bundle else bundle.withCapability(null)), serverTime=if(r.capabilities) now() else null)
             }
             is ApiRequest.CapabilityLookup -> {
@@ -209,7 +212,7 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
                 val bundle = db.prekeys.get(target.id)?.pool?.firstOrNull { it.capability != null }
                     ?: db.prekeys.get(target.id)?.pool?.firstOrNull()
                     ?: throw ApiFailure(404,"contact_unavailable")
-                ApiResponse(directory=DirectoryEntry(account.id,target.id,target.routingId,account.username,bundle),serverTime=now())
+                ApiResponse(directory=DirectoryEntry(account.id,target.id,target.routingId,account.ghostCloakId,bundle),serverTime=now())
             }
             is ApiRequest.Capabilities -> {
                 requireApi(r.advertisements.size <= NetworkLimits.BUNDLES)
@@ -257,7 +260,7 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
                 val deliveries = owned.filter { it.id !in r.skipMessageIds }.take(NetworkLimits.BATCH).map {
                         val sender = if (r.includeSenders) {
                             val source = db.devices.get(EnvelopeCodec.decode(it.encryptedEnvelope).senderDeviceId)!!
-                            SenderProfile(source.accountId, source.id, source.routingId, db.accounts.get(source.accountId)!!.username)
+                            SenderProfile(source.accountId, source.id, source.routingId, db.accounts.get(source.accountId)!!.ghostCloakId)
                         } else null
                         Delivery(it.id, it.encryptedEnvelope.copyOf(), it.receivedAt, it.expiresAt, sender)
                     }

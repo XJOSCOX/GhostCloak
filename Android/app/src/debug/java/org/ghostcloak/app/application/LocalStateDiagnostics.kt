@@ -22,11 +22,11 @@ internal object LocalStateDiagnostics {
             val prefix = "network/${org.ghostcloak.protocol.DeviceAuth.digest(host.toByteArray()).joinToString("") { "%02x".format(it) }}/"
             buildList {
                 val local = mapOf("LOCAL_IDENTITY_KEY_PRESENT" to "key", "LOCAL_DEVICE_PRESENT" to "device",
-                    "LOCAL_USER_PRESENT" to "user", "LOCAL_USERNAME_PRESENT" to "username",
+                    "LOCAL_USER_PRESENT" to "user", "LOCAL_DISPLAY_NAME_PRESENT" to "display-name",
                     "LOCAL_SIGNAL_REGISTRATION_PRESENT" to "registration")
                 local.forEach { (label, suffix) -> add("$label=${"local/$suffix" in keys}") }
                 val network = mapOf("NETWORK_ACCOUNT_PRESENT" to "account", "NETWORK_ROUTING_PRESENT" to "routing",
-                    "NETWORK_REGISTERED_MARKER_PRESENT" to "registered", "NETWORK_TOKEN_PRESENT" to "token",
+                    "NETWORK_REGISTERED_MARKER_PRESENT" to "registered", "NETWORK_GHOSTCLOAK_ID_PRESENT" to "ghostcloak-id", "NETWORK_TOKEN_PRESENT" to "token",
                     "NETWORK_AUTH_ALIAS_RECORD_PRESENT" to "auth-alias", "NETWORK_AUTH_PUBLIC_RECORD_PRESENT" to "auth-public",
                     "NETWORK_LEGACY_AUTH_PRIVATE_PRESENT" to "auth-private")
                 network.forEach { (label, suffix) -> add("$label=${prefix + suffix in keys}") }

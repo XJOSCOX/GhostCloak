@@ -196,14 +196,9 @@ class AppRuntime internal constructor(
     }
     suspend fun startDemo() { requireNormal(); if (demo == null) demo = DeveloperMode.create(context) }
     fun leaveDemo() { demo = null }
-    suspend fun create(service: ConversationService, username: String) {
+    suspend fun create(service: ConversationService, displayName: String) {
         if (service.open() == null) {
-            // Validate both existing local and server rules before generating any identity material.
-            val name = if (networkConfigured && !inDemo) {
-                try { org.ghostcloak.protocol.Usernames.normalize(username) }
-                catch (_: org.ghostcloak.protocol.ApiFailure) { throw AppFailure(AppError.INVALID_USERNAME) }
-            } else username
-            service.create(name)
+            service.create(displayName)
             // Only this explicit creation of a brand-new local identity authorizes initial registration.
             // Existing installs without this durable intent are never guessed to be new accounts.
             if (!inDemo) store!!.transaction {
@@ -219,7 +214,8 @@ class AppRuntime internal constructor(
         demo?.deliver(message)
         return message
     }
-    suspend fun connectNetwork(service: ConversationService) { network!!.connect(service.open()!!.username) }
+    suspend fun connectNetwork(service: ConversationService) { network!!.connect() }
+    fun ownGhostCloakId():String?=if(networkConfigured && !inDemo) network?.visibleGhostCloakId() else null
     suspend fun recoverNetwork() {
         org.ghostcloak.protocol.requireApi(foreground && activityVisible && attachmentAccess(),"recovery_failed",401)
         network!!.recover { foreground && activityVisible && attachmentAccess() }
@@ -233,7 +229,7 @@ class AppRuntime internal constructor(
         network!!.sync(service)
         syncGeneration++
     }
-    suspend fun addNetwork(username: String, service: ConversationService) { network!!.add(username, service) }
+    suspend fun addNetwork(ghostCloakId: String, service: ConversationService) { network!!.add(ghostCloakId, service) }
     suspend fun publishNetwork() { network!!.publish() }
     suspend fun logoutNetwork() {
         attachmentUiAccess=AttachmentUiAccess()

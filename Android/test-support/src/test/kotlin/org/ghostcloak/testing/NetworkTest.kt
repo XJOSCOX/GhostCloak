@@ -27,7 +27,7 @@ class NetworkTest {
         lateinit var registration: Registration
         suspend fun create() {
             engine.createIdentity(name)
-            registration = state.registration(name, listOf(engine.publicBundle().publicData()))
+            registration = state.registration(listOf(engine.publicBundle().publicData()))
         }
     }
     private class Fixture : AutoCloseable {
@@ -53,7 +53,7 @@ class NetworkTest {
         Fixture().use { f ->
             val a = f.person("alice"); val b = f.person("bob"); val c = f.person("charlie")
             val aliceClient = f.client(a)
-            NetworkAccount(aliceClient, a.state).connect("BoB", a.engine)
+            NetworkAccount(aliceClient, a.state).connect(b.state.ghostCloakId(), a.engine)
             val transport = NetworkMailboxTransport(aliceClient, a.state)
             val packet = a.engine.encrypt(b.registration.deviceId, "hello bob".toByteArray())
             val submission = RandomIdentifiers.create()
@@ -112,11 +112,11 @@ class NetworkTest {
             reject(401) { f.service.execute(ApiRequest.Fetch(), "not-a-token") }
         }
     }
-    @Test fun registrationPossessionUniquenessAndUsernameRules() = runBlocking {
+    @Test fun registrationPossessionUniquenessAndGhostCloakIdRules() = runBlocking {
         Fixture().use { f ->
             val a = f.person("alice"); val b = Person("bob").also { it.create() }
-            for (bad in listOf("", "..", " a ", "Admin", "Ｇhost", "a/b", "a".repeat(25))) reject { Usernames.normalize(bad) }
-            assertEquals("alice", Usernames.normalize("ALICE"))
+            for (bad in listOf("", "..", " 7K4M9Q2FX8DR", "ADMIN", "ＧK4M9Q2FX8DR", "7K4M/9Q2F/X8DR", "A".repeat(13))) reject { GhostCloakIds.normalize(bad) }
+            assertEquals("7K4M9Q2FX8DR", GhostCloakIds.normalize("7k4m-9q2f-x8dr"))
             val registration = b.registration
             val c = f.service.execute(ApiRequest.Issue(registration.accountId, registration.deviceId, "register", DeviceAuth.digest(NetworkCodec.encode(registration)))).challenge!!
             // An attacker cannot register someone else's credential with their own signature.
@@ -124,13 +124,13 @@ class NetworkTest {
             NetworkAccount(f.client(b), b.state).register(registration)
             rejectAsync { NetworkAccount(f.client(b), b.state).register(registration) }
             val duplicateName = Person("alice").also { it.create() }
-            rejectAsync { NetworkAccount(f.client(duplicateName), duplicateName.state).register(duplicateName.registration) }
-            val malformed = Registration(RandomIdentifiers.create(), RandomIdentifiers.create(), RandomIdentifiers.create(), "other", ByteArray(91), registration.bundles)
+            NetworkAccount(f.client(duplicateName), duplicateName.state).run { register(duplicateName.registration); login(duplicateName.registration.accountId, duplicateName.registration.deviceId) }
+            assertNotEquals(a.state.ghostCloakId(), duplicateName.state.ghostCloakId())
+            val malformed = Registration(RandomIdentifiers.create(), RandomIdentifiers.create(), RandomIdentifiers.create(), ByteArray(91), registration.bundles)
             val challenge = f.service.execute(ApiRequest.Issue(malformed.accountId, malformed.deviceId, "register", DeviceAuth.digest(NetworkCodec.encode(malformed)))).challenge!!
             reject { f.service.execute(ApiRequest.Register(malformed, challenge.id, ByteArray(72))) }
-            reject(404) { f.call(a, ApiRequest.Lookup("nobody")) }
-            f.call(a, ApiRequest.Rename("Alice.New"))
-            assertEquals(a.registration.deviceId, f.call(a, ApiRequest.Lookup("alice.new")).directory!!.deviceId)
+            reject(400) { f.call(a, ApiRequest.Lookup("nobody")) }
+            assertEquals(a.registration.deviceId, f.call(a, ApiRequest.Lookup(a.state.ghostCloakId())).directory!!.deviceId)
         }
     }
     @Test fun prekeysConsumeAtomicallyAndEnforceOwnershipAndBounds() = runBlocking {
@@ -138,7 +138,7 @@ class NetworkTest {
             val a = f.person("alice"); val b = f.person("bob")
             val executor = Executors.newFixedThreadPool(2)
             try {
-                val results = (1..2).map { executor.submit<Boolean> { try { f.call(a, ApiRequest.Lookup("bob")); true } catch (_: ApiFailure) { false } } }.map { it.get() }
+                val results = (1..2).map { executor.submit<Boolean> { try { f.call(a, ApiRequest.Lookup(b.state.ghostCloakId())); true } catch (_: ApiFailure) { false } } }.map { it.get() }
                 assertEquals(1, results.count { it })
             } finally { executor.shutdownNow() }
             val keys = b.engine.preKeys.createPublicationBundle().publicData()
@@ -150,7 +150,7 @@ class NetworkTest {
             reject { f.call(b, ApiRequest.Prekeys(b.registration.deviceId, listOf(other, other))) }
             val invalid = PublicBundle(other.deviceId, other.registrationId, ByteArray(33), other.preKeyId, other.preKey, other.signedId, other.signedKey, other.signature, other.kyberId, other.kyberKey, other.kyberSignature)
             reject { f.call(b, ApiRequest.Prekeys(b.registration.deviceId, listOf(invalid))) }
-            assertEquals(keys.preKeyId, f.call(a, ApiRequest.Lookup("bob")).directory!!.bundle.preKeyId)
+            assertEquals(keys.preKeyId, f.call(a, ApiRequest.Lookup(b.state.ghostCloakId())).directory!!.bundle.preKeyId)
         }
     }
     @Test fun mailboxValidationIdempotencyAndExpiry() = runBlocking {
@@ -185,7 +185,7 @@ class NetworkTest {
     @Test fun durableOutboxRecoversEveryCrashBoundaryWithoutReencrypting() = runBlocking {
         for (point in CrashPoint.entries) Fixture().use { f ->
             val a = f.person("alice"); val b = f.person("bob")
-            val client = f.client(a); NetworkAccount(client, a.state).connect("bob", a.engine)
+            val client = f.client(a); NetworkAccount(client, a.state).connect(b.state.ghostCloakId(), a.engine)
             val transport = NetworkMailboxTransport(client, a.state)
             val outbox = DurableOutbox(a.records, a.engine, transport, crash = { if (it == point) throw SimulatedDeath() })
             var id: String? = null
@@ -212,7 +212,7 @@ class NetworkTest {
         Fixture().use { f ->
             val a = f.person("alice")
             fun raw(bytes: ByteArray, type: String = NetworkLimits.CONTENT_TYPE): Int {
-                val c = URI(f.server.baseUrl + "/v1/auth/challenge").toURL().openConnection() as HttpURLConnection
+                val c = URI(f.server.baseUrl + "/v2/auth/challenge").toURL().openConnection() as HttpURLConnection
                 try { c.requestMethod = "POST"; c.doOutput = true; c.setRequestProperty("Content-Type", type); c.setFixedLengthStreamingMode(bytes.size); c.outputStream.use { it.write(bytes) }; return c.responseCode }
                 finally { c.disconnect() }
             }
@@ -221,7 +221,7 @@ class NetworkTest {
             assertTrue(oversized == 413 || oversized == -1)
             assertEquals(415, raw(byteArrayOf(1), "text/plain"))
             assertEquals(400, raw(byteArrayOf(1, 2, 3)))
-            rejectAsync { f.client(a).unauthenticated(ApiRequest.Issue(a.registration.accountId, a.registration.deviceId, "login", version = 2)) }
+            rejectAsync { f.client(a).unauthenticated(ApiRequest.Issue(a.registration.accountId, a.registration.deviceId, "login", version = 1)) }
             try { HttpGhostClient("http://example.com", a.state, true); fail() } catch (_: IllegalArgumentException) { }
             try { HttpGhostClient(f.server.baseUrl, a.state); fail() } catch (_: IllegalArgumentException) { }
             reject { f.service.execute(ApiRequest.Register(a.registration, RandomIdentifiers.create(), ByteArray(NetworkLimits.BODY))) }
@@ -241,9 +241,9 @@ class NetworkTest {
             val attacker = Person("attacker").also { it.create() }
             val original = attacker.registration
             val c = f.service.execute(ApiRequest.Issue(original.accountId, original.deviceId, "register", DeviceAuth.digest(NetworkCodec.encode(original)))).challenge!!
-            val changed = Registration(original.accountId, original.deviceId, original.routingId, "altered", original.authPublicKey, original.bundles)
+            val changed = Registration(original.accountId, original.deviceId, RandomIdentifiers.create(), original.authPublicKey, original.bundles)
             reject(401) { f.service.execute(ApiRequest.Register(changed, c.id, attacker.state.sign(c))) }
-            val replacement = Registration(owner.registration.accountId, original.deviceId, original.routingId, "attacker", original.authPublicKey, original.bundles)
+            val replacement = Registration(owner.registration.accountId, original.deviceId, original.routingId, original.authPublicKey, original.bundles)
             val claim = f.service.execute(ApiRequest.Issue(replacement.accountId, replacement.deviceId, "register", DeviceAuth.digest(NetworkCodec.encode(replacement)))).challenge!!
             // Sign with the attacker's credential while binding the victim account in the statement.
             val privateBytes = attacker.records.read(attacker.records.keys("network/").single { it.endsWith("auth-private") })!!
@@ -254,7 +254,7 @@ class NetworkTest {
             val copy = f.challenge(owner)
             copy.random[0] = (copy.random[0].toInt() xor 1).toByte()
             reject(401) { f.service.execute(ApiRequest.Verify(owner.registration.accountId, owner.registration.deviceId, copy.id, owner.state.sign(copy))) }
-            assertEquals(owner.registration.deviceId, f.call(owner, ApiRequest.Lookup("owner")).directory!!.deviceId)
+            assertEquals(owner.registration.deviceId, f.call(owner, ApiRequest.Lookup(owner.state.ghostCloakId())).directory!!.deviceId)
         }
     }
 }

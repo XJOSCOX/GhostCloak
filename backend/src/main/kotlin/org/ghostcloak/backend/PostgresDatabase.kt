@@ -60,7 +60,14 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
                 execute("INSERT INTO schema_history VALUES (6,?)",capabilityChecksum)
             }
             check(query("SELECT checksum FROM schema_history WHERE version=6") {it.getString(1)}.singleOrNull()==capabilityChecksum) {"Migration validation failed"}
-            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 6) { "Unknown schema version" }
+            val anonymousMigration=javaClass.getResourceAsStream("/db/V007__anonymous_identity_cutover.sql")!!.use {it.readBytes()}
+            val anonymousChecksum=DeviceAuth.digest(anonymousMigration).joinToString("") {"%02x".format(it)}
+            if(migrate && query("SELECT version FROM schema_history WHERE version=7") {it.getInt(1)}.isEmpty()) {
+                anonymousMigration.toString(Charsets.UTF_8).split(';').filter {it.isNotBlank()}.forEach {execute(it)}
+                execute("INSERT INTO schema_history VALUES (7,?)",anonymousChecksum)
+            }
+            check(query("SELECT checksum FROM schema_history WHERE version=7") {it.getString(1)}.singleOrNull()==anonymousChecksum) {"Migration validation failed"}
+            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 7) { "Unknown schema version" }
         }
     }
     override fun expireMailbox(now:Long,limit:Int) {
@@ -96,8 +103,8 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
         override fun remove(id:String)=execute("DELETE FROM $table WHERE $idColumn=?",id)
         override fun put(id:String,row:T)=write(id,row)
     }
-    override val accounts=rows("accounts",read={ AccountRow(it.getString("id"),it.getString("username"),it.getString("device_id")) }) { _,r ->
-        execute("INSERT INTO accounts VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username",r.id,r.username,r.deviceId)
+    override val accounts=rows("accounts",read={ AccountRow(it.getString("id"),it.getString("ghostcloak_id"),it.getString("device_id")) }) { _,r ->
+        execute("INSERT INTO accounts (id,ghostcloak_id,device_id) VALUES (?,?,?)",r.id,r.ghostCloakId,r.deviceId)
     }
     override val blobs=rows("attachment_blobs",read={ BlobRow(it.getString("id"),it.getString("owner_account"),it.getString("owner_device"),it.getLong("encrypted_length"),it.getBytes("ciphertext_digest"),it.getBytes("capability_hash"),it.getLong("created_at"),it.getLong("expires_at"),it.getBoolean("complete"),it.getBoolean("uploading")) }) { _,r ->
         execute("INSERT INTO attachment_blobs VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET expires_at=excluded.expires_at,complete=excluded.complete,uploading=excluded.uploading",r.id,r.owner,r.device,r.length,r.digest,r.capabilityHash,r.created,r.expires,r.complete,r.uploading)

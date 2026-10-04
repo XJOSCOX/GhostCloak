@@ -20,8 +20,8 @@ import org.ghostcloak.app.ui.components.*
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
     val matching = state.contacts.filter { (!it.contact.request || !it.contact.blocked) &&
-        (!directory || !it.contact.request) && it.contact.displayName.contains(query,ignoreCase=true) }
-    val chats = if(directory) matching.sortedBy {it.contact.displayName.lowercase()} else matching.sortedByDescending {state.previews[it.contact.remoteDeviceId]?.timestamp ?: 0}
+        (!directory || !it.contact.request) && it.contact.visibleName.contains(query,ignoreCase=true) }
+    val chats = if(directory) matching.sortedBy {it.contact.visibleName.lowercase()} else matching.sortedByDescending {state.previews[it.contact.remoteDeviceId]?.timestamp ?: 0}
     val hasUnread = !directory && state.unreadCount > 0
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(Modifier.fillMaxSize()) {
@@ -48,7 +48,7 @@ import org.ghostcloak.app.ui.components.*
                     Spacer(Modifier.height(GhostDimensions.large))
                     Text(when {query.isNotEmpty()->"No matches found"; directory->"Your people, here"; else->"A little more private."},style=MaterialTheme.typography.titleLarge)
                     Spacer(Modifier.height(GhostDimensions.compact))
-                    Text(when {query.isNotEmpty()->"Try another name."; else->"Start with someone's Ghost Cloak username."},style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(when {query.isNotEmpty()->"Try another name."; else->"Start with someone's Ghost Cloak ID."},style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(bottom=GhostLayout.pageInset)) {
                 if(directory) item {Text("YOUR CONTACTS",Modifier.padding(start=GhostDimensions.tiny,bottom=GhostDimensions.controlGap),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}

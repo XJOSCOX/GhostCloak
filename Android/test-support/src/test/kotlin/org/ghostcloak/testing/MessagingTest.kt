@@ -17,7 +17,7 @@ class MessagingTest {
         val old = a.fingerprint(bob.deviceId); a.verify(bob.deviceId, old)
         val replacement = service(); replacement.create("Bob")
         val fresh = ContactCardCodec.decode(replacement.exportCard())
-        val changed = ContactCardCodec.encode(ContactCard(1, bob.userId, "Bob", bob.deviceId, fresh.registrationId,
+        val changed = ContactCardCodec.encode(ContactCard(2, bob.userId, ContactCardCodec.decode(b.exportCard()).ghostCloakId, bob.deviceId, fresh.registrationId,
             fresh.identity, fresh.preKeyId, fresh.preKey, fresh.signedId, fresh.signedKey, fresh.signature,
             fresh.kyberId, fresh.kyberKey, fresh.kyberSignature))
         try { a.importCard(changed); fail("Accepted replacement") } catch (e: CryptoFailure) { assertEquals(CryptoError.IdentityChanged, e.error) }
@@ -36,7 +36,7 @@ class MessagingTest {
         val records = MemoryRecords(); val a = service(records)
         assertNull(a.open()); val first = a.create("Alice"); val renamed = a.rename("Robert")
         assertEquals(first.deviceId, renamed.deviceId); assertEquals(first.userId, renamed.userId)
-        assertArrayEquals(first.publicKey, renamed.publicKey); assertEquals("Robert", service(records).open()!!.username)
+        assertArrayEquals(first.publicKey, renamed.publicKey); assertEquals("Robert", service(records).open()!!.displayName)
     }
     @Test fun contactsVerificationAndMessagesSurviveRestart() = runBlocking<Unit> {
         val records = MemoryRecords(); val a = service(records); val b = service()
@@ -75,7 +75,7 @@ class MessagingTest {
     @Test fun invalidCardsAndDuplicateMappingsRejected() = runBlocking<Unit> {
         val a = service(); val b = service(); a.create("Alice"); b.create("Bob")
         val card = b.exportCard()
-        for (bad in listOf("", "hello", card + "!", card.replace("GHOSTCLOAK:1:", "GHOSTCLOAK:2:"), "x".repeat(8193))) {
+        for (bad in listOf("", "hello", card + "!", card.replace("GHOSTCLOAK:2:", "GHOSTCLOAK:1:"), "x".repeat(8193))) {
             try { a.importCard(bad); fail("Accepted malformed card") } catch (e: AppFailure) { assertEquals(AppError.INVALID_CARD, e.error) }
         }
         a.importCard(card)
@@ -85,10 +85,10 @@ class MessagingTest {
     @Test fun malformedFieldsDuplicateCborAndBadSignaturesAreRejected() = runBlocking<Unit> {
         val a = service(); val b = service(); a.create("Alice"); val bob = b.create("Bob")
         val text = b.exportCard(); val card = ContactCardCodec.decode(text)
-        val raw = java.util.Base64.getDecoder().decode(text.substringAfter("GHOSTCLOAK:1:"))
+        val raw = java.util.Base64.getDecoder().decode(text.substringAfter("GHOSTCLOAK:2:"))
         fun position(needle: ByteArray) = (0..raw.size - needle.size).first { start -> needle.indices.all { raw[start + it] == needle[it] } }
-        fun wire(bytes: ByteArray) = "GHOSTCLOAK:1:" + java.util.Base64.getEncoder().encodeToString(bytes)
-        val wrongVersion = raw.copyOf().apply { this[position("version".encodeToByteArray()) + 7] = 2 }
+        fun wire(bytes: ByteArray) = "GHOSTCLOAK:2:" + java.util.Base64.getEncoder().encodeToString(bytes)
+        val wrongVersion = raw.copyOf().apply { this[position("version".encodeToByteArray()) + 7] = 1 }
         val wrongDevice = raw.copyOf().apply { this[position(bob.deviceId.encodeToByteArray())] = 'z'.code.toByte() }
         assertEquals(0xbf.toByte(), raw[0])
         val duplicate = raw.copyOfRange(0, 1) + byteArrayOf(0x67) + "version".encodeToByteArray() + byteArrayOf(1) + raw.copyOfRange(1, raw.size)
@@ -96,7 +96,7 @@ class MessagingTest {
             try { a.importCard(wire(bytes)); fail("Accepted malformed fields") } catch (e: AppFailure) { assertEquals(AppError.INVALID_CARD, e.error) }
         }
         val badSignature = card.signature.copyOf().apply { this[0] = (this[0].toInt() xor 1).toByte() }
-        val invalid = ContactCardCodec.encode(ContactCard(1, card.userId, card.username, card.deviceId, card.registrationId,
+        val invalid = ContactCardCodec.encode(ContactCard(2, card.userId, card.ghostCloakId, card.deviceId, card.registrationId,
             card.identity, card.preKeyId, card.preKey, card.signedId, card.signedKey, badSignature, card.kyberId, card.kyberKey, card.kyberSignature))
         try { a.importCard(invalid); fail("Accepted invalid signature") } catch (e: CryptoFailure) { assertEquals(CryptoError.AuthenticationFailed, e.error) }
         assertTrue(a.contacts().isEmpty())

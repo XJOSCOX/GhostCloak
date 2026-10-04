@@ -30,16 +30,16 @@ object OneWayProbe {
             lateinit var registration: Registration
             suspend fun create() {
                 service.create(name)
-                registration = state.registration(name, listOf(engine.publicBundle().publicData()))
+                registration = state.registration(listOf(engine.publicBundle().publicData()))
                 account.register(registration); account.login(registration.accountId, registration.deviceId)
             }
         }
         val a = Person("alice"); a.create()
         val b = Person("bob"); b.create()
         val c = Person("charlie"); c.create()
-        val bob = a.client.lookup("bob")
+        val bob = a.client.lookup(b.state.ghostCloakId())
         val k = bob.bundle
-        a.service.importCard(ContactCardCodec.encode(ContactCard(1, bob.accountId, bob.username, bob.deviceId,
+        a.service.importCard(ContactCardCodec.encode(ContactCard(2, bob.accountId, bob.ghostCloakId, bob.deviceId,
             k.registrationId, k.identity, k.preKeyId, k.preKey, k.signedId, k.signedKey, k.signature, k.kyberId, k.kyberKey, k.kyberSignature)))
         a.state.remember(bob)
         assertTrue(b.service.contacts().isEmpty())
@@ -85,11 +85,11 @@ object OneWayProbe {
         assertTrue(b.service.messages(a.registration.deviceId).none {it.body.startsWith("Blocked message")})
         val fresh = b.engine.publicBundle().publicData()
         b.client.publish(bob.deviceId, listOf(fresh))
-        c.account.connect("bob", c.engine)
+        c.account.connect(b.state.ghostCloakId(), c.engine)
         c.transport.submit(RandomIdentifiers.create(), bob.deviceId, c.engine.encrypt(bob.deviceId, "New request".toByteArray()))
         val later = b.client.call(ApiRequest.Fetch(includeSenders = true, skipMessageIds = blocked.map { it.serverMessageId })).deliveries.single()
         b.service.acceptNetwork(EnvelopeCodec.decode(later.encryptedEnvelope), later.sender)
-        assertEquals("charlie", b.service.contacts().single { it.contact.request }.contact.displayName)
+        assertEquals(GhostCloakIds.display(c.state.ghostCloakId()), b.service.contacts().single { it.contact.request }.contact.displayName)
         b.service.deleteRequest(c.registration.deviceId)
         assertTrue(b.service.contacts().none { it.contact.remoteDeviceId==c.registration.deviceId })
         assertTrue(b.service.messages(c.registration.deviceId).isEmpty())

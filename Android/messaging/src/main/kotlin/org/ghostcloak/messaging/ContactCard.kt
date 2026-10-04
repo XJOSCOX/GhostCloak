@@ -6,10 +6,11 @@ import kotlinx.serialization.*
 import kotlinx.serialization.cbor.Cbor
 import org.ghostcloak.crypto.RemoteKeyBundle
 import org.ghostcloak.identity.RandomIdentifiers
+import org.ghostcloak.protocol.GhostCloakIds
 
 /** Public material only. Strict canonical CBOR in a bounded, versioned text envelope. */
 @Serializable
-class ContactCard(val version: Int, val userId: String, val username: String, val deviceId: String,
+class ContactCard(val version: Int, val userId: String, val ghostCloakId: String, val deviceId: String,
     val registrationId: Int, val identity: ByteArray, val preKeyId: Int, val preKey: ByteArray,
     val signedId: Int, val signedKey: ByteArray, val signature: ByteArray,
     val kyberId: Int, val kyberKey: ByteArray, val kyberSignature: ByteArray) {
@@ -19,11 +20,11 @@ class ContactCard(val version: Int, val userId: String, val username: String, va
 }
 object ContactCardCodec {
     const val MAX_TEXT = 8192
-    private const val PREFIX = "GHOSTCLOAK:1:"
+    private const val PREFIX = "GHOSTCLOAK:2:"
     private val format = Cbor { encodeDefaults = true; ignoreUnknownKeys = false }
     private fun validate(card: ContactCard) {
-        if (card.version != 1 || !RandomIdentifiers.valid(card.userId) || !RandomIdentifiers.valid(card.deviceId) ||
-            !card.username.matches(Regex("[A-Za-z0-9_][A-Za-z0-9_.]{0,31}")) || card.registrationId !in 1..16380 ||
+        if (card.version != 2 || !RandomIdentifiers.valid(card.userId) || !RandomIdentifiers.valid(card.deviceId) ||
+            !GhostCloakIds.valid(card.ghostCloakId) || card.registrationId !in 1..16380 ||
             listOf(card.preKeyId, card.signedId, card.kyberId).any { it <= 0 } ||
             listOf(card.identity, card.preKey, card.signedKey).any { it.size != 33 } ||
             card.signature.size != 64 || card.kyberSignature.size != 64 || card.kyberKey.size !in 1000..2000)

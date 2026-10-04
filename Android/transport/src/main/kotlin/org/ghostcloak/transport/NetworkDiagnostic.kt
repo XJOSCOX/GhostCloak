@@ -26,7 +26,7 @@ data class NetworkDiagnostic(
         private val SAFE_CODES = setOf("unauthorized", "connect_required", "credential_missing", "credential_unavailable",
             "legacy_auth_requires_reset", "network_unavailable", "server_rejected", "rate_limited", "invalid_response", "response_size",
             "body_size", "route_unknown", "not_found", "invalid_challenge", "challenge_binding",
-            "duplicate_delivery", "directory_mismatch", "invalid_network_username", "identity_required", "routing_changed",
+            "duplicate_delivery", "directory_mismatch", "invalid_ghostcloak_id", "identity_required", "routing_changed",
             "credential_changed", "platform_credential_required", "server_not_configured")
 
     }

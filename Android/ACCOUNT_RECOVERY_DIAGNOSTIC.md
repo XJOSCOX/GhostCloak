@@ -123,7 +123,7 @@ new token persisted -> original request retried once
 
 No username or Register request is involved. Concurrent send/sync coalesces renewal; repeated 401 blocks automatic renewal. Explicit logout clears only token and sets the persistent block. It must remain explicit; no recovery should defeat it.
 
-Server source: [MailboxService](../backend/src/main/kotlin/org/ghostcloak/backend/MailboxService.kt). Client routes: [ApiRoutes](protocol/src/main/kotlin/org/ghostcloak/protocol/NetworkV1.kt). UI: [GhostViewModel](app/src/main/java/org/ghostcloak/app/application/GhostViewModel.kt).
+Server source: [MailboxService](../backend/src/main/kotlin/org/ghostcloak/backend/MailboxService.kt). Client routes: [ApiRoutes](protocol/src/main/kotlin/org/ghostcloak/protocol/NetworkV2.kt). UI: [GhostViewModel](app/src/main/java/org/ghostcloak/app/application/GhostViewModel.kt).
 
 | Category / endpoint | Relevant outcome |
 |---|---|

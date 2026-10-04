@@ -24,9 +24,10 @@ internal object RecoveryProbe {
         val service=MailboxService(db,rate=RateLimiter {_,_,_->true})
         val records=MemoryRecords();val engine=SignalProtocolEngine(records);val identity=engine.createIdentity("alice")
         val state=EndpointNetworkState(records,"ghostcloak.local",RecoveryCredential())
-        val original=state.registration("alice",listOf(engine.publicBundle().publicData()))
+        val original=state.registration(listOf(engine.publicBundle().publicData()))
         val challenge=service.execute(ApiRequest.Issue(original.accountId,original.deviceId,"register",DeviceAuth.digest(NetworkCodec.encode(original)))).challenge!!
-        service.execute(ApiRequest.Register(original,challenge.id,state.sign(challenge)));state.markRegistered()
+        val assigned=service.execute(ApiRequest.Register(original,challenge.id,state.sign(challenge))).registeredId!!
+        state.markRegistered(assigned)
         val owner=NetworkCodec.encode(db.transaction {db.devices.get(original.deviceId)!!})
         records.transaction {
             records.keys("network/").filter {it.endsWith("/account") || it.endsWith("/routing")}.forEach {records.write(it,RandomIdentifiers.create().toByteArray())}
@@ -77,7 +78,7 @@ class RecoveryTest {
         LocalServer(MailboxService(db,rate=RateLimiter {_,_,_->true})).start().use {server->
             val records=MemoryRecords();val engine=SignalProtocolEngine(records);engine.createIdentity("alice")
             val state=EndpointNetworkState(records,"ghostcloak.local",RecoveryCredential())
-            val r=state.registration("alice",listOf(engine.publicBundle().publicData()))
+            val r=state.registration(listOf(engine.publicBundle().publicData()))
             val client=org.ghostcloak.transport.HttpGhostClient(server.baseUrl,state,true)
             NetworkAccount(client,state).register(r)
             val c=client.unauthenticated(ApiRequest.RecoveryIssue(r.authPublicKey,r.deviceId)).challenge!!
@@ -97,7 +98,7 @@ class RecoveryTest {
         val service=MailboxService(db,clock,rate=RateLimiter {_,_,_->true})
         val records=MemoryRecords();val engine=SignalProtocolEngine(records);engine.createIdentity("alice")
         val credential=RecoveryCredential();val state=EndpointNetworkState(records,"ghostcloak.local",credential)
-        val r=state.registration("alice",listOf(engine.publicBundle().publicData()))
+        val r=state.registration(listOf(engine.publicBundle().publicData()))
         val rc=service.execute(ApiRequest.Issue(r.accountId,r.deviceId,"register",DeviceAuth.digest(NetworkCodec.encode(r)))).challenge!!
         service.execute(ApiRequest.Register(r,rc.id,state.sign(rc)))
         fun reject(key:ByteArray=r.authPublicKey,device:String=r.deviceId,signer:RecoveryCredential=credential,
@@ -126,7 +127,7 @@ class RecoveryTest {
         val db=MemoryBackendDatabase();val service=MailboxService(db,rate=RateLimiter {_,_,_->true})
         val records=MemoryRecords();val engine=SignalProtocolEngine(records);engine.createIdentity("alice")
         val state=EndpointNetworkState(records,"ghostcloak.local",RecoveryCredential())
-        val r=state.registration("alice",listOf(engine.publicBundle().publicData()))
+        val r=state.registration(listOf(engine.publicBundle().publicData()))
         val c=service.execute(ApiRequest.Issue(r.accountId,r.deviceId,"register",DeviceAuth.digest(NetworkCodec.encode(r)))).challenge!!
         service.execute(ApiRequest.Register(r,c.id,state.sign(c)))
         val sizes=mutableListOf<Int>();val failures=mutableListOf<ByteArray>()

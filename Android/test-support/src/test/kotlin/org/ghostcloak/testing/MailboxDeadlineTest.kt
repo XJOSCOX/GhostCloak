@@ -36,7 +36,7 @@ object MailboxDeadlineProbe {
         }
         suspend fun person(name:String)=Person().also {p->
             p.engine.createIdentity(name)
-            p.registration=p.state.registration(name,listOf(p.engine.publicBundle().publicData()))
+            p.registration=p.state.registration(listOf(p.engine.publicBundle().publicData()))
             val r=p.registration
             val c=server.execute(ApiRequest.Issue(r.accountId,r.deviceId,"register",DeviceAuth.digest(NetworkCodec.encode(r)))).challenge!!
             server.execute(ApiRequest.Register(r,c.id,p.state.sign(c)));p.login()

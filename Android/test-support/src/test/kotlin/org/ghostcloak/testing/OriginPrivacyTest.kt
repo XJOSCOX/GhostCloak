@@ -52,17 +52,18 @@ internal object OriginPrivacyProbe {
                     val records=MemoryRecords();val engine=SignalProtocolEngine(records);val state=EndpointNetworkState(records,"ghostcloak.local")
                     lateinit var registration:Registration
                     suspend fun register() {
-                        engine.createIdentity(name);registration=state.registration(name,listOf(engine.publicBundle().publicData()))
+                        engine.createIdentity(name);registration=state.registration(listOf(engine.publicBundle().publicData()))
                         val r=registration
                         val c=call(ApiRequest.Issue(r.accountId,r.deviceId,"register",DeviceAuth.digest(NetworkCodec.encode(r)))).challenge!!
                         call(ApiRequest.Register(r,c.id,state.sign(c)))
                         val login=call(ApiRequest.Issue(r.accountId,r.deviceId,"login")).challenge!!
-                        state.save(call(ApiRequest.Verify(r.accountId,r.deviceId,login.id,state.sign(login))).session!!.token)
+                        val grant=call(ApiRequest.Verify(r.accountId,r.deviceId,login.id,state.sign(login))).session!!
+                        state.save(grant.token);state.markRegistered(grant.ghostCloakId)
                     }
                 }
                 val a=Person("alice");val b=Person("bob");val c=Person("charlie")
                 a.register();b.register();c.register()
-                val entry=call(ApiRequest.Lookup("bob"),a.state.read()).directory!!
+                val entry=call(ApiRequest.Lookup(b.state.ghostCloakId()),a.state.read()).directory!!
                 assertEquals(b.registration.accountId,entry.accountId);assertEquals(b.registration.routingId,entry.routingId)
                 a.engine.establishSession(entry.bundle.remote())
                 val wire=EnvelopeCodec.encode(a.engine.encrypt(b.registration.deviceId,"hello bob".toByteArray()))

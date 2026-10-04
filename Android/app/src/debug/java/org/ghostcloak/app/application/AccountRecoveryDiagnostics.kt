@@ -45,18 +45,17 @@ internal object AccountRecoveryDiagnostics {
     }
     fun wrap(delegate: GhostCloakTransport): GhostCloakTransport = GhostCloakTransport { request ->
         val category=when(request.endpoint.path) {
-            "/v1/auth/recovery/challenge" -> "RECOVERY_CHALLENGE"
-            "/v1/auth/recovery/verify" -> "RECOVERY_VERIFY"
-            "/v1/auth/challenge" -> "AUTH_CHALLENGE"
-            "/v1/auth/verify" -> "AUTH_VERIFY"
-            "/v1/accounts" -> "ACCOUNT_REGISTER"
-            "/v1/auth/revoke" -> "AUTH_REVOKE"
-            "/v1/accounts/username" -> "ACCOUNT_RENAME"
-            "/v1/directory/lookup" -> "LOOKUP"
-            "/v1/devices/prekeys" -> "PUBLISH"
-            "/v1/messages" -> "SEND"
-            "/v1/messages/fetch" -> "FETCH"
-            "/v1/messages/ack" -> "ACK"
+            "/v2/auth/recovery/challenge" -> "RECOVERY_CHALLENGE"
+            "/v2/auth/recovery/verify" -> "RECOVERY_VERIFY"
+            "/v2/auth/challenge" -> "AUTH_CHALLENGE"
+            "/v2/auth/verify" -> "AUTH_VERIFY"
+            "/v2/accounts" -> "ACCOUNT_REGISTER"
+            "/v2/auth/revoke" -> "AUTH_REVOKE"
+            "/v2/directory/lookup" -> "LOOKUP"
+            "/v2/devices/prekeys" -> "PUBLISH"
+            "/v2/messages" -> "SEND"
+            "/v2/messages/fetch" -> "FETCH"
+            "/v2/messages/ack" -> "ACK"
             else -> "OTHER"
         }
         write("ENDPOINT_CATEGORY=$category")

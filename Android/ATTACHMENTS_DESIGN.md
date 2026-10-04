@@ -161,7 +161,7 @@ Use one client-encrypted blob service for IMAGE, VIDEO, DOCUMENT and AUDIO/VOICE
 
 | Evidence | Existing constraint / required future work |
 |---|---|
-| [Envelope.kt](protocol/src/main/kotlin/org/ghostcloak/protocol/Envelope.kt), [NetworkV1.kt](protocol/src/main/kotlin/org/ghostcloak/protocol/NetworkV1.kt) | Body 16,384 bytes, packet 131,072; request 196,608; response 1,100,000; batch eight. Never inline bulk media or inflate mailbox limits. |
+| [Envelope.kt](protocol/src/main/kotlin/org/ghostcloak/protocol/Envelope.kt), [NetworkV2.kt](protocol/src/main/kotlin/org/ghostcloak/protocol/NetworkV2.kt) | Body 16,384 bytes, packet 131,072; request 196,608; response 1,100,000; batch eight. Never inline bulk media or inflate mailbox limits. |
 | [Disappearing.kt](messaging/src/main/kotlin/org/ghostcloak/messaging/Disappearing.kt) | Versioned text/policy payload, maximum text 16,368 bytes; unknown types rejected. Attachment descriptor type and compatible-peer rollout are missing. Old clients must not receive unsupported attachment payloads. |
 | [ProductionServer.kt](../backend/src/main/kotlin/org/ghostcloak/backend/ProductionServer.kt) | POST/CBOR buffering, mailbox body cap, ten-second request timeout. Separate streaming blob handlers are required, not changed mailbox limits. |
 | [MailboxService.kt](../backend/src/main/kotlin/org/ghostcloak/backend/MailboxService.kt) | Default mailbox TTL 24 hours, configurable to seven days; 128 envelopes/8 MiB per mailbox, 2,048 global messages. Separate blob quotas/retention are needed. |

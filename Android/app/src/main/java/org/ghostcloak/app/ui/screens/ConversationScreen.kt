@@ -34,13 +34,13 @@ import org.ghostcloak.protocol.EnvelopeCodec
     val list = rememberLazyListState()
     LaunchedEffect(state.messages.size) { if (state.messages.isNotEmpty()) list.animateScrollToItem(state.messages.lastIndex) }
     Column(Modifier.fillMaxSize().imePadding()) {
-        PageHeader(status.contact.displayName, subtitle = when {
+        PageHeader(status.contact.visibleName, subtitle = when {
             status.contact.blocked -> "Blocked on this device"
             changed -> "! Security identity changed"
             status.contact.request -> "Message request - Unverified"
             !active -> "Session unavailable"
             else -> null
-        }, back = back, avatarName = status.contact.displayName) {
+        }, back = back, avatarName = status.contact.visibleName) {
             HeaderAction(Glyph.SHIELD, "Security", security)
             Box {
                 HeaderAction(Glyph.MORE, "Conversation options") { actions = true }

@@ -16,12 +16,12 @@ import org.junit.Test
 class LocalDemoTest {
     @get:Rule val compose = createComposeRule()
     private lateinit var runtime: AppRuntime
+    private lateinit var model: GhostViewModel
     private val owner = ViewModelStore()
     @Before fun isolatedLocalRuntime() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         runtime = AppRuntime(context, apiOrigin = "", endpointName = "ui-${RandomIdentifiers.create()}")
-        lateinit var model: GhostViewModel
         instrumentation.runOnMainSync {
             model = GhostViewModel(context.applicationContext as android.app.Application, runtime)
             owner.put("local-demo", model)
@@ -36,7 +36,7 @@ class LocalDemoTest {
         compose.waitUntil(20000) { compose.onAllNodesWithContentDescription("Settings").fetchSemanticsNodes().isNotEmpty() ||
             compose.onAllNodesWithText("Create local identity").fetchSemanticsNodes().isNotEmpty() }
         if (compose.onAllNodesWithText("Create local identity").fetchSemanticsNodes().isNotEmpty()) {
-            compose.onNodeWithText("Username").performTextInput("LocalTest")
+            compose.onNodeWithText("Display name").performTextInput("LocalTest")
             compose.waitUntil(20000) { compose.onNodeWithText("Create local identity").isEnabled() }
             compose.onNodeWithText("Create local identity").performScrollTo().performClick()
         }
@@ -53,7 +53,7 @@ class LocalDemoTest {
         compose.onNodeWithText("Edit your name").assertIsDisplayed()
         compose.onNodeWithText("Cancel").performClick()
         compose.onNodeWithContentDescription("Chat").performClick()
-        compose.onNodeWithText("Bob").performClick()
+        compose.onNodeWithText(model.state.value.contacts.first().contact.visibleName).performClick()
         compose.waitUntil(20000) { compose.onAllNodesWithText("Write a message…").fetchSemanticsNodes().isNotEmpty() }
         compose.waitUntil(20000) { compose.onNodeWithText("Write a message…").isEnabled() }
         val message = "UI fixture ${System.nanoTime()}"

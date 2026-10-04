@@ -15,7 +15,7 @@ class UnreadMessagesTest {
         val a = AppRuntime(context, "https://fixture.invalid", RandomIdentifiers.create(), api)
         var b = AppRuntime(context, "https://fixture.invalid", name, api)
         try {
-            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork("bob", it) }
+            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val aid = a.use { it.open()!!.deviceId }; val bid = b.use { it.open()!!.deviceId }
             repeat(2) { a.use { a.send(it, bid, "Unread fixture") } }
             b.use { b.syncNetwork(it); assertEquals(2, it.unreadCount()); assertEquals(2, it.unreadCounts()[aid]) }

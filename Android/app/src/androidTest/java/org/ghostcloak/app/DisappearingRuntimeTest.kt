@@ -24,7 +24,7 @@ class DisappearingRuntimeTest {
         val a = AppRuntime(context, "https://fixture.invalid", RandomIdentifiers.create(), api, expiryClock = clock())
         var b = AppRuntime(context, "https://fixture.invalid", name, api, notifications = p, expiryClock = clock())
         try {
-            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork("bob", it) }
+            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val aid = a.use { it.open()!!.deviceId }; val bi = b.use { it.open()!! }
             a.use { a.send(it, bi.deviceId, "request") }; b.backgroundSync()
             b.use { assertTrue(it.contacts().single().contact.request); it.acceptRequest(aid); it.clearConversation(aid) }
@@ -73,7 +73,7 @@ class DisappearingRuntimeTest {
         val a = AppRuntime(context, "https://fixture.invalid", RandomIdentifiers.create(), api)
         val b = AppRuntime(context, "https://fixture.invalid", RandomIdentifiers.create(), api, notifications = p)
         try {
-            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork("bob", it) }
+            a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }; a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
             val aid = a.use { it.open()!!.deviceId }; val bid = b.use { it.open()!!.deviceId }
             a.use { a.setDisappearing(it, bid, 30) }; b.backgroundSync()
             b.use { assertTrue(it.contacts().isEmpty()); assertEquals(0, it.unreadCount()) }

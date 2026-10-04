@@ -32,7 +32,7 @@ class LocalNotificationTest {
         AppRuntime(context, "https://fixture.invalid", name, api, notifications = publisher)
     private suspend fun prepare(a: AppRuntime, b: AppRuntime): Pair<String, String> {
         a.use { a.create(it, "alice") }; b.use { b.create(it, "bob") }
-        a.use { a.addNetwork("bob", it) }
+        a.use { a.addNetwork(b.ownGhostCloakId()!!, it) }
         return a.use { it.open()!!.deviceId } to b.use { it.open()!!.deviceId }
     }
 
@@ -100,7 +100,7 @@ class LocalNotificationTest {
     @Test fun blockedAndMalformedDeliveryNeverPublish() = runBlocking {
         val api = SyntheticNetwork(); val p = Publisher(); val a = runtime(api); val b = runtime(api, p)
         try {
-            val (aid, bid) = prepare(a, b); b.use { b.addNetwork("alice", it); it.block(aid, true) }
+            val (aid, bid) = prepare(a, b); b.use { b.addNetwork(a.ownGhostCloakId()!!, it); it.block(aid, true) }
             a.use { a.send(it, bid, "blocked") }; b.backgroundSync()
             assertTrue(p.posts.isEmpty()); assertTrue(b.use { it.messages(aid).isEmpty() })
             b.use { it.block(aid, false) }

@@ -17,7 +17,7 @@ import org.ghostcloak.app.ui.theme.GhostDimensions
         for(contact in state.blockedContacts) {
             Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,
                 horizontalArrangement=Arrangement.spacedBy(GhostDimensions.regular)) {
-                Text(contact.displayName.takeIf {it.isNotBlank()} ?: "Blocked contact",Modifier.weight(1f),
+                Text(contact.visibleName.takeIf {it.isNotBlank()} ?: "Blocked contact",Modifier.weight(1f),
                     style=MaterialTheme.typography.titleMedium)
                 OutlinedButton(onClick={target=contact.remoteDeviceId},enabled=!state.loading){Text("Unblock")}
             }

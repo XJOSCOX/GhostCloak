@@ -188,7 +188,7 @@ class AppRuntime internal constructor(
                         reconcileBackground()
                         reconcileNotifications()
                         attachments?.reconcileReferences(
-                            store!!.transaction { store!!.keys("app/message/").map { it.removePrefix("app/message/") }.toSet() },
+                            LocalRepository(store!!,expiryClock).retainedAttachmentReferences(),
                             store!!.transaction { store!!.keys("outbox/").map { it.removePrefix("outbox/") }.toSet() })
                     }
                 }
@@ -212,8 +212,9 @@ class AppRuntime internal constructor(
         }
         if (networkConfigured && !inDemo) connectNetwork(service)
     }
-    suspend fun send(service: ConversationService, id: String, text: String): Message {
-        if (!inDemo && networkConfigured) return network!!.send(service, id, text)
+    suspend fun send(service: ConversationService, id: String, text: String, viewOnce:Boolean=false): Message {
+        if (!inDemo && networkConfigured) return network!!.send(service, id, text,viewOnce)
+        check(!viewOnce)
         val message = service.send(id, text)
         demo?.deliver(message)
         return message
@@ -296,7 +297,8 @@ class AppRuntime internal constructor(
         use { check(attachmentAllowed()) }
         attachments!!.upload(id,network!!.blobClient(::attachmentAllowed,{check(attachmentAllowed())}),::attachmentAllowed)
     }
-    internal suspend fun sendPreparedAttachment(conversation:String,blob:String,peerSupportsAttachments:Boolean,requireNegotiatedSupport:Boolean=false):Message=use { service ->
+    internal suspend fun sendPreparedAttachment(conversation:String,blob:String,peerSupportsAttachments:Boolean,requireNegotiatedSupport:Boolean=false,
+        viewOnce:Boolean=false):Message=use { service ->
         check(attachmentAllowed())
         val entry=attachments!!.entry(blob) ?: error("attachment_missing")
         if (entry.references.isNotEmpty()) {
@@ -307,9 +309,16 @@ class AppRuntime internal constructor(
         }
         check(entry.state==org.ghostcloak.attachments.TransferState.UPLOADED && entry.upload)
         network!!.sendAttachment(service,conversation,entry.descriptor,
-            if(requireNegotiatedSupport) service.attachmentPeer(conversation) else peerSupportsAttachments) {
+            if(requireNegotiatedSupport) service.attachmentPeer(conversation) else peerSupportsAttachments,viewOnce) {
             attachments!!.bind(blob,"$conversation/${it.localId}")
         }
+    }
+    internal suspend fun beginViewOnce(conversation:String,message:String):Message=use { service ->
+        check(activityVisible && attachmentAccess() && !operationBlocked)
+        service.beginViewOnce(conversation,message)
+    }
+    internal suspend fun consumeViewOnce(conversation:String,message:String)=use { service ->
+        service.consumeViewOnce(conversation,message)
     }
     internal suspend fun downloadAttachment(conversation:String,message:String):org.ghostcloak.attachments.VerifiedAttachment = guarded {
         val descriptor=use { check(attachmentAllowed()); it.attachment(conversation,message) ?: error("attachment_missing") }

@@ -21,7 +21,7 @@ object ConversationPayload {
     private val magic = byteArrayOf(-1, 71, 67, 80)
     class Content(val body: String, val seconds: Int, val control: Boolean, val attachment: ByteArray? = null,
         val supportsAttachments: Boolean = false, val displayName: String? = null,
-        val profileUpdate: Boolean = false) {
+        val profileUpdate: Boolean = false, val viewOnceKind: ViewOnceKind? = null) {
         override fun toString() = "Content(redacted)"
     }
     private fun profileBytes(displayName:String?):ByteArray = displayName?.let {
@@ -37,20 +37,24 @@ object ConversationPayload {
         profile.copyInto(bytes,16)
         return bytes
     }
-    fun encodeAttachment(descriptor: org.ghostcloak.attachments.AttachmentDescriptor, displayName:String?=null): ByteArray {
+    fun encodeAttachment(descriptor: org.ghostcloak.attachments.AttachmentDescriptor, displayName:String?=null,
+        viewOnce:Boolean=false): ByteArray {
+        if(viewOnce) require(descriptor.kind==org.ghostcloak.attachments.AttachmentKind.IMAGE)
         val encoded = org.ghostcloak.attachments.AttachmentFormat.encode(descriptor)
         try {
             val profile=profileBytes(displayName)
             val size=((16+encoded.size+profile.size+255)/256)*256
             if(size>16384) throw AppFailure(AppError.MESSAGE_TOO_LARGE)
             val bytes=ByteArray(size).also { SecureRandom().nextBytes(it) }
-            ByteBuffer.wrap(bytes).put(magic).put(1).put(3).putShort(0)
+            ByteBuffer.wrap(bytes).put(magic).put(1).put(if(viewOnce) 6 else 3).putShort(0)
                 .putInt(descriptor.disappearingSeconds).putInt(encoded.size).put(encoded)
             if(profile.isNotEmpty()) profile.copyInto(bytes,16+encoded.size)
             return bytes
         } finally { encoded.fill(0) }
     }
-    fun encode(body: String, seconds: Int, control: Boolean = false, displayName:String?=null): ByteArray {
+    fun encode(body: String, seconds: Int, control: Boolean = false, displayName:String?=null,
+        viewOnce:Boolean=false): ByteArray {
+        require(!viewOnce || !control)
         DisappearingTimer.from(seconds)
         val text = if (control) { require(body.isEmpty()); byteArrayOf() } else TextRules.encode(body)
         try {
@@ -60,7 +64,7 @@ object ConversationPayload {
             val size = ((16 + text.size + extension.size + profile.size + 255) / 256) * 256
             if(size>16384) throw AppFailure(AppError.MESSAGE_TOO_LARGE)
             val bytes = ByteArray(size).also { SecureRandom().nextBytes(it) }
-            ByteBuffer.wrap(bytes).put(magic).put(1).put(if (control) 2 else 1).putShort(0)
+            ByteBuffer.wrap(bytes).put(magic).put(1).put(if (control) 2 else if(viewOnce) 5 else 1).putShort(0)
                 .putInt(seconds).putInt(text.size).put(text)
             if (extension.isNotEmpty()) extension.copyInto(bytes, 16 + text.size)
             if(profile.isNotEmpty()) profile.copyInto(bytes,16+text.size+extension.size)
@@ -81,7 +85,7 @@ object ConversationPayload {
         if (!ByteArray(4).also { input.get(it) }.contentEquals(magic) || input.get().toInt() != 1)
             throw AppFailure(AppError.INVALID_TEXT)
         val type = input.get().toInt()
-        if (type !in 1..4 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
+        if (type !in 1..6 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
         val seconds = input.int; DisappearingTimer.from(seconds)
         val length = input.int
         if (length !in 0..MAX_TEXT || length > input.remaining() || (type in setOf(2,4) && length != 0) ||
@@ -108,16 +112,19 @@ object ConversationPayload {
             if(name==null || supports) throw AppFailure(AppError.INVALID_TEXT)
             return Content("",0,false,displayName=name,profileUpdate=true)
         }
-        if (type == 3) {
+        if (type == 3 || type == 6) {
             try {
                 val descriptor=org.ghostcloak.attachments.AttachmentFormat.decode(text)
                 require(descriptor.disappearingSeconds==seconds)
-                return Content("",seconds,false,text,displayName=name)
+                if(type==6) require(descriptor.kind==org.ghostcloak.attachments.AttachmentKind.IMAGE)
+                return Content("",seconds,false,text,displayName=name,
+                    viewOnceKind=if(type==6) ViewOnceKind.PHOTO else null)
             } catch (_: Exception) { text.fill(0); throw AppFailure(AppError.INVALID_TEXT) }
         }
         val body = try { text.decodeToString(throwOnInvalidSequence = true) } finally { text.fill(0) }
-        if (type == 1) TextRules.encode(body).fill(0)
-        return Content(body, seconds, type == 2, supportsAttachments = supports,displayName=name)
+        if (type == 1 || type == 5) TextRules.encode(body).fill(0)
+        return Content(body, seconds, type == 2, supportsAttachments = supports,displayName=name,
+            viewOnceKind=if(type==5) ViewOnceKind.TEXT else null)
     }
     fun policyText(seconds: Int) = if (seconds == 0) "Disappearing messages turned off"
         else "Disappearing messages set to ${DisappearingTimer.from(seconds).label}"

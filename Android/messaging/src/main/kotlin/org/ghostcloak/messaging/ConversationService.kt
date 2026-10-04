@@ -11,6 +11,7 @@ import org.ghostcloak.transport.*
 
 /** Serialized application boundary. UI never receives the engine, records, or transport. */
 class ConversationService(private val engine: SecureSessionEngine, private val repository: LocalRepository) {
+    init { repository.finalizeInterruptedViews() }
     private val mutex = Mutex()
     private var identity: DeviceIdentity? = null
     private var exported: String? = null
@@ -94,6 +95,11 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                         descriptor.plaintextLength, descriptor.kind in setOf(org.ghostcloak.attachments.AttachmentKind.IMAGE,org.ghostcloak.attachments.AttachmentKind.DOCUMENT))
                 message.copy(body = if (contact.request) "Attachment" else if (summary.photo) "Photo" else summary.filename, attachment = summary)
             } ?: message
+        }.map { message ->
+            if(message.viewOnceKind!=null) message.copy(body=if(message.viewOnceState==ViewOnceState.CONSUMED ||
+                message.viewOnceState==ViewOnceState.REVEALING) "View Once ${if(message.viewOnceKind==ViewOnceKind.PHOTO) "photo" else "message"} expired"
+                else "View Once ${if(message.viewOnceKind==ViewOnceKind.PHOTO) "photo" else "message"}",
+                attachment=null) else message
         }.map { if(contact.request) it.copy(disappearingSeconds=0,expiry=null) else it }
     }
     suspend fun attachmentPeer(id: String) = action { networkAllowed(id); repository.attachmentPeer(id) }
@@ -105,19 +111,21 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             repository.directoryCapability(entry.deviceId,proof.issuedAt,proof.expiresAt-time)
         } else repository.clearDirectoryCapability(entry.deviceId)
     }
-    suspend fun sendNetwork(id:String,body:String,outbox:DurableOutbox):Message=action {
-        enqueueNetwork(id, body, repository.policy(id), false, outbox)
+    suspend fun sendNetwork(id:String,body:String,outbox:DurableOutbox,viewOnce:Boolean=false):Message=action {
+        enqueueNetwork(id, body, repository.policy(id), false, outbox,viewOnce)
     }
     /** Internal foundation API: caller must have confirmed upload and compatible peer support. */
     suspend fun sendAttachment(id:String,descriptor:org.ghostcloak.attachments.AttachmentDescriptor,
-        outbox:DurableOutbox,peerSupportsAttachments:Boolean,onEnqueued:(Message)->Unit = {}):Message=action {
+        outbox:DurableOutbox,peerSupportsAttachments:Boolean,viewOnce:Boolean=false,onEnqueued:(Message)->Unit = {}):Message=action {
         require(peerSupportsAttachments)
+        if(viewOnce) require(descriptor.kind==org.ghostcloak.attachments.AttachmentKind.IMAGE)
         networkAllowed(id); repository.capacity(); descriptor.validate()
-        val bytes=ConversationPayload.encodeAttachment(descriptor,identity?.displayName)
+        val bytes=ConversationPayload.encodeAttachment(descriptor,identity?.displayName,viewOnce)
         lateinit var message:Message
         val submission=try { outbox.enqueue(id,bytes) { localId ->
             message=Message(localId,id,Direction.OUTGOING,"",repository.clock.now().wall,MessageState.PENDING,
-                disappearingSeconds=descriptor.disappearingSeconds)
+                disappearingSeconds=descriptor.disappearingSeconds,
+                viewOnceKind=if(viewOnce) ViewOnceKind.PHOTO else null)
             repository.save(message)
             val encoded=org.ghostcloak.attachments.AttachmentFormat.encode(descriptor)
             try { repository.attachment(id,localId,encoded) } finally { encoded.fill(0) }
@@ -133,6 +141,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         require(repository.messages(id).any {it.localId==localId})
         repository.attachment(id,localId)
     }
+    suspend fun beginViewOnce(id:String,localId:String):Message=action { repository.beginViewOnce(id,localId) }
+    suspend fun consumeViewOnce(id:String,localId:String)=action { repository.consumeViewOnce(id,localId) }
     suspend fun setDisappearing(id: String, seconds: Int, outbox: DurableOutbox): Message = action {
         enqueueNetwork(id, "", seconds, true, outbox)
     }
@@ -141,14 +151,16 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     suspend fun requireRequestConfirmation(value:Boolean)=action {repository.requireRequestConfirmation(value)}
     suspend fun serverReference(time:Long)=action {repository.serverReference(time);repository.expireRequests()}
     suspend fun reconcileExpiry() = action { repository.expire() }
-    private suspend fun enqueueNetwork(id: String, body: String, seconds: Int, control: Boolean, outbox: DurableOutbox): Message {
+    private suspend fun enqueueNetwork(id: String, body: String, seconds: Int, control: Boolean, outbox: DurableOutbox,
+        viewOnce:Boolean=false): Message {
         networkAllowed(id)
         repository.capacity()
-        val bytes = ConversationPayload.encode(body, seconds, control,identity?.displayName)
+        val bytes = ConversationPayload.encode(body, seconds, control,identity?.displayName,viewOnce)
         lateinit var message: Message
         val submission = try { outbox.enqueue(id, bytes) { submission ->
             message = Message(submission, id, Direction.OUTGOING, if (control) ConversationPayload.policyText(seconds) else body,
-                repository.clock.now().wall, MessageState.PENDING, disappearingSeconds = seconds, policyEvent = control)
+                repository.clock.now().wall, MessageState.PENDING, disappearingSeconds = seconds, policyEvent = control,
+                viewOnceKind=if(viewOnce) ViewOnceKind.TEXT else null)
             repository.save(message)
             if (control) repository.policy(id, seconds)
         } } finally { bytes.fill(0) }
@@ -247,7 +259,9 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             repository.saveAccepted(Message(envelope.envelopeId,contact.remoteDeviceId,Direction.INCOMING,
                 if (content.control) ConversationPayload.policyText(content.seconds) else content.body,
                 now.wall,MessageState.RECEIVED,envelope.envelopeId, content.seconds,
-                if (!content.control && content.seconds > 0) ExpiryDeadline.start(content.seconds, now) else null, content.control),hash)
+                if (!content.control && content.seconds > 0) ExpiryDeadline.start(content.seconds, now) else null, content.control,
+                viewOnceKind=content.viewOnceKind,
+                viewOnceState=if(content.viewOnceKind!=null) ViewOnceState.AVAILABLE else null),hash)
             if (content.control) repository.policy(contact.remoteDeviceId, content.seconds)
             content.attachment?.let { encoded ->
                 try { repository.attachment(contact.remoteDeviceId,envelope.envelopeId,encoded) }

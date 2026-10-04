@@ -180,11 +180,11 @@ class NetworkController(
             status = NetworkStatus.CONNECTED
         }
     }
-    suspend fun send(service: ConversationService, id: String, text: String): Message = operation(NetworkOperation.SEND) {
+    suspend fun send(service: ConversationService, id: String, text: String, viewOnce:Boolean=false): Message = operation(NetworkOperation.SEND) {
         requireApi(state.registered(), "connect_required", 401)
         // Preserve the existing durable outbox even when the stored session is expired/offline.
         status = NetworkStatus.SYNCING
-        service.sendNetwork(id, text, outbox).also {
+        service.sendNetwork(id, text, outbox,viewOnce).also {
             if (it.state == MessageState.SERVER_ACCEPTED) {
                 renewalBlocked = false; status = NetworkStatus.CONNECTED
             } else if (status == NetworkStatus.SYNCING) { status = NetworkStatus.ERROR }
@@ -281,8 +281,8 @@ class NetworkController(
         org.ghostcloak.attachments.StreamingBlobClient(origin,client,{ canAutoSync && allowed() },checkpoint)
     internal suspend fun supportsAttachments(service:ConversationService,id:String)=capabilities.refresh(id,service)
     internal suspend fun sendAttachment(service:ConversationService,id:String,descriptor:org.ghostcloak.attachments.AttachmentDescriptor,
-        supported:Boolean,onEnqueued:(Message)->Unit):Message {
+        supported:Boolean,viewOnce:Boolean=false,onEnqueued:(Message)->Unit):Message {
         requireApi(canAutoSync,"connect_required",401)
-        return service.sendAttachment(id,descriptor,outbox,supported,onEnqueued)
+        return service.sendAttachment(id,descriptor,outbox,supported,viewOnce,onEnqueued)
     }
 }

@@ -144,6 +144,6 @@ After backend deployment and in-place Android updates on both phones:
 
 ## Non-goals
 
-No view-once, unsend, remote deletion, reactions, read receipts, message editing, voice/video/calls, groups, new identity/recovery flow, push provider or notification content is introduced. No physical-device reset or backend deployment occurs automatically.
+Phase 1J introduced no view-once, unsend, remote deletion, reactions, read receipts, message editing, voice/video/calls, groups, new identity/recovery flow, push provider or notification content. Phase 1P subsequently added View Once text/photos within authenticated payloads. Its request privacy is unchanged: hidden requests contain no View Once text or thumbnail, Accept does not consume a surviving item, and the 72-hour deadline still removes an expired request. See [VIEW_ONCE_DESIGN.md](VIEW_ONCE_DESIGN.md). No physical-device reset or backend deployment occurs automatically.
 
 See [BLOCKED_ENVELOPE_PRIVACY.md](BLOCKED_ENVELOPE_PRIVACY.md) for the authenticated blocked-message sink, atomic replay commit, crash-safe ACK/unblock behavior and physical retests.

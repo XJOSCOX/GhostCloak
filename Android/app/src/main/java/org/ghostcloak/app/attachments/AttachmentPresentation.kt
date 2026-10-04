@@ -14,7 +14,8 @@ import java.io.File
 data class MediaUi(val conversation: String = "", val message: String? = null,
     val filename: String = "", val photo: Boolean = false, val bytes: Long = 0,
     val busy: Boolean = false, val error: String? = null, val ready: Boolean = false,
-    val preview: Bitmap? = null, val sending: Boolean = false, val uploadPrepared: Boolean = false) {
+    val preview: Bitmap? = null, val sending: Boolean = false, val uploadPrepared: Boolean = false,
+    val viewOnce:Boolean=false) {
     override fun toString() = "MediaUi(redacted)"
 }
 
@@ -67,6 +68,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
     fun locked() { if(app.localOperationGate.blocked) return; photos.clear(); clear(); revokeLease(); sweepPresentation() }
     fun clear() {
         if(app.localOperationGate.blocked) return
+        val consumed=mutable.value.takeIf {it.viewOnce && it.message!=null}
         val revoked=synchronized(inputGate) {
             epoch++
             (sourceSignal to activeInput).also { sourceSignal=null;activeInput=null }
@@ -77,6 +79,15 @@ class AttachmentPresentation(private val app: GhostApplication) {
         file?.delete(); file=null; blob=null
         // Removing references prevents the UI from presenting it after background/lock.
         mutable.value=MediaUi()
+        consumed?.let { current -> scope.launch {
+            try { app.runtime.consumeViewOnce(current.conversation,requireNotNull(current.message)) }
+            catch (_: Exception) { /* Durable REVEALING remains fail-closed on restart. */ }
+        } }
+    }
+    fun toggleViewOnce() {
+        val current=mutable.value
+        if(current.message==null && current.photo && !current.busy && !current.sending)
+            mutable.value=current.copy(viewOnce=!current.viewOnce)
     }
     fun cancel() {
         val orphan = blob
@@ -213,14 +224,27 @@ class AttachmentPresentation(private val app: GhostApplication) {
             }
             val id=blob!!
             app.runtime.uploadAttachment(id); check(expected)
-            app.runtime.sendPreparedAttachment(before.conversation,id,true,requireNegotiatedSupport=true)
+            app.runtime.sendPreparedAttachment(before.conversation,id,true,requireNegotiatedSupport=true,
+                viewOnce=before.viewOnce)
             check(expected); clear(); refresh()
         }
     }
-    fun download(conversation: String, message: String, photo: Boolean, filename: String, refresh: ()->Unit = {}) {
+    fun openViewOncePhoto(conversation:String,message:String,refresh:()->Unit={}) {
+        app.localOperationGate.requireNormal()
+        scope.launch {
+            try {
+                val opened=app.runtime.beginViewOnce(conversation,message)
+                check(opened.viewOnceKind==org.ghostcloak.messaging.ViewOnceKind.PHOTO)
+                if(!allowed()) {app.runtime.consumeViewOnce(conversation,message);return@launch}
+                download(conversation,message,true,"",refresh,viewOnce=true)
+            } catch (_: Exception) { /* Remain unavailable; never downgrade to an ordinary photo. */ }
+        }
+    }
+    fun download(conversation: String, message: String, photo: Boolean, filename: String, refresh: ()->Unit = {},
+        viewOnce:Boolean=false) {
         app.localOperationGate.requireNormal()
         clear()
-        mutable.value=MediaUi(conversation=conversation,message=message,filename=filename,photo=photo,busy=true)
+        mutable.value=MediaUi(conversation=conversation,message=message,filename=filename,photo=photo,busy=true,viewOnce=viewOnce)
         launch { expected ->
             val target=temporary()
             try {

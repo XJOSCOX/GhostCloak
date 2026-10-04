@@ -9,6 +9,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import org.ghostcloak.app.ui.theme.GhostDimensions
 import androidx.compose.ui.text.style.TextOverflow
 import java.time.*
@@ -21,8 +22,33 @@ import org.ghostcloak.messaging.*
 import org.ghostcloak.protocol.EnvelopeCodec
 
 @Composable fun ConversationScreen(state: AppState, status: ContactStatus, back: () -> Unit,
-    security: () -> Unit, send: (String, () -> Unit) -> Unit, delete: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, accept: () -> Unit = {}, reject: () -> Unit = {}, clear: () -> Unit = {}, disappearing: (Int) -> Unit = {}, refresh: () -> Unit = {}, block:()->Unit={}) {
+    security: () -> Unit, send: (String, () -> Unit) -> Unit, delete: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, accept: () -> Unit = {}, reject: () -> Unit = {}, clear: () -> Unit = {}, disappearing: (Int) -> Unit = {}, refresh: () -> Unit = {}, block:()->Unit={},
+    sendViewOnce:(String,()->Unit)->Unit={_,_->},revealText:(String,(String)->Unit)->Unit={_,_->},consume:(String)->Unit={}) {
     var draft by remember(status.contact.remoteDeviceId) { mutableStateOf("") }
+    var viewOnceText by remember(status.contact.remoteDeviceId) { mutableStateOf(false) }
+    var revealed by remember(status.contact.remoteDeviceId) { mutableStateOf<Pair<String,String>?>(null) }
+    val currentReveal by rememberUpdatedState(revealed)
+    val currentConsume by rememberUpdatedState(consume)
+    val app=(androidx.compose.ui.platform.LocalContext.current.applicationContext as org.ghostcloak.app.application.GhostApplication)
+    val viewLifecycle=LocalLifecycleOwner.current.lifecycle
+    fun closeReveal() {
+        revealed?.first?.let(consume)
+        revealed=null
+    }
+    DisposableEffect(viewLifecycle,status.contact.remoteDeviceId) {
+        val observer=androidx.lifecycle.LifecycleEventObserver { _,event ->
+            if(event==androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                currentReveal?.first?.let(currentConsume)
+                revealed=null
+            }
+        }
+        viewLifecycle.addObserver(observer)
+        onDispose {
+            viewLifecycle.removeObserver(observer)
+            currentReveal?.first?.let(currentConsume)
+            revealed=null
+        }
+    }
     var rejectedPaste by remember { mutableStateOf(false) }
     var actions by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<String?>(null) }
@@ -82,6 +108,22 @@ import org.ghostcloak.protocol.EnvelopeCodec
                             Text(if (message.state == MessageState.PENDING) "Update pending · applies locally" else "Update not delivered · choose the timer again to retry",
                                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
+                    else if(message.viewOnceKind!=null) MessageBubble(message,onDelete={deleting=message.localId}) {
+                        Column {
+                            Text(message.body,style=MaterialTheme.typography.bodyLarge)
+                            if(message.direction==Direction.INCOMING && message.viewOnceState==ViewOnceState.AVAILABLE &&
+                                !status.contact.request && active)
+                                TextButton(onClick={
+                                    if(message.viewOnceKind==ViewOnceKind.PHOTO)
+                                        app.media.openViewOncePhoto(message.conversationId,message.localId,refresh)
+                                    else revealText(message.localId) { body ->
+                                        if(viewLifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED))
+                                            revealed=message.localId to body
+                                        else consume(message.localId)
+                                    }
+                                }) { Text("Tap to view") }
+                        }
+                    }
                     else if(message.attachment!=null) MessageBubble(message,onDelete={deleting=message.localId}) {
                         AttachmentMessage(message,active,message.localId in state.cachedAttachments,refresh)
                     } else MessageBubble(message,onDelete={deleting=message.localId})
@@ -110,12 +152,27 @@ import org.ghostcloak.protocol.EnvelopeCodec
                     enabled = active && !state.loading, modifier = Modifier.weight(1f), placeholder = { Text("Write a message…") }, maxLines = 5,
                     colors=OutlinedTextFieldDefaults.colors(unfocusedBorderColor=androidx.compose.ui.graphics.Color.Transparent,unfocusedContainerColor=MaterialTheme.colorScheme.surface,focusedContainerColor=MaterialTheme.colorScheme.surface),
                     shape = RoundedCornerShape(GhostDimensions.spacious), isError = size > ConversationPayload.MAX_TEXT)
-                FilledIconButton(onClick = { send(draft) { draft = "" } }, enabled = active && !state.loading && draft.isNotBlank() && size <= ConversationPayload.MAX_TEXT && !rejectedPaste,
+                FilledIconButton(onClick = {
+                    val done={ draft="";viewOnceText=false }
+                    if(viewOnceText) sendViewOnce(draft,done) else send(draft,done)
+                }, enabled = active && !state.loading && draft.isNotBlank() && size <= ConversationPayload.MAX_TEXT && !rejectedPaste,
                     modifier = Modifier.size(GhostDimensions.avatar)) { AppIcon(Glyph.SEND,"Send") }
             }
+            if(state.networkConfigured && !state.demo && draft.isNotBlank())
+                TextButton(onClick={viewOnceText=!viewOnceText},enabled=active && !state.loading) {
+                    Text(if(viewOnceText) "① View Once on" else "① View Once")
+                }
             Text(if (size > 14000) "$size / 16,368 bytes" else "End-to-end encrypted", Modifier.padding(start = GhostDimensions.controlGap, bottom = GhostDimensions.medium), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+    revealed?.let { (_,body) -> androidx.compose.ui.window.Dialog(onDismissRequest=::closeReveal,
+        properties=androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth=false,
+            securePolicy=androidx.compose.ui.window.SecureFlagPolicy.SecureOn)) {
+        Surface(Modifier.fillMaxSize()) { Column(Modifier.fillMaxSize().safeDrawingPadding().padding(GhostLayout.pageInset)) {
+            TextButton(onClick=::closeReveal) { Text("Close") }
+            Text(body,style=MaterialTheme.typography.bodyLarge)
+        } }
+    } }
     }
     deleting?.let { id -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text("Delete message?") },
         text = { Text("This removes the message from this device only.") },

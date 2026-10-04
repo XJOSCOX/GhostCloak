@@ -130,6 +130,13 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun block(id:String,blocked:Boolean)=records.transaction {
         val c=contact(id)
         if(blocked) {
+            // Blocking ends access to any previously unopened or active View Once item too.
+            // A later Unblock/Accept must not restore its key or body.
+            records.keys("app/message/$id/").forEach { key ->
+                val message=read<Message>(key) ?: throw EndpointStorageFailure()
+                if(message.direction==Direction.INCOMING && message.viewOnceKind!=null &&
+                    message.viewOnceState!=ViewOnceState.CONSUMED) eraseViewOnce(message)
+            }
             if(!c.request && !c.blocked) endAcceptedRelationship(id,RequestState.BLOCKED,true)
             else {
                 put("app/force-hidden-request/$id",true)
@@ -237,6 +244,40 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         expire(id)
         records.keys("app/message/$id/").map { read<Message>(it) ?: throw EndpointStorageFailure() }.sortedBy { it.timestamp }
     }
+    /** Any interrupted presentation loses its key/body before normal startup can expose UI. */
+    fun finalizeInterruptedViews() = records.transaction {
+        records.keys("app/message/").forEach { key ->
+            val message=read<Message>(key) ?: throw EndpointStorageFailure()
+            if(message.viewOnceState==ViewOnceState.REVEALING) consumeViewOnce(message.conversationId,message.localId)
+        }
+    }
+    /** Commit this transition before returning even text to the caller. */
+    fun beginViewOnce(id:String,localId:String):Message = records.transaction {
+        val message=read<Message>("app/message/$id/$localId") ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        val contact=read<Contact>("app/contact/$id") ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        if(message.direction!=Direction.INCOMING || message.viewOnceKind==null ||
+            message.viewOnceState!=ViewOnceState.AVAILABLE || contact.blocked || contact.request ||
+            !isActiveContact(id) || message.activeExpiry?.reached(clock.now())==true ||
+            (message.viewOnceKind==ViewOnceKind.PHOTO && !hasAttachment(id,localId)))
+            throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        save(message.copy(viewOnceState=ViewOnceState.REVEALING))
+        message
+    }
+    fun consumeViewOnce(id:String,localId:String) = records.transaction {
+        val message=read<Message>("app/message/$id/$localId") ?: return@transaction
+        if(message.viewOnceKind==null || message.viewOnceState==ViewOnceState.CONSUMED) return@transaction
+        if(message.viewOnceState!=ViewOnceState.REVEALING) throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        eraseViewOnce(message)
+    }
+    private fun eraseViewOnce(message:Message) {
+        val id=message.conversationId;val localId=message.localId
+        save(message.copy(body="",viewOnceState=ViewOnceState.CONSUMED))
+        records.remove("app/attachment/$id/$localId")
+        NotificationLedger.remove(records,id,localId)
+        val readKey="app/read/$id"
+        val seen=read<List<String>>(readKey).orEmpty()
+        if(localId !in seen) put(readKey,seen+localId)
+    }
     fun policy(id: String): Int = records.transaction { read<Int>("app/disappearing/$id")?.also { DisappearingTimer.from(it) } ?: 0 }
     fun policy(id: String, seconds: Int) = records.transaction { DisappearingTimer.from(seconds); put("app/disappearing/$id", seconds) }
     fun expire(conversationId: String? = null): Int = records.transaction {
@@ -254,7 +295,9 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun acceptedOutgoing(id: String, localId: String) = records.transaction {
         val message = read<Message>("app/message/$id/$localId") ?: return@transaction
         if (message.direction != Direction.OUTGOING || message.state in setOf(MessageState.DELIVERED,MessageState.EXPIRED_UNDELIVERED)) return@transaction
-        save(message.copy(state = MessageState.SERVER_ACCEPTED, expiry = null))
+        save(message.copy(state = MessageState.SERVER_ACCEPTED, expiry = null,
+            body=if(message.viewOnceKind!=null) "" else message.body))
+        if(message.viewOnceKind==ViewOnceKind.PHOTO) records.remove("app/attachment/$id/$localId")
     }
     fun deliveredOutgoing(id: String, localId: String) = records.transaction {
         val message = read<Message>("app/message/$id/$localId") ?: return@transaction
@@ -305,6 +348,16 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         records.remove("app/retained-history/$id")
     }
     fun capacity() = records.transaction { if (records.keys("app/message/").size >= 5000) throw AppFailure(AppError.LOCAL_CAPACITY) }
+    fun retainedAttachmentReferences():Set<String> = records.transaction {
+        records.keys("app/message/").mapNotNull { key ->
+            val message=read<Message>(key) ?: throw EndpointStorageFailure()
+            if(message.viewOnceKind!=null &&
+                (message.viewOnceState==ViewOnceState.CONSUMED ||
+                    (message.direction==Direction.OUTGOING &&
+                        message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED)))) null
+            else key.removePrefix("app/message/")
+        }.toSet()
+    }
     fun attachment(id:String,localId:String):org.ghostcloak.attachments.AttachmentDescriptor? = records.transaction {
         records.read("app/attachment/$id/$localId")?.let { bytes ->
             try { org.ghostcloak.attachments.AttachmentFormat.decode(bytes) } finally { bytes.fill(0) }
@@ -319,7 +372,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 val id=reference.substringBefore('/'); val localId=reference.substringAfter('/')
                 if(id in allowedContacts) {
                     val message=read<Message>("app/message/$id/$localId")
-                    if(message!=null && message.activeExpiry?.reached(clock.now())!=true)
+                    if(message!=null && message.activeExpiry?.reached(clock.now())!=true &&
+                        (message.viewOnceKind==null || message.viewOnceState==ViewOnceState.REVEALING))
                         put(id to localId,message.activeExpiry)
                 }
             }
@@ -328,7 +382,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun attachmentAvailable(id:String,localId:String) = records.transaction {
         val message=read<Message>("app/message/$id/$localId")
         val contact=read<Contact>("app/contact/$id")
-        message!=null && message.activeExpiry?.reached(clock.now())!=true && contact!=null && isActiveContact(id) && hasAttachment(id,localId)
+        message!=null && message.activeExpiry?.reached(clock.now())!=true && contact!=null && isActiveContact(id) && hasAttachment(id,localId) &&
+            (message.viewOnceKind==null || message.viewOnceState==ViewOnceState.REVEALING)
     }
     fun attachment(id:String,localId:String,bytes:ByteArray) = records.transaction {
         org.ghostcloak.attachments.AttachmentFormat.decode(bytes)

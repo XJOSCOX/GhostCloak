@@ -375,6 +375,8 @@ Manual foreground body downloads initially; no auto cellular video, explicit lar
 
 ### Future view-once compatibility (not implemented in 1I.2)
 
+Phase 1P now implements the IMAGE subset of this later design. The following paragraphs describe the original 1I.2 compatibility contract; the actual text/photo state machine, explicit opening gate and cleanup are in [VIEW_ONCE_DESIGN.md](VIEW_ONCE_DESIGN.md). Video, documents and voice notes remain outside View Once.
+
 Transfer completion and presentation authorization are separate concepts. READY means bytes passed authentication; it must never imply permission to render, open a plaintext path or automatically consume a message. Reserve a future local presentation lifecycle `UNOPENED -> OPENING -> CONSUMED`, independent of transfer status and delivery ACK. The view-once flag belongs only inside versioned authenticated E2EE content; the blob API, database, quotas, retention and generic notifications must not learn or reveal it.
 
 A future explicit Open action must pass app lock, message existence/expiry and contact gates, then atomically commit durable OPENING before any plaintext is exposed to a viewer/player. Competing opens must serialize. Successful presentation closing/completing commits CONSUMED; opening failure or crash after OPENING fails closed and cannot grant unlimited retries. Recovery treats an unresolved OPENING as unavailable/consumed before admitting any presentation. Recomposition, restart and descriptor replay must not reset that state.

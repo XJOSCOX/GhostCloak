@@ -176,8 +176,8 @@ class GhostViewModel internal constructor(application: Application, private val 
         else if (message.state == MessageState.FAILED) "Timer applies locally, but the update failed. Choose the timer again to retry."
         else null
     }
-    fun send(id: String, text: String, success: () -> Unit) = run {
-        val message = runtime.send(it, id, text)
+    fun send(id: String, text: String, success: () -> Unit, viewOnce:Boolean=false) = run {
+        val message = runtime.send(it, id, text,viewOnce)
         polling.reset()
         pollingWake.trySend(Unit)
         // A saved pending message owns its draft now; Sync retries it without creating a duplicate.
@@ -187,6 +187,20 @@ class GhostViewModel internal constructor(application: Application, private val 
             MessageState.FAILED -> "Message could not be sent. Review the conversation before trying again."
             else -> null
         }
+    }
+    fun revealViewOnceText(id:String,localId:String,show:(String)->Unit)=run {
+        val message=it.beginViewOnce(id,localId)
+        check(message.viewOnceKind==ViewOnceKind.TEXT)
+        withContext(Dispatchers.Main.immediate) {
+            val app=getApplication<GhostApplication>()
+            if(app.appLock.state.value.canShowContent) show(message.body)
+            else it.consumeViewOnce(id,localId)
+        }
+        null
+    }
+    fun consumeViewOnce(id:String,localId:String)=run(quiet=true) {
+        it.consumeViewOnce(id,localId)
+        null
     }
     fun startDemo() = run { runtime.startDemo(); selected = null; mutable.value = mutable.value.copy(card = "", fingerprint = ""); null }
     fun leaveDemo() = run { runtime.leaveDemo(); selected = null; mutable.value = mutable.value.copy(card = "", fingerprint = ""); null }

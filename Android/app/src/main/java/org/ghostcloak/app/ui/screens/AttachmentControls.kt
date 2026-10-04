@@ -48,7 +48,7 @@ import org.ghostcloak.messaging.Message
             properties=DialogProperties(usePlatformDefaultWidth=false,securePolicy=SecureFlagPolicy.SecureOn)) {
             Surface(Modifier.fillMaxSize()) {
                 Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                    TextButton(onClick=owner::cancel) { Text("Close photo") }
+                    TextButton(onClick=owner::cancel) { Text(if(state.viewOnce) "Close View Once photo" else "Close photo") }
                     state.preview?.let { Image(it.asImageBitmap(),"Photo",Modifier.fillMaxSize(),
                         contentScale=androidx.compose.ui.layout.ContentScale.Fit) }
                 }
@@ -61,6 +61,10 @@ import org.ghostcloak.messaging.Message
             state.preview?.let { Image(it.asImageBitmap(),"Photo preview",Modifier.fillMaxWidth().heightIn(max=GhostDimensions.previewWidth)) }
             if(state.filename.isNotEmpty()) Text(state.filename)
             if(state.bytes>0) Text("${(state.bytes+1023)/1024} KiB",style=MaterialTheme.typography.bodySmall)
+            if(state.photo && state.message==null && state.ready && !state.sending)
+                TextButton(onClick=owner::toggleViewOnce,enabled=enabled && !state.busy) {
+                    Text(if(state.viewOnce) "① View Once on" else "① View Once")
+                }
             if(state.busy) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(if(state.message==null && state.photo && !state.uploadPrepared) "Preparing photo…" else if(state.message==null) "Preparing / uploading…" else "Downloading / verifying…") }
             state.error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
             if(!state.photo && state.message==null) Text("Documents keep embedded metadata. The complete file is encrypted before upload.",style=MaterialTheme.typography.bodySmall)
@@ -71,7 +75,7 @@ import org.ghostcloak.messaging.Message
                 {owner.cancel();if(state.photo) photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) else document.launch(arrayOf("*/*"))},
                 {owner.send(refresh)})
             else if(state.ready && !state.photo) TextButton(onClick={external=true},enabled=enabled) { Text("Open document") }
-            else if(state.error!=null) TextButton(onClick={owner.download(conversation,state.message!!,state.photo,state.filename,refresh)},enabled=enabled) { Text("Retry download") }
+            else if(state.error!=null && !state.viewOnce) TextButton(onClick={owner.download(conversation,state.message!!,state.photo,state.filename,refresh)},enabled=enabled) { Text("Retry download") }
         },
         dismissButton={TextButton(onClick=owner::cancel) { Text(if(state.message==null) "Cancel" else "Close") }})
     if(external) AlertDialog(onDismissRequest={external=false},title={Text("Open in another app?")},

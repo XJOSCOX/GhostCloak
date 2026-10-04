@@ -23,6 +23,8 @@ internal class SyntheticNetwork : GhostCloakTransport {
     val mailbox = linkedMapOf<String, Pair<String, Delivery>>()
     private val challenges = mutableMapOf<String, Challenge>()
     private val prekeys = mutableMapOf<String, MutableList<PublicBundle>>()
+    private val allocations = mutableMapOf<String, DirectoryEntry>()
+    fun availablePrekeys(deviceId:String):Int = synchronized(this) {prekeys[deviceId]?.size ?: 0}
     private val usedPrekeys = mutableMapOf<String, MutableSet<Int>>()
     private val submissions = mutableMapOf<String, String>()
     private val acknowledged = mutableSetOf<String>()
@@ -86,10 +88,22 @@ internal class SyntheticNetwork : GhostCloakTransport {
                 when (r) {
                     is ApiRequest.Lookup -> {
                         lookedUp.add(r.ghostCloakId)
-                        val target = accounts.values.singleOrNull { assignedIds[it.accountId] == r.ghostCloakId } ?: throw ApiFailure(404, "not_found")
-                        val bundle = prekeys[target.deviceId]!!.removeAt(0)
-                        ApiResponse(directory = DirectoryEntry(target.accountId, target.deviceId, target.routingId, assignedIds.getValue(target.accountId),
-                            if(r.capabilities) bundle else bundle.withCapability(null)),serverTime=if(r.capabilities) System.currentTimeMillis() else null)
+                        val target = accounts.values.singleOrNull { assignedIds[it.accountId] == r.ghostCloakId && prekeys[it.deviceId]!!.isNotEmpty() } ?: throw ApiFailure(404, "contact_unavailable")
+                        ApiResponse(discovery=DirectorySummary(target.accountId,target.deviceId,target.routingId,r.ghostCloakId))
+                    }
+                    is ApiRequest.Allocate -> {
+                        val key=me.deviceId+"/"+r.allocationId
+                        val old=allocations[key]
+                        if(old!=null) {
+                            requireApi(old.ghostCloakId==r.ghostCloakId,"allocation_conflict",409)
+                            ApiResponse(directory=old,serverTime=System.currentTimeMillis())
+                        } else {
+                            val target=accounts.values.singleOrNull { assignedIds[it.accountId]==r.ghostCloakId && prekeys[it.deviceId]!!.isNotEmpty() } ?: throw ApiFailure(404,"contact_unavailable")
+                            val bundle=prekeys[target.deviceId]!!.removeAt(0)
+                            val entry=DirectoryEntry(target.accountId,target.deviceId,target.routingId,r.ghostCloakId,bundle)
+                            allocations[key]=entry
+                            ApiResponse(directory=entry,serverTime=System.currentTimeMillis())
+                        }
                     }
                     is ApiRequest.Capabilities -> {
                         val pool=prekeys[me.deviceId]!!

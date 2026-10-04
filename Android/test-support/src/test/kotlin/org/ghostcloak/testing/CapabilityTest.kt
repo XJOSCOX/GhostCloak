@@ -32,9 +32,13 @@ internal object CapabilityProbe {
         assertNotNull(refresh.directory!!.bundle.capability)
         assertEquals(16,f.inventory().available)
         val legacy=f.service.execute(ApiRequest.Lookup(f.state.ghostCloakId()),f.state.read())
-        assertNull(legacy.directory!!.bundle.capability);assertNull(legacy.serverTime)
+        assertNotNull(legacy.discovery);assertNull(legacy.directory);assertNull(legacy.serverTime)
         val modern=f.service.execute(ApiRequest.Lookup(f.state.ghostCloakId(),capabilities=true),f.state.read())
-        assertNotNull(modern.directory!!.bundle.capability)
+        assertNotNull(modern.discovery);assertNull(modern.directory)
+        assertEquals(16,f.inventory().available)
+        val allocated=f.service.execute(ApiRequest.Allocate(f.state.ghostCloakId(),RandomIdentifiers.create()),f.state.read())
+        assertNotNull(allocated.directory!!.bundle.capability)
+        f.service.execute(ApiRequest.Allocate(f.state.ghostCloakId(),RandomIdentifiers.create()),f.state.read())
         assertEquals(14,f.inventory().available)
         assertEquals(14,db.transaction {db.prekeys.get(r.deviceId)!!.pool.count {it.capability!=null}})
         try {f.service.execute(ApiRequest.Capabilities(listOf(signed.first())),f.state.read());fail()}
@@ -98,7 +102,7 @@ class CapabilityTest {
             val publisher=CapabilityDiscovery(b.engine,b.state,"ghostcloak.local",b.client)
             publisher.publish()
             val discovery=CapabilityDiscovery(a.engine,a.state,"ghostcloak.local",a.client)
-            val (entry,time)=discovery.lookup(b.state.ghostCloakId())
+            val (entry,time)=discovery.lookup(b.state.ghostCloakId(),RandomIdentifiers.create())
             a.engine.establishSession(entry.bundle.remote())
             val ar=LocalRepository(a.records);ar.save(Contact("fixture",entry.accountId,"bob",entry.deviceId))
             val sender=ConversationService(a.engine,ar);sender.open()
@@ -137,7 +141,7 @@ class CapabilityTest {
             // Keep a second unused bundle available for refresh after ordinary lookup.
             b.client.publish(b.registration.deviceId,listOf(b.engine.publicBundle().publicData()))
             val discovery=CapabilityDiscovery(a.engine,a.state,"ghostcloak.local",a.client)
-            val (entry,time)=discovery.lookup(b.state.ghostCloakId());assertNull(entry.bundle.capability)
+            val (entry,time)=discovery.lookup(b.state.ghostCloakId(),RandomIdentifiers.create());assertNull(entry.bundle.capability)
             a.engine.establishSession(entry.bundle.remote())
             val repo=LocalRepository(a.records);repo.save(Contact("fixture",entry.accountId,"bob",entry.deviceId))
             val service=ConversationService(a.engine,repo);service.open();discovery.accept(entry,time,service)
@@ -168,7 +172,7 @@ class CapabilityTest {
                 directory=DirectoryEntry(f.registration.accountId,b.deviceId,f.registration.routingId,id,b))))
         })
         val discovery=CapabilityDiscovery(f.engine,f.state,"ghostcloak.local",client)
-        try { discovery.lookup(id); fail("Accepted old protocol") }
+        try { discovery.lookup(id,RandomIdentifiers.create()); fail("Accepted old protocol") }
         catch(e:ApiFailure) { assertEquals("invalid_response",e.code) }
         assertEquals(1,calls)
         assertFalse(LocalRepository(f.records).attachmentPeer(b.deviceId))

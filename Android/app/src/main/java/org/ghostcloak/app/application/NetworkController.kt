@@ -5,6 +5,7 @@ import org.ghostcloak.crypto.*
 import org.ghostcloak.messaging.*
 import org.ghostcloak.protocol.*
 import org.ghostcloak.storage.KeystoreDeviceAuth
+import org.ghostcloak.identity.RandomIdentifiers
 import org.ghostcloak.transport.*
 import java.net.URI
 import kotlinx.coroutines.sync.Mutex
@@ -169,7 +170,23 @@ class NetworkController(
         val normalized = GhostCloakIds.normalize(ghostCloakId)
         if(service.blockedContacts().any {it.ghostCloakId==normalized}) throw AppFailure(AppError.BLOCKED)
         operation(NetworkOperation.LOOKUP) {
-            val (e,time) = capabilities.lookup(normalized)
+            // Persist before the request: a lost allocation response or process restart reuses
+            // the same ID and therefore the same one-time bundle. The record is SQLCipher-only.
+            val pendingKey="network/prekey-allocation/${URI(origin).host}/$normalized"
+              val (allocationId,retrying)=records.transaction {
+                  records.read(pendingKey)?.decodeToString()?.let { encoded ->
+                      val parts=encoded.split('|')
+                      val created=parts.getOrNull(1)?.toLongOrNull()
+                      val age=created?.let {System.currentTimeMillis()-it}
+                      requireApi(RandomIdentifiers.valid(parts[0]) && age!=null && age in 0 until 82800000L,
+                          "allocation_retry_expired",409)
+                      parts[0] to true
+                  } ?: RandomIdentifiers.create().let {
+                      records.write(pendingKey,"$it|${System.currentTimeMillis()}".encodeToByteArray()); it to false
+                  }
+              }
+            val (e,time) = if(retrying) capabilities.allocate(normalized,allocationId)
+                else capabilities.lookup(normalized,allocationId)
             val b = e.bundle
             requireApi(e.deviceId == b.deviceId && e.ghostCloakId == normalized, "directory_mismatch")
             if(service.blockedContacts().any {it.publicUserId==e.accountId || it.remoteDeviceId==e.deviceId}) throw AppFailure(AppError.BLOCKED)
@@ -177,6 +194,7 @@ class NetworkController(
                 b.signedId, b.signedKey, b.signature, b.kyberId, b.kyberKey, b.kyberSignature)
             service.importCard(ContactCardCodec.encode(card)); state.remember(e)
             capabilities.accept(e,time,service)
+            records.transaction {records.remove(pendingKey)}
             status = NetworkStatus.CONNECTED
         }
     }

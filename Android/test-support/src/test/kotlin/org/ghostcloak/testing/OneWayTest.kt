@@ -37,7 +37,7 @@ object OneWayProbe {
         val a = Person("alice"); a.create()
         val b = Person("bob"); b.create()
         val c = Person("charlie"); c.create()
-        val bob = a.client.lookup(b.state.ghostCloakId())
+        val bob = a.client.lookup(b.state.ghostCloakId(),RandomIdentifiers.create())
         val k = bob.bundle
         a.service.importCard(ContactCardCodec.encode(ContactCard(2, bob.accountId, bob.ghostCloakId, bob.deviceId,
             k.registrationId, k.identity, k.preKeyId, k.preKey, k.signedId, k.signedKey, k.signature, k.kyberId, k.kyberKey, k.kyberSignature)))

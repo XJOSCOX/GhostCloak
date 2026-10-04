@@ -67,7 +67,7 @@ class AnonymousIdentityTest {
         val c = register("Esaie")
         assertEquals(listOf("7K4M9Q2FX8DR", "Q6WVT3KC8M5P", "D9RX5H2NK7VW"),
             listOf(a, b, c).map { it.first.ghostCloakId() })
-        val directory = service.execute(ApiRequest.Lookup(b.first.ghostCloakId()), a.first.read()).directory!!
+        val directory = service.execute(ApiRequest.Lookup(b.first.ghostCloakId()), a.first.read()).discovery!!
         assertEquals(b.second.accountId, directory.accountId)
         assertEquals(b.first.ghostCloakId(), directory.ghostCloakId)
         assertEquals(3, db.transaction { db.accounts.size() })

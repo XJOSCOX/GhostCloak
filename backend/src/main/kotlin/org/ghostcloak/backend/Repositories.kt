@@ -18,6 +18,15 @@ interface BackendDatabase : AccountRepository, DeviceRepository, PreKeyRepositor
     }
     val blobs: Rows<BlobRow>
     val blobBudgets: Rows<BlobBudget>
+    val allocations: Rows<AllocationRow>
+    fun countAllocations(requester:String, target:String?=null):Int =
+        allocations.all().count { it.requester==requester && (target==null || it.target==target) }
+    fun expireAllocations(now:Long, limit:Int=128) {
+        allocations.all().filter { it.bundle!=null && it.responseExpiresAt<=now }.sortedBy {it.responseExpiresAt}.take(limit).forEach {
+            allocations.put(it.id,AllocationRow(it.id,it.requester,it.target,null,it.responseExpiresAt,it.expiresAt))
+        }
+        allocations.all().filter { it.expiresAt<=now }.sortedBy {it.expiresAt}.take(limit).forEach { allocations.remove(it.id) }
+    }
     fun <T> transaction(block: () -> T): T
 }
 @Serializable class BlobRow(val id: String, val owner: String, val device: String, val length: Long,
@@ -37,11 +46,14 @@ interface BackendDatabase : AccountRepository, DeviceRepository, PreKeyRepositor
 @Serializable class MailboxRow(val id: String, val recipientRoutingId: String, val encryptedEnvelope: ByteArray, val receivedAt: Long, val expiresAt: Long)
 @Serializable class SubmissionRow(val id: String, val sender: String, val digest: ByteArray, val serverId: String, val expiresAt: Long, val acknowledged: Boolean = false,
     val mailboxExpiresAt:Long=0)
+/** Short-lived public-bundle retry evidence; requester/target relationship is sensitive metadata. */
+@Serializable class AllocationRow(val id:String, val requester:String, val target:String,
+    val bundle:PublicBundle?, val responseExpiresAt:Long, val expiresAt:Long)
 @Serializable private class DatabaseState(
     val accounts: MutableMap<String, AccountRow> = mutableMapOf(), val devices: MutableMap<String, DeviceRow> = mutableMapOf(),
     val prekeys: MutableMap<String, PrekeyRow> = mutableMapOf(), val challenges: MutableMap<String, ChallengeRow> = mutableMapOf(),
     val sessions: MutableMap<String, SessionRow> = mutableMapOf(), val mailbox: MutableMap<String, MailboxRow> = mutableMapOf(),
-    val submissions: MutableMap<String, SubmissionRow> = mutableMapOf(),
+    val submissions: MutableMap<String, SubmissionRow> = mutableMapOf(), val allocations: MutableMap<String, AllocationRow> = mutableMapOf(),
     val blobs: MutableMap<String, BlobRow> = mutableMapOf(), val blobBudgets: MutableMap<String, BlobBudget> = mutableMapOf())
 
 /** Bounded local development adapter only. All access must occur inside transaction. */
@@ -59,6 +71,7 @@ class MemoryBackendDatabase : BackendDatabase {
     override val prekeys = rows { state.prekeys }; override val challenges = rows { state.challenges }
     override val sessions = rows { state.sessions }; override val mailbox = rows { state.mailbox }
     override val submissions = rows { state.submissions }
+    override val allocations = rows { state.allocations }
     override val blobs = rows { state.blobs }; override val blobBudgets = rows { state.blobBudgets }
     @Synchronized override fun <T> transaction(block: () -> T): T {
         val before = NetworkCodec.encode(state)

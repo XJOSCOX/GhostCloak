@@ -7,8 +7,16 @@ import java.security.MessageDigest
 import java.time.Clock
 import java.util.Base64
 
-enum class ServerOperation { REGISTER, CHALLENGE, VERIFY, REVOKE, LOOKUP, PREKEYS, SEND, FETCH, ACK, RECOVER_ISSUE, RECOVER_VERIFY }
+enum class ServerOperation { REGISTER, CHALLENGE, VERIFY, REVOKE, LOOKUP, ALLOCATE, ALLOCATE_TARGET, PREKEYS, SEND, FETCH, ACK, RECOVER_ISSUE, RECOVER_VERIFY, CHALLENGE_GLOBAL, VERIFY_GLOBAL }
 fun interface RateLimiter { fun allow(operation: ServerOperation, principal: String, now: Long): Boolean }
+internal fun rateMaximum(operation:ServerOperation, limit:Int):Int = when(operation) {
+    ServerOperation.CHALLENGE_GLOBAL, ServerOperation.VERIFY_GLOBAL -> minOf(limit * 10,600)
+    ServerOperation.CHALLENGE, ServerOperation.REGISTER, ServerOperation.VERIFY,
+    ServerOperation.RECOVER_ISSUE, ServerOperation.RECOVER_VERIFY -> minOf(limit,10)
+    ServerOperation.ALLOCATE_TARGET -> minOf(limit,2)
+    ServerOperation.LOOKUP -> minOf(limit * 3,180)
+    else -> limit
+}
 /** Fixed-window prototype control. No IP or device fingerprint collection. */
 class DevelopmentRateLimiter(private val limit: Int = 60) : RateLimiter {
     private val counters = mutableMapOf<Pair<ServerOperation, String>, Pair<Long, Int>>()
@@ -17,7 +25,7 @@ class DevelopmentRateLimiter(private val limit: Int = 60) : RateLimiter {
         counters.entries.removeIf { it.value.first != window }
         val key = operation to principal
         val count = counters[key]?.second ?: 0
-        val maximum=if(operation in setOf(ServerOperation.RECOVER_ISSUE,ServerOperation.RECOVER_VERIFY)) minOf(limit,10) else limit
+        val maximum=rateMaximum(operation,limit)
         if (count >= maximum || (key !in counters && counters.size >= 2048)) return false
         counters[key] = window to count + 1
         return true
@@ -25,6 +33,7 @@ class DevelopmentRateLimiter(private val limit: Int = 60) : RateLimiter {
 }
 enum class ServerResult { OK, REJECTED, INTERNAL }
 fun interface ServerLogger { fun record(operation: ServerOperation, result: ServerResult) }
+enum class AbuseEvent { RECOVERY_RATE_LIMITED, GLOBAL_RATE_LIMITED, PREKEY_ALLOCATION_RATE_LIMITED, PREKEY_ALLOCATION_REPLAYED }
 class BackendPolicy(val audience: String = "ghostcloak.local", val challengeTtl: Long = 60000,
     val sessionTtl: Long = 300000, val mailboxTtl: Long = 604800000, val dedupeTtl: Long = 2592000000) {
     init { require(audience.matches(Regex("[a-z0-9.-]{1,100}"))); require(challengeTtl in 1000..120000 && sessionTtl in 1000..900000 && mailboxTtl in 1000..604800000 && dedupeTtl in mailboxTtl..2592000000) }
@@ -32,18 +41,29 @@ class BackendPolicy(val audience: String = "ghostcloak.local", val challengeTtl:
 class MailboxService(private val db: BackendDatabase, private val clock: Clock = Clock.systemUTC(),
     val policy: BackendPolicy = BackendPolicy(), private val rate: RateLimiter = DevelopmentRateLimiter(),
     private val logger: ServerLogger = ServerLogger { _, _ -> },
+    private val abuseLog:(AbuseEvent)->Unit = {},
     private val newGhostCloakId: () -> String = { GhostCloakIds.generate() }) {
     private val random = SecureRandom()
+    private data class AllocationOutcome(val response:ApiResponse?=null,val failure:ApiFailure?=null)
     private fun now() = clock.millis()
     private fun freshBytes() = ByteArray(32).also(random::nextBytes)
     private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
     private fun tokenHash(token: String): String { requireApi(token.matches(Regex("[A-Za-z0-9_-]{43}")), "unauthorized", 401); return hex(DeviceAuth.digest(token.toByteArray())) }
+    private fun anonymousPrincipal(r:ApiRequest):String = when(r) {
+        is ApiRequest.RecoveryIssue -> hex(DeviceAuth.digest(r.authPublicKey))
+        is ApiRequest.RecoveryVerify -> hex(DeviceAuth.digest(r.authPublicKey + r.challengeId.toByteArray()))
+        is ApiRequest.Issue -> hex(DeviceAuth.digest(r.accountId.toByteArray() + r.deviceId.toByteArray() + r.registrationHash))
+        is ApiRequest.Register -> hex(DeviceAuth.digest(r.challengeId.toByteArray()))
+        is ApiRequest.Verify -> hex(DeviceAuth.digest(r.challengeId.toByteArray()))
+        else -> "anonymous"
+    }
     fun operation(r: ApiRequest): ServerOperation = when(r) {
         is ApiRequest.RecoveryIssue -> ServerOperation.RECOVER_ISSUE
         is ApiRequest.RecoveryVerify -> ServerOperation.RECOVER_VERIFY
         is ApiRequest.Issue -> ServerOperation.CHALLENGE; is ApiRequest.Register -> ServerOperation.REGISTER
         is ApiRequest.Verify -> ServerOperation.VERIFY; is ApiRequest.Revoke -> ServerOperation.REVOKE
         is ApiRequest.Lookup, is ApiRequest.CapabilityLookup -> ServerOperation.LOOKUP
+        is ApiRequest.Allocate -> ServerOperation.ALLOCATE
         is ApiRequest.Prekeys, is ApiRequest.Capabilities -> ServerOperation.PREKEYS; is ApiRequest.Send -> ServerOperation.SEND
         is ApiRequest.Fetch -> ServerOperation.FETCH; is ApiRequest.Ack -> ServerOperation.ACK
     }
@@ -53,8 +73,16 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         val op = operation(r)
         try {
             requireApi(r.version == 2, "unsupported_version")
-            val principal = if (token == null || r is ApiRequest.RecoveryIssue || r is ApiRequest.RecoveryVerify) "anonymous" else db.transaction { db.sessions.get(tokenHash(token))?.deviceId ?: "anonymous" }
-            requireApi(rate.allow(op, principal, now()), "rate_limited", 429)
+            val preauth = r is ApiRequest.RecoveryIssue || r is ApiRequest.RecoveryVerify || r is ApiRequest.Issue || r is ApiRequest.Register || r is ApiRequest.Verify
+            val principal = if (preauth) anonymousPrincipal(r) else if(token==null) "anonymous" else db.transaction { db.sessions.get(tokenHash(token))?.deviceId ?: "anonymous" }
+            if(r !is ApiRequest.Allocate && !rate.allow(op, principal, now())) {
+                if(r is ApiRequest.RecoveryIssue || r is ApiRequest.RecoveryVerify) abuseLog(AbuseEvent.RECOVERY_RATE_LIMITED)
+                throw ApiFailure(429,"rate_limited")
+            }
+            if (r is ApiRequest.Issue || r is ApiRequest.RecoveryIssue)
+                if(!rate.allow(ServerOperation.CHALLENGE_GLOBAL,"all",now())) {abuseLog(AbuseEvent.GLOBAL_RATE_LIMITED);throw ApiFailure(429,"rate_limited")}
+            if (r is ApiRequest.RecoveryVerify)
+                if(!rate.allow(ServerOperation.VERIFY_GLOBAL,"all",now())) {abuseLog(AbuseEvent.GLOBAL_RATE_LIMITED);throw ApiFailure(429,"rate_limited")}
             cleanup()
             // Claim a challenge in its own committed transaction. Every verification attempt burns it,
             // including failed registration or a bad signature. No error can restore it.
@@ -64,7 +92,11 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
                 is ApiRequest.Verify -> consume(r.challengeId)
                 else -> null
             }
-            val result = db.transaction {
+            val result = if(r is ApiRequest.Allocate) {
+                val outcome=db.transaction { allocate(r,token ?: throw ApiFailure(401,"unauthorized")) }
+                outcome.failure?.let {throw it}
+                requireNotNull(outcome.response)
+            } else db.transaction {
                 when(r) {
                     is ApiRequest.RecoveryIssue -> recoveryIssue(r)
                     is ApiRequest.RecoveryVerify -> recover(r,claimed!!)
@@ -198,11 +230,9 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
                 requireApi(id == r.ghostCloakId, "invalid_ghostcloak_id")
                 val account = db.accounts.all().firstOrNull { it.ghostCloakId == id } ?: throw ApiFailure(404, "contact_unavailable")
                 val target = db.devices.get(account.deviceId)!!
-                val keys = db.prekeys.get(target.id)!!
-                val bundle = keys.pool.firstOrNull() ?: throw ApiFailure(404, "contact_unavailable")
-                db.prekeys.put(target.id, PrekeyRow(target.id, keys.pool.drop(1), keys.usedEc, keys.usedPq, keys.signed))
-                ApiResponse(directory = DirectoryEntry(account.id, target.id, target.routingId, id,
-                    if(r.capabilities) bundle else bundle.withCapability(null)), serverTime=if(r.capabilities) now() else null)
+                requireApi(db.prekeys.get(target.id)?.pool?.isNotEmpty()==true,"contact_unavailable",404)
+                // Old clients require directory.bundle and therefore fail explicitly; no key is allocated by search.
+                ApiResponse(discovery=DirectorySummary(account.id,target.id,target.routingId,id))
             }
             is ApiRequest.CapabilityLookup -> {
                 requireApi(RandomIdentifiers.valid(r.deviceId))
@@ -281,6 +311,37 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
             }
             else -> throw ApiFailure(400, "invalid_request")
         }
+    }
+    private fun allocate(r:ApiRequest.Allocate, token:String):AllocationOutcome {
+        val requester=authenticateSession(token)
+        val id=GhostCloakIds.normalize(r.ghostCloakId)
+        requireApi(id==r.ghostCloakId && RandomIdentifiers.valid(r.allocationId),"invalid_request")
+        val rowId=requester.id+"/"+r.allocationId
+        db.allocations.get(rowId)?.let { old ->
+            if(old.requester!=requester.id) return AllocationOutcome(failure=ApiFailure(409,"allocation_conflict"))
+            if(old.responseExpiresAt<=now() || old.bundle==null) return AllocationOutcome(failure=ApiFailure(404,"contact_unavailable"))
+            val target=db.devices.get(old.target) ?: return AllocationOutcome(failure=ApiFailure(404,"contact_unavailable"))
+            val account=db.accounts.get(target.accountId) ?: return AllocationOutcome(failure=ApiFailure(404,"contact_unavailable"))
+            if(account.ghostCloakId!=id) return AllocationOutcome(failure=ApiFailure(409,"allocation_conflict"))
+            abuseLog(AbuseEvent.PREKEY_ALLOCATION_REPLAYED)
+            return AllocationOutcome(ApiResponse(directory=DirectoryEntry(account.id,target.id,target.routingId,id,old.bundle),serverTime=now()))
+        }
+        // Charge unknown and known IDs on the same path, before any account lookup.
+        val time=now()
+        if(!rate.allow(ServerOperation.ALLOCATE,requester.id,time) ||
+            !rate.allow(ServerOperation.ALLOCATE_TARGET,requester.id+"/"+id,time))
+            return AllocationOutcome(failure=ApiFailure(429,"rate_limited")).also {abuseLog(AbuseEvent.PREKEY_ALLOCATION_RATE_LIMITED)}
+        if(db.allocations.size()>=10000 || db.countAllocations(requester.id)>=64)
+            return AllocationOutcome(failure=ApiFailure(429,"rate_limited")).also {abuseLog(AbuseEvent.PREKEY_ALLOCATION_RATE_LIMITED)}
+        val account=db.accounts.all().firstOrNull {it.ghostCloakId==id} ?: return AllocationOutcome(failure=ApiFailure(404,"contact_unavailable"))
+        val target=db.devices.get(account.deviceId) ?: return AllocationOutcome(failure=ApiFailure(404,"contact_unavailable"))
+        if(db.countAllocations(requester.id,target.id)>=4)
+            return AllocationOutcome(failure=ApiFailure(429,"rate_limited")).also {abuseLog(AbuseEvent.PREKEY_ALLOCATION_RATE_LIMITED)}
+        val keys=db.prekeys.get(target.id) ?: return AllocationOutcome(failure=ApiFailure(404,"contact_unavailable"))
+        val bundle=keys.pool.firstOrNull() ?: return AllocationOutcome(failure=ApiFailure(404,"contact_unavailable"))
+        db.prekeys.put(target.id,PrekeyRow(target.id,keys.pool.drop(1),keys.usedEc,keys.usedPq,keys.signed))
+        db.allocations.put(rowId,AllocationRow(rowId,requester.id,target.id,bundle,time+86400000L,time+172800000L))
+        return AllocationOutcome(ApiResponse(directory=DirectoryEntry(account.id,target.id,target.routingId,id,bundle),serverTime=time))
     }
     private fun send(sender: DeviceRow, r: ApiRequest.Send): ApiResponse {
         requireApi(RandomIdentifiers.valid(r.submissionId) && RandomIdentifiers.valid(r.recipientRoutingId))

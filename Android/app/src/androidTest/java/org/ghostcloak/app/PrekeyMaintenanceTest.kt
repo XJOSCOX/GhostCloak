@@ -29,8 +29,8 @@ class PrekeyMaintenanceTest {
             assertEquals(16,registration.bundles.size)
             val token=api.sessions.keys.single()
             repeat(16) {
-                api.execute(TransportRequest(java.net.URI("https://fixture.invalid/v2/directory/lookup"),
-                    NetworkCodec.encode<ApiRequest>(ApiRequest.Lookup(id)),"Bearer $token"))
+                api.execute(TransportRequest(java.net.URI("https://fixture.invalid/v2/directory/prekey"),
+                    NetworkCodec.encode<ApiRequest>(ApiRequest.Allocate(id,RandomIdentifiers.create())),"Bearer $token"))
             }
             app.close()
             EncryptedEndpointStore.open(context,endpoint).use {records->records.transaction {
@@ -46,7 +46,7 @@ class PrekeyMaintenanceTest {
             assertEquals(1,api.registrations)
             val response=api.execute(TransportRequest(java.net.URI("https://fixture.invalid/v2/directory/lookup"),
                 NetworkCodec.encode<ApiRequest>(ApiRequest.Lookup(id)),"Bearer $token"))
-            assertNotNull(NetworkCodec.decode<ApiResponse>(response.body).directory)
+            assertNotNull(NetworkCodec.decode<ApiResponse>(response.body).discovery)
         } finally {app.close()}
     }
 }

@@ -90,7 +90,7 @@ class ProductionHttpServer(private val service:MailboxService, private val healt
 class RetentionWorker(private val service:MailboxService,private val db:PostgresDatabase,private val blobs:BlobService? = null):AutoCloseable {
     private val executor=Executors.newSingleThreadScheduledExecutor()
     @Volatile var healthy=true; private set
-    init {executor.scheduleWithFixedDelay({try {service.cleanup(); db.cleanupRateLimits(System.currentTimeMillis()); blobs?.cleanup(); healthy=true} catch(_:Exception) {healthy=false}},0,30,TimeUnit.SECONDS)}
+    init {executor.scheduleWithFixedDelay({try {service.cleanup(); db.expireAllocations(System.currentTimeMillis()); db.cleanupRateLimits(System.currentTimeMillis()); blobs?.cleanup(); healthy=true} catch(_:Exception) {healthy=false}},0,30,TimeUnit.SECONDS)}
     override fun close(){executor.shutdownNow()}
 }
 fun main(args:Array<String>) {
@@ -102,7 +102,8 @@ fun main(args:Array<String>) {
         if(args.contentEquals(arrayOf("migrate"))) return
         require(args.isEmpty())
         db.checkServiceRole()
-        val service=MailboxService(db,policy=BackendPolicy(audience=config.audience),rate=PostgresRateLimiter(db))
+        val abuseLogger=java.util.logging.Logger.getLogger("GhostCloakAbuse")
+        val service=MailboxService(db,policy=BackendPolicy(audience=config.audience),rate=PostgresRateLimiter(db),abuseLog={abuseLogger.info(it.name)})
         // Explicit deployment opt-in after directory/quota/ingress checks. Absent means no blob API.
         val blobs=System.getenv("GHOSTCLOAK_ATTACHMENTS_DIR")?.let { BlobService(db,service,java.io.File(it)) }
         val worker=RetentionWorker(service,db,blobs)

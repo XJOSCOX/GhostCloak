@@ -1,10 +1,10 @@
-# Ghost Cloak v2 / V007 deployment runbook
+# Ghost Cloak v2 / V007–V008 deployment runbook
 
 This is the current source runbook. The [Phase 1C2 instructions](DEPLOYMENT_PHASE_1C2_HISTORICAL.md) and [v1 API notes](../protocol/API_V1.md) are historical. This file documents a procedure; it does not attest that a particular VPS, database, backup, or phone has been inspected. The operator owns the deployment and must authorize every destructive step. Do not apply `migrate` to an unreviewed database.
 
 ## Contract and migration boundary
 
-The Android and backend source use `/v2` account, auth, directory, prekey and mailbox routes. Public addressing is by a random 12-character Ghost Cloak ID. A display name is local/E2EE profile data, not a server username. Attachment routes remain under `/v1/attachments`; the nginx allowlist needs the [separate attachment route fragment](attachments.nginx.conf.fragment) alongside the [v2 origin template](tunnel/nginx-origin.conf.template). Review their combined syntax and method/body limits for the deployed artifact. The server migration chain is V001 through [V007](../backend/src/main/resources/db/V007__anonymous_identity_cutover.sql). V007 **deletes all rows** in 13 identity-bound tables, then drops `accounts.username` and adds constrained `accounts.ghostcloak_id`. It is not an in-place account conversion. An existing account cannot be recovered by knowing its Ghost Cloak ID alone.
+The Android and backend source use `/v2` account, auth, directory, prekey and mailbox routes. Public addressing is by a random 12-character Ghost Cloak ID. A display name is local/E2EE profile data, not a server username. Attachment routes remain under `/v1/attachments`; the nginx allowlist needs the [separate attachment route fragment](attachments.nginx.conf.fragment) alongside the [v2 origin template](tunnel/nginx-origin.conf.template). Review their combined syntax and method/body limits for the deployed artifact. The server migration chain is V001 through [V008](../backend/src/main/resources/db/V008__prekey_allocation_retry.sql). V007 **deletes all rows** in 13 identity-bound tables, then drops `accounts.username` and adds constrained `accounts.ghostcloak_id`. It is not an in-place account conversion. V008 is additive and creates a bounded retry table for prekey allocation; follow [the Q.2 rollout note](ABUSE_RESISTANCE_Q2.md) for its coordinated backend/Android deployment. An existing account cannot be recovered by knowing its Ghost Cloak ID alone.
 
 ## Before touching the server
 

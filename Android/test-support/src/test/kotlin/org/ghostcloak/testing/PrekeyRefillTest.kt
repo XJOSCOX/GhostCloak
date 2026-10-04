@@ -6,6 +6,7 @@ import org.ghostcloak.crypto.*
 import org.ghostcloak.messaging.*
 import org.ghostcloak.protocol.*
 import org.ghostcloak.transport.*
+import org.ghostcloak.identity.RandomIdentifiers
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -31,7 +32,14 @@ internal class PrekeyFixture(val db: BackendDatabase = MemoryBackendDatabase()) 
         state.markRegistered(grant.ghostCloakId)
     }
     fun inventory()=service.execute(ApiRequest.Prekeys(registration.deviceId,emptyList(),inspect=true),state.read()).prekeyInventory!!
-    fun lookup()=service.execute(ApiRequest.Lookup(state.ghostCloakId()),state.read()).directory!!.bundle
+    // This fixture simulates many distinct requesters consuming the recipient pool. Allocation
+    // abuse limits are tested separately; refill must still handle a genuinely exhausted pool.
+    fun lookup()=db.transaction {
+        val row=db.prekeys.get(registration.deviceId)!!
+        val bundle=row.pool.first()
+        db.prekeys.put(registration.deviceId,PrekeyRow(registration.deviceId,row.pool.drop(1),row.usedEc,row.usedPq,row.signed))
+        bundle
+    }
     fun refill()=PrekeyRefill(records,engine,"ghostcloak.local",{registration.deviceId},{r ->
         failure?.let {throw it}
         if(!r.inspect) publishes++
@@ -100,7 +108,7 @@ class PrekeyRefillTest {
         for(status in listOf(404,409)) {
             val lookup=HttpGhostClient("https://fixture.invalid",tokens,transport=GhostCloakTransport {
                 TransportResponse(status,NetworkLimits.CONTENT_TYPE,NetworkCodec.encode(ApiResponse(error="opaque")))})
-            try {lookup.lookup("7K4M9Q2FX8DR");fail()} catch(e:ApiFailure){assertEquals("contact_unavailable",e.code)}
+            try {lookup.lookup("7K4M9Q2FX8DR",RandomIdentifiers.create());fail()} catch(e:ApiFailure){assertEquals("contact_unavailable",e.code)}
         }
     }
 }

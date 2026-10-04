@@ -215,7 +215,7 @@ class PostgresTest {
                 fun card(p:Person):String {val r=p.registration;val k=r.bundles.single();return ContactCardCodec.encode(ContactCard(2,r.accountId,p.state.ghostCloakId(),k.deviceId,k.registrationId,k.identity,k.preKeyId,k.preKey,k.signedId,k.signedKey,k.signature,k.kyberId,k.kyberKey,k.kyberSignature))}
                 sender.importCard(card(b));receiver.importCard(card(a))
                 val client=HttpGhostClient("http://127.0.0.1:$port",a.state,true)
-                a.state.remember(client.lookup(b.state.ghostCloakId()))
+                a.state.remember(client.lookup(b.state.ghostCloakId(),RandomIdentifiers.create()))
                 val outbox=DurableOutbox(a.records,a.engine,NetworkMailboxTransport(client,a.state))
                 // Revoked token queues locally; fresh login and sync deliver the exact saved entry.
                 call(backend,a,ApiRequest.Revoke())
@@ -360,7 +360,7 @@ class PostgresTest {
             try {
                 val results=listOf(s1,s2).map {s->pool.submit<Boolean>{try {a.state.save(s.execute(proof).session!!.token);true} catch(_:ApiFailure){false}}}.map {it.get()}
                 assertEquals(1,results.count {it})
-                val bundles=listOf(s1,s2).map {s->pool.submit<Boolean>{try {call(s,a,ApiRequest.Lookup(b.state.ghostCloakId()));true} catch(_:ApiFailure){false}}}.map {it.get()}
+                val bundles=listOf(s1,s2).map {s->pool.submit<Boolean>{try {call(s,a,ApiRequest.Allocate(b.state.ghostCloakId(),RandomIdentifiers.create()));true} catch(_:ApiFailure){false}}}.map {it.get()}
                 assertEquals(1,bundles.count {it})
                 a.engine.establishSession(b.registration.bundles.single().remote())
                 val wire=EnvelopeCodec.encode(a.engine.encrypt(b.registration.deviceId,"hello bob".toByteArray()))
@@ -383,6 +383,21 @@ class PostgresTest {
             f.source.connection.use {it.createStatement().use {s->s.execute("UPDATE schema_history SET checksum=repeat('0',64)")}}
             try {PostgresDatabase(f.source);fail()} catch(_:IllegalStateException){}
             assertTrue(c.random.isNotEmpty())
+        }
+    }
+    @Test fun v008AllocationRetrySurvivesProcessRecreationAndExpiresToTombstone()=runBlocking {
+        Fixture().use {f->
+            val service=f.service();val a=register(service,"alice");val b=register(service,"bob")
+            val request=ApiRequest.Allocate(b.state.ghostCloakId(),RandomIdentifiers.create())
+            val first=call(service,a,request).directory!!.bundle.preKeyId
+            val reopened=f.service(PostgresDatabase(f.source))
+            assertEquals(first,call(reopened,a,request).directory!!.bundle.preKeyId)
+            assertEquals(0,f.db.transaction {f.db.prekeys.get(b.registration.deviceId)!!.pool.size})
+            val after=System.currentTimeMillis()+86400001L
+            f.db.transaction {f.db.expireAllocations(after)}
+            assertNull(f.db.transaction {f.db.allocations.all().single().bundle})
+            try {call(reopened,a,request);fail()} catch(e:ApiFailure){assertEquals(404,e.status)}
+            assertEquals(0,f.db.transaction {f.db.prekeys.get(b.registration.deviceId)!!.pool.size})
         }
     }
     @Test fun productionRejectsMissingUnsafeConfiguration() {

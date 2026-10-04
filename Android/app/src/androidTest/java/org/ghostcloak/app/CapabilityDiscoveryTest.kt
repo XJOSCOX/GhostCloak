@@ -10,6 +10,30 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CapabilityDiscoveryTest {
+    @Test fun lostAllocationResponseAndRuntimeRecreationReuseOneRecipientPrekey()=runBlocking {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val api=SyntheticNetwork();var drop=true
+        val wire=GhostCloakTransport {request ->
+            val response=api.execute(request)
+            if(NetworkCodec.decode<ApiRequest>(request.body) is ApiRequest.Allocate && drop) {
+                drop=false;throw java.io.IOException("synthetic lost allocation response")
+            }
+            response
+        }
+        val slot=RandomIdentifiers.create();var a=AppRuntime(context,"https://fixture.invalid",slot,wire)
+        val b=AppRuntime(context,"https://fixture.invalid",RandomIdentifiers.create(),wire)
+        try {
+            a.use {a.create(it,"alice")};b.use {b.create(it,"bob")}
+            val id=b.ownGhostCloakId()!!;val device=b.use {it.open()!!.deviceId}
+            assertEquals(16,api.availablePrekeys(device))
+            try {a.use {a.addNetwork(id,it)};fail("Expected lost response")} catch(_:Exception) {}
+            assertEquals(15,api.availablePrekeys(device))
+            a.close();a=AppRuntime(context,"https://fixture.invalid",slot,wire)
+            a.use {it.open();a.addNetwork(id,it)}
+            assertEquals(15,api.availablePrekeys(device))
+            assertTrue(api.sent.isEmpty())
+        } finally {a.close();b.close()}
+    }
     @Test fun registeredPhonesDiscoverSupportWithoutReplyAndEncryptedReopenPreservesProof()=runBlocking {
         val context=InstrumentationRegistry.getInstrumentation().targetContext
         val api=SyntheticNetwork();val endpoint=RandomIdentifiers.create()
@@ -32,11 +56,11 @@ class CapabilityDiscoveryTest {
     }
     @Test fun unknownPeerRefreshAfterUpgradeDoesNotConsumeKeyOrSendMessage()=runBlocking {
         val context=InstrumentationRegistry.getInstrumentation().targetContext
-        val api=SyntheticNetwork();var advertise=false;var consumed=0;var refreshes=0
+        val api=SyntheticNetwork();var advertise=false;var allocated=0;var refreshes=0
         val wire=GhostCloakTransport {request ->
             val r=NetworkCodec.decode<ApiRequest>(request.body)
             if(r is ApiRequest.Capabilities && !advertise) TransportResponse(400,NetworkLimits.CONTENT_TYPE,NetworkCodec.encode(ApiResponse(error="invalid_schema")))
-            else {if(r is ApiRequest.Lookup)consumed++;if(r is ApiRequest.CapabilityLookup)refreshes++;api.execute(request)}
+            else {if(r is ApiRequest.Allocate)allocated++;if(r is ApiRequest.CapabilityLookup)refreshes++;api.execute(request)}
         }
         val a=AppRuntime(context,"https://fixture.invalid",RandomIdentifiers.create(),wire)
         val endpointB=RandomIdentifiers.create()
@@ -52,7 +76,7 @@ class CapabilityDiscoveryTest {
             b.use {b.syncNetwork(it)}
             assertArrayEquals(identity.publicKey,b.use {it.open()!!.publicKey})
             assertTrue(a.supportsAttachments(bid))
-            assertEquals(1,consumed);assertEquals(2,refreshes)
+            assertEquals(1,allocated);assertEquals(2,refreshes)
             assertTrue(api.sent.isEmpty());assertEquals(2,api.registrations)
         } finally {a.close();b.close()}
     }

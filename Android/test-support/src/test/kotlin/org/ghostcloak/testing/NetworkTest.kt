@@ -130,7 +130,7 @@ class NetworkTest {
             val challenge = f.service.execute(ApiRequest.Issue(malformed.accountId, malformed.deviceId, "register", DeviceAuth.digest(NetworkCodec.encode(malformed)))).challenge!!
             reject { f.service.execute(ApiRequest.Register(malformed, challenge.id, ByteArray(72))) }
             reject(400) { f.call(a, ApiRequest.Lookup("nobody")) }
-            assertEquals(a.registration.deviceId, f.call(a, ApiRequest.Lookup(a.state.ghostCloakId())).directory!!.deviceId)
+            assertEquals(a.registration.deviceId, f.call(a, ApiRequest.Lookup(a.state.ghostCloakId())).discovery!!.deviceId)
         }
     }
     @Test fun prekeysConsumeAtomicallyAndEnforceOwnershipAndBounds() = runBlocking {
@@ -138,7 +138,7 @@ class NetworkTest {
             val a = f.person("alice"); val b = f.person("bob")
             val executor = Executors.newFixedThreadPool(2)
             try {
-                val results = (1..2).map { executor.submit<Boolean> { try { f.call(a, ApiRequest.Lookup(b.state.ghostCloakId())); true } catch (_: ApiFailure) { false } } }.map { it.get() }
+                val results = (1..2).map { executor.submit<Boolean> { try { f.call(a, ApiRequest.Allocate(b.state.ghostCloakId(),RandomIdentifiers.create())); true } catch (_: ApiFailure) { false } } }.map { it.get() }
                 assertEquals(1, results.count { it })
             } finally { executor.shutdownNow() }
             val keys = b.engine.preKeys.createPublicationBundle().publicData()
@@ -150,7 +150,7 @@ class NetworkTest {
             reject { f.call(b, ApiRequest.Prekeys(b.registration.deviceId, listOf(other, other))) }
             val invalid = PublicBundle(other.deviceId, other.registrationId, ByteArray(33), other.preKeyId, other.preKey, other.signedId, other.signedKey, other.signature, other.kyberId, other.kyberKey, other.kyberSignature)
             reject { f.call(b, ApiRequest.Prekeys(b.registration.deviceId, listOf(invalid))) }
-            assertEquals(keys.preKeyId, f.call(a, ApiRequest.Lookup(b.state.ghostCloakId())).directory!!.bundle.preKeyId)
+            assertEquals(keys.preKeyId, f.call(a, ApiRequest.Allocate(b.state.ghostCloakId(),RandomIdentifiers.create())).directory!!.bundle.preKeyId)
         }
     }
     @Test fun mailboxValidationIdempotencyAndExpiry() = runBlocking {
@@ -254,7 +254,7 @@ class NetworkTest {
             val copy = f.challenge(owner)
             copy.random[0] = (copy.random[0].toInt() xor 1).toByte()
             reject(401) { f.service.execute(ApiRequest.Verify(owner.registration.accountId, owner.registration.deviceId, copy.id, owner.state.sign(copy))) }
-            assertEquals(owner.registration.deviceId, f.call(owner, ApiRequest.Lookup(owner.state.ghostCloakId())).directory!!.deviceId)
+            assertEquals(owner.registration.deviceId, f.call(owner, ApiRequest.Lookup(owner.state.ghostCloakId())).discovery!!.deviceId)
         }
     }
 }

@@ -96,6 +96,16 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
     fun accountId():String=records.transaction {records.read(prefix+"account")?.decodeToString() ?: throw ApiFailure(401,"credential_missing")}
     fun ownRouting():String=records.transaction {records.read(prefix+"routing")?.decodeToString() ?: throw ApiFailure(401,"credential_missing")}
     fun ownDevice():String=records.transaction {records.read("local/device")?.decodeToString() ?: throw ApiFailure(401,"credential_missing")}
+    fun allocationIdFor(ghostCloakId:String):String=records.transaction {
+        val id=GhostCloakIds.normalize(ghostCloakId)
+        val key=prefix+"allocation/"+id
+        records.read(key)?.decodeToString()?.split('|')?.let { parts ->
+            val age=parts.getOrNull(1)?.toLongOrNull()?.let {System.currentTimeMillis()-it}
+            requireApi(RandomIdentifiers.valid(parts[0]) && age!=null && age in 0 until 82800000L,"allocation_retry_expired",409)
+            parts[0]
+        } ?: RandomIdentifiers.create().also {records.write(key,"$it|${System.currentTimeMillis()}".toByteArray())}
+    }
+    fun completeAllocation(ghostCloakId:String)=records.transaction {records.remove(prefix+"allocation/"+GhostCloakIds.normalize(ghostCloakId))}
     fun connectionState():AccountConnectionState=records.transaction {
         when {
             records.read(prefix+"logged-out")!=null -> AccountConnectionState.LOGGED_OUT
@@ -159,12 +169,13 @@ class NetworkAccount(private val client: HttpGhostClient, private val state: End
     suspend fun logout() { client.call(ApiRequest.Revoke()); state.save(null) }
     /** Establish trust through the engine before storing routing data; public IDs never bypass pins. */
     suspend fun connect(ghostCloakId: String, engine: SecureSessionEngine): DirectoryEntry {
-        val entry = client.lookup(ghostCloakId)
+        val entry = client.lookup(ghostCloakId,state.allocationIdFor(ghostCloakId))
         requireApi(entry.ghostCloakId == GhostCloakIds.normalize(ghostCloakId) && entry.deviceId == entry.bundle.deviceId &&
             RandomIdentifiers.valid(entry.accountId) && RandomIdentifiers.valid(entry.routingId), "directory_mismatch")
         entry.bundle.validate()
         engine.establishSession(entry.bundle.remote())
         state.remember(entry)
+        state.completeAllocation(ghostCloakId)
         return entry
     }
 }

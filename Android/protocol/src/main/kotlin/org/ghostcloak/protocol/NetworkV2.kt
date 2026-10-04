@@ -53,6 +53,8 @@ class RecoveredBinding(val accountId:String, val deviceId:String, val routingId:
 @Serializable
 class DirectoryEntry(val accountId: String, val deviceId: String, val routingId: String, val ghostCloakId: String, val bundle: PublicBundle)
 @Serializable
+class DirectorySummary(val accountId: String, val deviceId: String, val routingId: String, val ghostCloakId: String)
+@Serializable
 class SenderProfile(val accountId: String, val deviceId: String, val routingId: String, val ghostCloakId: String)
 @Serializable
 class DeliveryStatus(val submissionId: String, val acknowledged: Boolean,
@@ -73,6 +75,7 @@ sealed class ApiRequest {
     @Serializable @SerialName("revoke") class Revoke(override val version: Int = 2) : ApiRequest()
     @Serializable @SerialName("lookup") class Lookup(val ghostCloakId: String, override val version: Int = 2,
         @EncodeDefault(EncodeDefault.Mode.NEVER) val capabilities: Boolean = false) : ApiRequest()
+    @Serializable @SerialName("prekey_allocate") class Allocate(val ghostCloakId:String, val allocationId:String, override val version:Int=2):ApiRequest()
     @Serializable @SerialName("capability_lookup") class CapabilityLookup(val deviceId: String, override val version: Int = 2) : ApiRequest()
     @Serializable @SerialName("capabilities") class Capabilities(val advertisements: List<PublicBundle> = emptyList(), override val version: Int = 2) : ApiRequest()
     @Serializable @SerialName("prekeys") class Prekeys(val deviceId: String, val bundles: List<PublicBundle>, override val version: Int = 2,
@@ -93,7 +96,8 @@ class ApiResponse(val version: Int = 2, val challenge: Challenge? = null, val se
     @EncodeDefault(EncodeDefault.Mode.NEVER) val prekeyInventory:PrekeyPool?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val serverTime:Long?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val capabilityInventory:List<PublicBundle> = emptyList(),
-    @EncodeDefault(EncodeDefault.Mode.NEVER) val registeredId:String? = null) { override fun toString() = "ApiResponse(<redacted>)" }
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val registeredId:String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val discovery:DirectorySummary? = null) { override fun toString() = "ApiResponse(<redacted>)" }
 
 @Serializable class PrekeyPool(val available: Int, val acceptedIds: List<Int> = emptyList())
 
@@ -145,6 +149,7 @@ object ApiRoutes {
         is ApiRequest.Issue -> "/v2/auth/challenge"; is ApiRequest.Register -> "/v2/accounts"
         is ApiRequest.Verify -> "/v2/auth/verify"; is ApiRequest.Revoke -> "/v2/auth/revoke"
         is ApiRequest.Lookup -> "/v2/directory/lookup"
+        is ApiRequest.Allocate -> "/v2/directory/prekey"
         is ApiRequest.CapabilityLookup -> "/v2/directory/capability"
         is ApiRequest.Capabilities -> "/v2/devices/capabilities"
         is ApiRequest.Prekeys -> "/v2/devices/prekeys"; is ApiRequest.Send -> "/v2/messages"

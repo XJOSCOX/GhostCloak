@@ -35,9 +35,26 @@ class CapabilityDiscovery(private val engine: SecureSessionEngine, private val s
         } catch(e:CancellationException) {throw e}
         catch(_:ApiFailure) { /* Consumed-key race or offline: retry later; text stays usable. */ }
     }
-    suspend fun lookup(ghostCloakId:String): Pair<DirectoryEntry,Long?> {
-        val response=client.call(ApiRequest.Lookup(GhostCloakIds.normalize(ghostCloakId),capabilities=true),reportTransientFailure=false)
-        return (response.directory ?: throw ApiFailure(502,"invalid_response")) to response.serverTime
+    suspend fun discover(ghostCloakId:String):DirectorySummary {
+        val normalized=GhostCloakIds.normalize(ghostCloakId)
+        val summary=client.call(ApiRequest.Lookup(normalized),reportTransientFailure=false).discovery
+            ?: throw ApiFailure(502,"incompatible_server")
+        requireApi(summary.ghostCloakId==normalized,"directory_mismatch")
+        return summary
+    }
+    suspend fun lookup(ghostCloakId:String,allocationId:String): Pair<DirectoryEntry,Long?> {
+        val summary=discover(ghostCloakId)
+        val (entry,time)=allocate(summary.ghostCloakId,allocationId)
+        requireApi(entry.accountId==summary.accountId && entry.deviceId==summary.deviceId &&
+            entry.routingId==summary.routingId && entry.ghostCloakId==summary.ghostCloakId,"directory_mismatch")
+        return entry to time
+    }
+    suspend fun allocate(ghostCloakId:String,allocationId:String):Pair<DirectoryEntry,Long?> {
+        val normalized=GhostCloakIds.normalize(ghostCloakId)
+        val response=client.call(ApiRequest.Allocate(normalized,allocationId),reportTransientFailure=false)
+        val entry=response.directory ?: throw ApiFailure(502,"incompatible_server")
+        requireApi(entry.ghostCloakId==normalized && entry.bundle.deviceId==entry.deviceId,"directory_mismatch")
+        return entry to response.serverTime
     }
     suspend fun accept(entry:DirectoryEntry,time:Long?,service:ConversationService) {
         requireApi(entry.deviceId==entry.bundle.deviceId,"capability_binding")

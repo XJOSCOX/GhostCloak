@@ -10,7 +10,7 @@ import java.net.URI
 interface AccessTokenStore { fun read(): String?; fun save(token: String?); }
 interface RoutingDirectory { fun route(deviceId: String): String? }
 interface GhostAuthClient { suspend fun unauthenticated(request: ApiRequest): ApiResponse }
-interface GhostDirectoryClient { suspend fun lookup(ghostCloakId: String): DirectoryEntry; suspend fun publish(deviceId: String, bundles: List<PublicBundle>) }
+interface GhostDirectoryClient { suspend fun lookup(ghostCloakId: String, allocationId: String): DirectoryEntry; suspend fun publish(deviceId: String, bundles: List<PublicBundle>) }
 
 /** Protocol/auth adapter. Connection policy belongs to GhostCloakTransport, never message logic. */
 class HttpGhostClient(
@@ -100,7 +100,16 @@ class HttpGhostClient(
             throw e
         }
     }
-    override suspend fun lookup(ghostCloakId: String) = call(ApiRequest.Lookup(GhostCloakIds.normalize(ghostCloakId))).directory ?: throw ApiFailure(502, "invalid_response")
+    override suspend fun lookup(ghostCloakId: String, allocationId:String):DirectoryEntry {
+        val normalized=GhostCloakIds.normalize(ghostCloakId)
+        val summary=call(ApiRequest.Lookup(normalized)).discovery ?: throw ApiFailure(502,"incompatible_server")
+        requireApi(summary.ghostCloakId==normalized,"directory_mismatch")
+        requireApi(org.ghostcloak.identity.RandomIdentifiers.valid(allocationId),"invalid_allocation_id")
+        val entry=call(ApiRequest.Allocate(normalized,allocationId)).directory
+            ?: throw ApiFailure(502,"incompatible_server")
+        requireApi(entry.accountId==summary.accountId && entry.deviceId==summary.deviceId && entry.routingId==summary.routingId,"directory_mismatch")
+        return entry
+    }
     override suspend fun publish(deviceId: String, bundles: List<PublicBundle>) { call(ApiRequest.Prekeys(deviceId, bundles)) }
 }
 interface IdempotentMessageTransport : EncryptedMessageTransport {

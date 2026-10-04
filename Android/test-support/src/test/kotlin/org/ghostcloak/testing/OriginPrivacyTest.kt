@@ -63,7 +63,7 @@ internal object OriginPrivacyProbe {
                 }
                 val a=Person("alice");val b=Person("bob");val c=Person("charlie")
                 a.register();b.register();c.register()
-                val entry=call(ApiRequest.Lookup(b.state.ghostCloakId()),a.state.read()).directory!!
+                val entry=call(ApiRequest.Allocate(b.state.ghostCloakId(),RandomIdentifiers.create()),a.state.read()).directory!!
                 assertEquals(b.registration.accountId,entry.accountId);assertEquals(b.registration.routingId,entry.routingId)
                 a.engine.establishSession(entry.bundle.remote())
                 val wire=EnvelopeCodec.encode(a.engine.encrypt(b.registration.deviceId,"hello bob".toByteArray()))
@@ -77,7 +77,7 @@ internal object OriginPrivacyProbe {
                 assertEquals("hello bob",b.engine.decrypt(EnvelopeCodec.decode(delivery.encryptedEnvelope)).decodeToString())
                 repeat(2){call(ApiRequest.Ack(listOf(id)),b.state.read())}
                 assertTrue(call(ApiRequest.Fetch(),b.state.read()).deliveries.isEmpty())
-                assertTrue(principals.all {it in setOf("anonymous",a.registration.deviceId,b.registration.deviceId,c.registration.deviceId)})
+                assertTrue(principals.all {it in setOf("anonymous","all",a.registration.deviceId,b.registration.deviceId,c.registration.deviceId) || it.matches(Regex("[0-9a-f]{64}")) || it.startsWith(a.registration.deviceId+"/")})
                 val health=URI("http://127.0.0.1:$port/health").toURL().openConnection() as HttpURLConnection
                 try {
                     headers.forEach {health.setRequestProperty(it,addresses.first())}

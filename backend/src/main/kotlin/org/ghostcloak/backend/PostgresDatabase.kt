@@ -67,7 +67,14 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
                 execute("INSERT INTO schema_history VALUES (7,?)",anonymousChecksum)
             }
             check(query("SELECT checksum FROM schema_history WHERE version=7") {it.getString(1)}.singleOrNull()==anonymousChecksum) {"Migration validation failed"}
-            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 7) { "Unknown schema version" }
+            val allocationMigration=javaClass.getResourceAsStream("/db/V008__prekey_allocation_retry.sql")!!.use {it.readBytes()}
+            val allocationChecksum=DeviceAuth.digest(allocationMigration).joinToString("") {"%02x".format(it)}
+            if(migrate && query("SELECT version FROM schema_history WHERE version=8") {it.getInt(1)}.isEmpty()) {
+                allocationMigration.toString(Charsets.UTF_8).split(';').filter {it.isNotBlank()}.forEach {execute(it)}
+                execute("INSERT INTO schema_history VALUES (8,?)",allocationChecksum)
+            }
+            check(query("SELECT checksum FROM schema_history WHERE version=8") {it.getString(1)}.singleOrNull()==allocationChecksum) {"Migration validation failed"}
+            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 8) { "Unknown schema version" }
         }
     }
     override fun expireMailbox(now:Long,limit:Int) {
@@ -121,6 +128,12 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
     override val sessions=rows("access_sessions","token_hash",read={SessionRow(it.getString("token_hash"),it.getString("device_id"),it.getLong("expires_at"))}) { _,r -> execute("INSERT INTO access_sessions VALUES (?,?,?)",r.hash,r.deviceId,r.expiresAt) }
     override val mailbox=rows("mailbox_messages",read={MailboxRow(it.getString("id"),it.getString("recipient_routing_id"),it.getBytes("encrypted_envelope"),it.getLong("received_at"),it.getLong("expires_at"))}) { _,r -> execute("INSERT INTO mailbox_messages VALUES (?,?,?,?,?)",r.id,r.recipientRoutingId,r.encryptedEnvelope,r.receivedAt,r.expiresAt) }
     override val submissions=rows("message_deduplication",read={SubmissionRow(it.getString("id"),it.getString("sender_device_id"),it.getBytes("payload_hash"),it.getString("server_message_id"),it.getLong("expires_at"),it.getBoolean("acknowledged"),it.getLong("mailbox_expires_at"))}) { _,r -> execute("INSERT INTO message_deduplication (id,sender_device_id,payload_hash,server_message_id,expires_at,acknowledged,mailbox_expires_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET acknowledged=excluded.acknowledged",r.id,r.sender,r.digest,r.serverId,r.expiresAt,r.acknowledged,r.mailboxExpiresAt) }
+    override val allocations=rows("prekey_allocations",read={AllocationRow(it.getString("id"),it.getString("requester_device"),it.getString("target_device"),it.getBytes("bundle")?.let { bytes -> NetworkCodec.decode<PublicBundle>(bytes,4096) },it.getLong("response_expires_at"),it.getLong("expires_at"))}) { _,r ->
+        execute("INSERT INTO prekey_allocations VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET bundle=excluded.bundle",r.id,r.requester,r.target,r.bundle?.let { NetworkCodec.encode(it) },r.responseExpiresAt,r.expiresAt)
+    }
+    override fun countAllocations(requester:String,target:String?):Int = if(target==null)
+        query("SELECT count(*) FROM prekey_allocations WHERE requester_device=?",requester) {it.getInt(1)}.single()
+        else query("SELECT count(*) FROM prekey_allocations WHERE requester_device=? AND target_device=?",requester,target) {it.getInt(1)}.single()
     override val prekeys=object:Rows<PrekeyRow> {
         override fun get(id:String):PrekeyRow? {
             val device=devices.get(id) ?: return null
@@ -163,6 +176,11 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
         execute("UPDATE one_time_prekeys e SET public_key=NULL WHERE public_key IS NOT NULL AND NOT EXISTS (SELECT 1 FROM prekey_bundles b WHERE b.device_id=e.device_id AND b.ec_id=e.key_id)")
         execute("UPDATE pq_prekeys p SET public_key=NULL,signature=NULL WHERE public_key IS NOT NULL AND NOT EXISTS (SELECT 1 FROM prekey_bundles b WHERE b.device_id=p.device_id AND b.pq_id=p.key_id)")
     }
+    override fun expireAllocations(now:Long,limit:Int) {
+        require(limit in 1..128)
+        execute("UPDATE prekey_allocations SET bundle=NULL WHERE id IN (SELECT id FROM prekey_allocations WHERE bundle IS NOT NULL AND response_expires_at<=? ORDER BY response_expires_at,id LIMIT ?)",now,limit)
+        execute("DELETE FROM prekey_allocations WHERE id IN (SELECT id FROM prekey_allocations WHERE expires_at<=? ORDER BY expires_at,id LIMIT ?)",now,limit)
+    }
 }
 class PostgresRateLimiter(private val db:PostgresDatabase, private val limit:Int=60):RateLimiter {
     override fun allow(operation:ServerOperation,principal:String,now:Long):Boolean=db.transaction {
@@ -170,7 +188,7 @@ class PostgresRateLimiter(private val db:PostgresDatabase, private val limit:Int
         db.execute("DELETE FROM rate_limits WHERE window_start < ?",now/60000)
         val row=db.query("SELECT count FROM rate_limits WHERE operation=? AND principal=?",operation.name,bucket) {it.getInt(1)}.singleOrNull() ?: 0
         if(row==0 && db.query("SELECT count(*) FROM rate_limits") {it.getInt(1)}.single()>=2048) return@transaction false
-        val maximum=if(operation in setOf(ServerOperation.RECOVER_ISSUE,ServerOperation.RECOVER_VERIFY)) minOf(limit,10) else limit
+        val maximum=rateMaximum(operation,limit)
         if(row>=maximum) false else {
             db.execute("INSERT INTO rate_limits VALUES (?,?,?,1) ON CONFLICT(operation,principal) DO UPDATE SET count=rate_limits.count+1",operation.name,bucket,now/60000); true
         }

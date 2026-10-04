@@ -1,5 +1,14 @@
 # Android Studio development
 
+## Phase 1M status
+
+Inactive Device Protection is **not implemented or enabled**. The Phase 1M
+offline, cross-reboot, rollback-resistant deadline has a security stop-condition
+blocker; see [INACTIVE_DEVICE_PROTECTION_DESIGN.md](INACTIVE_DEVICE_PROTECTION_DESIGN.md).
+Do not describe the existing Safe Exit engine as an active inactivity timer or
+test automatic expiry on a physical phone. No Phase 1M APK, backend migration,
+Android DB migration, or server deployment is required from this audit.
+
 ## Phase 1L pre-release identity cutover
 
 See [ANONYMOUS_IDENTITY_DESIGN.md](ANONYMOUS_IDENTITY_DESIGN.md) for the final

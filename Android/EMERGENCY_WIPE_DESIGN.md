@@ -1,5 +1,10 @@
 # Phase 1K — emergency wipe design and infrastructure
 
+Phase 1M Inactive Device Protection is **not enabled**. Its proposed automatic
+trigger would reuse this Safe Exit journal/coordinator, but the requested
+local-only offline cross-reboot clock guarantee has a stop-condition blocker.
+See [INACTIVE_DEVICE_PROTECTION_DESIGN.md](INACTIVE_DEVICE_PROTECTION_DESIGN.md).
+
 Current status: **1K.2C Safe Exit UX and protected Settings implemented; debug-only non-destructive arming, no destructive wipe engine**.
 
 Audit date: 2026-10-03. Baseline: `9b09739`.

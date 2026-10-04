@@ -1,5 +1,13 @@
 # Messenger design
 
+## Phase 1M Inactive Device Protection (blocked)
+
+[The Phase 1M audit](INACTIVE_DEVICE_PROTECTION_DESIGN.md) records why the
+proposed local-only automatic Safe Exit timer is not implemented or exposed:
+an ordinary Android app cannot distinguish a long offline shutdown plus clock
+rollback from a short shutdown after reboot. Existing Safe Exit remains manual;
+no automatic destructive arming, backend change or SQL migration was made.
+
 ## Phase 1L anonymous identity cutover
 
 [ANONYMOUS_IDENTITY_DESIGN.md](ANONYMOUS_IDENTITY_DESIGN.md) records the implemented

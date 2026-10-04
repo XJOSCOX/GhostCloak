@@ -4,16 +4,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.screens.ConversationScreen
+import org.ghostcloak.app.ui.privacy.SensitiveClipboardProvider
 import org.ghostcloak.app.ui.theme.GhostCloakTheme
 import org.ghostcloak.identity.SessionLifecycle
 import org.ghostcloak.messaging.*
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Rule
 import org.junit.Test
 
@@ -63,5 +67,21 @@ class ViewOnceScreenTest {
         compose.runOnIdle { owner.lifecycle.handleLifecycleEvent(Lifecycle.Event.ON_STOP) }
         compose.onNodeWithText("private text").assertDoesNotExist()
         assertEquals(1,consumed)
+    }
+    @Test fun repeatedComposerFocusAndTypingDoesNotCrash() {
+        compose.setContent { GhostCloakTheme {
+            val nativeClipboard=LocalClipboard.current
+            SensitiveClipboardProvider {
+                assertSame(nativeClipboard,LocalClipboard.current)
+                ConversationScreen(AppState(loading=false),contact,{},{},{_,_->},{})
+            }
+        } }
+        repeat(8) {
+            compose.onNodeWithText("Write a message…").performClick()
+        }
+        compose.onNodeWithText("Write a message…").performTextInput("hello")
+        compose.onNodeWithText("hello").assertIsDisplayed()
+        compose.onNodeWithText("hello").performTouchInput { longClick() }
+        repeat(4) { compose.onNodeWithText("hello").performClick() }
     }
 }

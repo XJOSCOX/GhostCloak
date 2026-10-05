@@ -212,9 +212,10 @@ class AppRuntime internal constructor(
         }
         if (networkConfigured && !inDemo) connectNetwork(service)
     }
-    suspend fun send(service: ConversationService, id: String, text: String, viewOnce:Boolean=false): Message {
-        if (!inDemo && networkConfigured) return network!!.send(service, id, text,viewOnce)
-        check(!viewOnce)
+    suspend fun send(service: ConversationService, id: String, text: String, viewOnce:Boolean=false,
+        replyTo:org.ghostcloak.messaging.ReplyReference?=null): Message {
+        if (!inDemo && networkConfigured) return network!!.send(service, id, text,viewOnce,replyTo)
+        check(!viewOnce && replyTo==null)
         val message = service.send(id, text)
         demo?.deliver(message)
         return message

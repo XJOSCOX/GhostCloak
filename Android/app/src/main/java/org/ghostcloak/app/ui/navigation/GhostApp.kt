@@ -114,7 +114,8 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             { model.setDisappearing(id, it) }, { model.refresh() }, { model.block(id,true);nav.popBackStack() },
                             { text,success -> model.send(id,text,success,true) },
                             { message, show -> model.revealViewOnceText(id,message,show) },
-                            { message -> model.consumeViewOnce(id,message) })
+                            { message -> model.consumeViewOnce(id,message) },
+                            { text,reference,success -> model.send(id,text,success,replyTo=reference) })
                     }
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable

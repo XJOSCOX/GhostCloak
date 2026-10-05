@@ -292,10 +292,11 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         expired.forEach { delete(it.conversationId, it.localId) }
         expired.size + expireRequests()
     }
-    fun acceptedOutgoing(id: String, localId: String) = records.transaction {
+    fun acceptedOutgoing(id: String, localId: String, envelopeId: String? = null) = records.transaction {
         val message = read<Message>("app/message/$id/$localId") ?: return@transaction
         if (message.direction != Direction.OUTGOING || message.state in setOf(MessageState.DELIVERED,MessageState.EXPIRED_UNDELIVERED)) return@transaction
         save(message.copy(state = MessageState.SERVER_ACCEPTED, expiry = null,
+            envelopeId = envelopeId ?: message.envelopeId,
             body=if(message.viewOnceKind!=null) "" else message.body))
         if(message.viewOnceKind==ViewOnceKind.PHOTO) records.remove("app/attachment/$id/$localId")
     }

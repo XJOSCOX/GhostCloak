@@ -111,8 +111,9 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             repository.directoryCapability(entry.deviceId,proof.issuedAt,proof.expiresAt-time)
         } else repository.clearDirectoryCapability(entry.deviceId)
     }
-    suspend fun sendNetwork(id:String,body:String,outbox:DurableOutbox,viewOnce:Boolean=false):Message=action {
-        enqueueNetwork(id, body, repository.policy(id), false, outbox,viewOnce)
+    suspend fun sendNetwork(id:String,body:String,outbox:DurableOutbox,viewOnce:Boolean=false,
+        replyTo:ReplyReference?=null):Message=action {
+        enqueueNetwork(id, body, repository.policy(id), false, outbox,viewOnce,replyTo)
     }
     /** Internal foundation API: caller must have confirmed upload and compatible peer support. */
     suspend fun sendAttachment(id:String,descriptor:org.ghostcloak.attachments.AttachmentDescriptor,
@@ -131,7 +132,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             try { repository.attachment(id,localId,encoded) } finally { encoded.fill(0) }
             onEnqueued(message)
         } } finally { bytes.fill(0) }
-        try { outbox.process(submission) { repository.acceptedOutgoing(id,it.submissionId) } }
+        try { outbox.process(submission) { repository.acceptedOutgoing(id,it.submissionId,it.envelopeId) } }
         catch (_:ApiFailure) { return@action message }
         outbox.removeFinished(submission)
         repository.messages(id).firstOrNull {it.localId==submission} ?: message
@@ -152,19 +153,31 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     suspend fun serverReference(time:Long)=action {repository.serverReference(time);repository.expireRequests()}
     suspend fun reconcileExpiry() = action { repository.expire() }
     private suspend fun enqueueNetwork(id: String, body: String, seconds: Int, control: Boolean, outbox: DurableOutbox,
-        viewOnce:Boolean=false): Message {
+        viewOnce:Boolean=false,replyTo:ReplyReference?=null): Message {
         networkAllowed(id)
         repository.capacity()
-        val bytes = ConversationPayload.encode(body, seconds, control,identity?.displayName,viewOnce)
+        if(replyTo!=null) {
+            require(!viewOnce && !control && RandomIdentifiers.valid(replyTo.envelopeId))
+            val target=repository.messages(id).singleOrNull { it.envelopeId==replyTo.envelopeId && !it.policyEvent }
+                ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+            val kind=when {
+                target.viewOnceKind!=null -> ReplyKind.VIEW_ONCE
+                repository.attachment(id,target.localId)!=null -> ReplyKind.ATTACHMENT
+                target.disappearingSeconds>0 -> ReplyKind.DISAPPEARING
+                else -> ReplyKind.TEXT
+            }
+            require(kind==replyTo.kind)
+        }
+        val bytes = ConversationPayload.encode(body, seconds, control,identity?.displayName,viewOnce,replyTo)
         lateinit var message: Message
         val submission = try { outbox.enqueue(id, bytes) { submission ->
             message = Message(submission, id, Direction.OUTGOING, if (control) ConversationPayload.policyText(seconds) else body,
                 repository.clock.now().wall, MessageState.PENDING, disappearingSeconds = seconds, policyEvent = control,
-                viewOnceKind=if(viewOnce) ViewOnceKind.TEXT else null)
+                viewOnceKind=if(viewOnce) ViewOnceKind.TEXT else null,replyTo=replyTo)
             repository.save(message)
             if (control) repository.policy(id, seconds)
         } } finally { bytes.fill(0) }
-        val result = try { outbox.process(submission) { repository.acceptedOutgoing(id, it.submissionId) } }
+        val result = try { outbox.process(submission) { repository.acceptedOutgoing(id, it.submissionId,it.envelopeId) } }
             catch (_: org.ghostcloak.protocol.ApiFailure) { return message }
         if (result.state == OutboxState.FAILED) repository.save(message.copy(state = MessageState.FAILED))
         outbox.removeFinished(submission)
@@ -188,7 +201,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 throw e
             }
             val result=outbox.process(id) {
-                repository.acceptedOutgoing(entry.deviceId, it.submissionId)
+                repository.acceptedOutgoing(entry.deviceId, it.submissionId,it.envelopeId)
                 repository.profileSynced(entry.deviceId,it.submissionId)
             }
             repository.messages(entry.deviceId).firstOrNull {it.localId==id}?.let { message ->
@@ -261,7 +274,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 now.wall,MessageState.RECEIVED,envelope.envelopeId, content.seconds,
                 if (!content.control && content.seconds > 0) ExpiryDeadline.start(content.seconds, now) else null, content.control,
                 viewOnceKind=content.viewOnceKind,
-                viewOnceState=if(content.viewOnceKind!=null) ViewOnceState.AVAILABLE else null),hash)
+                viewOnceState=if(content.viewOnceKind!=null) ViewOnceState.AVAILABLE else null,
+                replyTo=content.replyTo),hash)
             if (content.control) repository.policy(contact.remoteDeviceId, content.seconds)
             content.attachment?.let { encoded ->
                 try { repository.attachment(contact.remoteDeviceId,envelope.envelopeId,encoded) }

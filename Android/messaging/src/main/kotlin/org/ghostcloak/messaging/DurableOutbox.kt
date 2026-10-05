@@ -15,7 +15,7 @@ enum class CrashPoint { AFTER_LOCAL, AFTER_ENCRYPTION, AFTER_CIPHERTEXT, AFTER_S
 @Serializable
 class OutboxEntry(val submissionId: String, val deviceId: String, val state: OutboxState,
     val plaintext: ByteArray = byteArrayOf(), val ciphertext: ByteArray = byteArrayOf(),
-    val createdAt: Long, val serverId: String? = null) {
+    val createdAt: Long, val serverId: String? = null, val envelopeId: String? = null) {
     override fun toString() = "OutboxEntry(state=$state)"
 }
 /** One process-owned worker per endpoint, just like the existing ConversationService.
@@ -52,15 +52,16 @@ class DurableOutbox(private val records: EndpointRecords, private val engine: Se
             records.transaction { put(OutboxEntry(id, entry.deviceId, OutboxState.ENCRYPTION_PENDING, createdAt = entry.createdAt)) }
             val envelope = try { engine.encrypt(entry.deviceId, entry.plaintext) } finally { entry.plaintext.fill(0) }
             crash(CrashPoint.AFTER_ENCRYPTION)
-            entry = OutboxEntry(id, entry.deviceId, OutboxState.CIPHERTEXT_READY, ciphertext = EnvelopeCodec.encode(envelope), createdAt = entry.createdAt)
+            entry = OutboxEntry(id, entry.deviceId, OutboxState.CIPHERTEXT_READY, ciphertext = EnvelopeCodec.encode(envelope), createdAt = entry.createdAt, envelopeId=envelope.envelopeId)
             records.transaction { put(entry) }
             crash(CrashPoint.AFTER_CIPHERTEXT)
         }
-        entry = OutboxEntry(id, entry.deviceId, OutboxState.UPLOAD_PENDING, ciphertext = entry.ciphertext, createdAt = entry.createdAt)
+        entry = OutboxEntry(id, entry.deviceId, OutboxState.UPLOAD_PENDING, ciphertext = entry.ciphertext, createdAt = entry.createdAt,
+            envelopeId=entry.envelopeId ?: EnvelopeCodec.decode(entry.ciphertext).envelopeId)
         records.transaction { put(entry) }
         val serverId = transport.submit(id, entry.deviceId, EnvelopeCodec.decode(entry.ciphertext))
         crash(CrashPoint.AFTER_SERVER_ACCEPTANCE)
-        entry = OutboxEntry(id, entry.deviceId, OutboxState.SERVER_ACCEPTED, createdAt = entry.createdAt, serverId = serverId)
+        entry = OutboxEntry(id, entry.deviceId, OutboxState.SERVER_ACCEPTED, createdAt = entry.createdAt, serverId = serverId, envelopeId=entry.envelopeId)
         records.transaction { put(entry); accepted(entry) }; entry
     } }
     fun removeFinished(id: String) = records.transaction { val entry = get(id); require(entry.state in setOf(OutboxState.SERVER_ACCEPTED, OutboxState.FAILED)); records.remove(key(id)) }

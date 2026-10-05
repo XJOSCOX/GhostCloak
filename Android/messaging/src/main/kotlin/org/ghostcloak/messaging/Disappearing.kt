@@ -3,6 +3,7 @@ package org.ghostcloak.messaging
 import kotlinx.serialization.Serializable
 import java.nio.ByteBuffer
 import java.security.SecureRandom
+import org.ghostcloak.identity.RandomIdentifiers
 
 enum class DisappearingTimer(val seconds: Int, val label: String) {
     OFF(0, "Off"), SECONDS_30(30, "30 seconds"), MINUTES_5(300, "5 minutes"),
@@ -21,7 +22,8 @@ object ConversationPayload {
     private val magic = byteArrayOf(-1, 71, 67, 80)
     class Content(val body: String, val seconds: Int, val control: Boolean, val attachment: ByteArray? = null,
         val supportsAttachments: Boolean = false, val displayName: String? = null,
-        val profileUpdate: Boolean = false, val viewOnceKind: ViewOnceKind? = null) {
+        val profileUpdate: Boolean = false, val viewOnceKind: ViewOnceKind? = null,
+        val replyTo: ReplyReference? = null) {
         override fun toString() = "Content(redacted)"
     }
     private fun profileBytes(displayName:String?):ByteArray = displayName?.let {
@@ -53,21 +55,23 @@ object ConversationPayload {
         } finally { encoded.fill(0) }
     }
     fun encode(body: String, seconds: Int, control: Boolean = false, displayName:String?=null,
-        viewOnce:Boolean=false): ByteArray {
+        viewOnce:Boolean=false, replyTo:ReplyReference?=null): ByteArray {
         require(!viewOnce || !control)
+        require(replyTo==null || (!control && !viewOnce && RandomIdentifiers.valid(replyTo.envelopeId)))
         DisappearingTimer.from(seconds)
         val text = if (control) { require(body.isEmpty()); byteArrayOf() } else TextRules.encode(body)
         try {
             if (text.size > MAX_TEXT) throw AppFailure(AppError.MESSAGE_TOO_LARGE)
             val profile=profileBytes(displayName)
-            val extension=if(16+text.size+attachmentSupport.size+profile.size<=16384) attachmentSupport else byteArrayOf()
-            val size = ((16 + text.size + extension.size + profile.size + 255) / 256) * 256
+            val replyBytes=replyTo?.let { byteArrayOf(it.kind.ordinal.toByte()) + it.envelopeId.toByteArray(Charsets.US_ASCII) } ?: byteArrayOf()
+            val extension=if(16+text.size+replyBytes.size+attachmentSupport.size+profile.size<=16384) attachmentSupport else byteArrayOf()
+            val size = ((16 + text.size + replyBytes.size + extension.size + profile.size + 255) / 256) * 256
             if(size>16384) throw AppFailure(AppError.MESSAGE_TOO_LARGE)
             val bytes = ByteArray(size).also { SecureRandom().nextBytes(it) }
-            ByteBuffer.wrap(bytes).put(magic).put(1).put(if (control) 2 else if(viewOnce) 5 else 1).putShort(0)
-                .putInt(seconds).putInt(text.size).put(text)
-            if (extension.isNotEmpty()) extension.copyInto(bytes, 16 + text.size)
-            if(profile.isNotEmpty()) profile.copyInto(bytes,16+text.size+extension.size)
+            ByteBuffer.wrap(bytes).put(magic).put(1).put(if (control) 2 else if(viewOnce) 5 else if(replyTo!=null) 7 else 1).putShort(0)
+                .putInt(seconds).putInt(text.size).put(text).put(replyBytes)
+            if (extension.isNotEmpty()) extension.copyInto(bytes, 16 + text.size+replyBytes.size)
+            if(profile.isNotEmpty()) profile.copyInto(bytes,16+text.size+replyBytes.size+extension.size)
             return bytes
         } finally { text.fill(0) }
     }
@@ -85,13 +89,21 @@ object ConversationPayload {
         if (!ByteArray(4).also { input.get(it) }.contentEquals(magic) || input.get().toInt() != 1)
             throw AppFailure(AppError.INVALID_TEXT)
         val type = input.get().toInt()
-        if (type !in 1..6 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
+        if (type !in 1..7 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
         val seconds = input.int; DisappearingTimer.from(seconds)
         val length = input.int
         if (length !in 0..MAX_TEXT || length > input.remaining() || (type in setOf(2,4) && length != 0) ||
             (type == 4 && (seconds != 0 || bytes.size != 256))) throw AppFailure(AppError.INVALID_TEXT)
         val text = ByteArray(length).also { input.get(it) }
-        var offset=16+length
+        val reply = if(type==7) {
+            if(input.remaining()<37) throw AppFailure(AppError.INVALID_TEXT)
+            val kind=ReplyKind.entries.getOrNull(input.get().toInt()) ?: throw AppFailure(AppError.INVALID_TEXT)
+            val idBytes=ByteArray(36).also(input::get)
+            val id=idBytes.toString(Charsets.US_ASCII)
+            if(!RandomIdentifiers.valid(id)) throw AppFailure(AppError.INVALID_TEXT)
+            ReplyReference(id,kind)
+        } else null
+        var offset=16+length+(if(reply!=null) 37 else 0)
         val supports = bytes.size-offset>=attachmentSupport.size &&
             bytes.copyOfRange(offset,offset+attachmentSupport.size).contentEquals(attachmentSupport)
         if(supports) offset+=attachmentSupport.size
@@ -104,7 +116,7 @@ object ConversationPayload {
             TextRules.displayName(decoded)
             decoded
         } else null
-        val minimum=16+length+(if(supports) attachmentSupport.size else 0)+
+        val minimum=16+length+(if(reply!=null) 37 else 0)+(if(supports) attachmentSupport.size else 0)+
             (if(name!=null) profileMarker.size+1+name.encodeToByteArray().size else 0)
         if(((minimum+255)/256)*256!=bytes.size)
             throw AppFailure(AppError.INVALID_TEXT)
@@ -122,9 +134,9 @@ object ConversationPayload {
             } catch (_: Exception) { text.fill(0); throw AppFailure(AppError.INVALID_TEXT) }
         }
         val body = try { text.decodeToString(throwOnInvalidSequence = true) } finally { text.fill(0) }
-        if (type == 1 || type == 5) TextRules.encode(body).fill(0)
+        if (type == 1 || type == 5 || type == 7) TextRules.encode(body).fill(0)
         return Content(body, seconds, type == 2, supportsAttachments = supports,displayName=name,
-            viewOnceKind=if(type==5) ViewOnceKind.TEXT else null)
+            viewOnceKind=if(type==5) ViewOnceKind.TEXT else null,replyTo=reply)
     }
     fun policyText(seconds: Int) = if (seconds == 0) "Disappearing messages turned off"
         else "Disappearing messages set to ${DisappearingTimer.from(seconds).label}"

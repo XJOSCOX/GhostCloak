@@ -198,11 +198,12 @@ class NetworkController(
             status = NetworkStatus.CONNECTED
         }
     }
-    suspend fun send(service: ConversationService, id: String, text: String, viewOnce:Boolean=false): Message = operation(NetworkOperation.SEND) {
+    suspend fun send(service: ConversationService, id: String, text: String, viewOnce:Boolean=false,
+        replyTo:org.ghostcloak.messaging.ReplyReference?=null): Message = operation(NetworkOperation.SEND) {
         requireApi(state.registered(), "connect_required", 401)
         // Preserve the existing durable outbox even when the stored session is expired/offline.
         status = NetworkStatus.SYNCING
-        service.sendNetwork(id, text, outbox,viewOnce).also {
+        service.sendNetwork(id, text, outbox,viewOnce,replyTo).also {
             if (it.state == MessageState.SERVER_ACCEPTED) {
                 renewalBlocked = false; status = NetworkStatus.CONNECTED
             } else if (status == NetworkStatus.SYNCING) { status = NetworkStatus.ERROR }

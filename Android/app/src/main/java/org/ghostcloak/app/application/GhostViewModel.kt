@@ -207,8 +207,9 @@ class GhostViewModel internal constructor(application: Application, private val 
         else if (message.state == MessageState.FAILED) "Timer applies locally, but the update failed. Choose the timer again to retry."
         else null
     }
-    fun send(id: String, text: String, success: () -> Unit, viewOnce:Boolean=false) = run {
-        val message = runtime.send(it, id, text,viewOnce)
+    fun send(id: String, text: String, success: () -> Unit, viewOnce:Boolean=false,
+        replyTo:org.ghostcloak.messaging.ReplyReference?=null) = run {
+        val message = runtime.send(it, id, text,viewOnce,replyTo)
         polling.reset()
         pollingWake.trySend(Unit)
         // A saved pending message owns its draft now; Sync retries it without creating a duplicate.

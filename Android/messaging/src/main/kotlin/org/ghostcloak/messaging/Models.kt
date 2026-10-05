@@ -20,12 +20,16 @@ data class ContactStatus(val contact: Contact, val identity: RemoteIdentityStatu
 @Serializable enum class MessageState { PENDING, ENCRYPTED, SENT_TO_TRANSPORT, DELIVERED_LOCAL_SIMULATION, FAILED, SERVER_ACCEPTED, RECEIVED, DELIVERED, EXPIRED_UNDELIVERED }
 @Serializable enum class ViewOnceKind { TEXT, PHOTO }
 @Serializable enum class ViewOnceState { AVAILABLE, REVEALING, CONSUMED }
+@Serializable enum class ReplyKind { TEXT, ATTACHMENT, VIEW_ONCE, DISAPPEARING }
+/** An encrypted-envelope identifier, scoped to the current conversation. Never a server lookup key. */
+@Serializable data class ReplyReference(val envelopeId: String, val kind: ReplyKind)
 @Serializable
 data class Message(val localId: String, val conversationId: String, val direction: Direction,
     val body: String, val timestamp: Long, val state: MessageState, val envelopeId: String? = null,
     val disappearingSeconds: Int = 0, val expiry: ExpiryDeadline? = null, val policyEvent: Boolean = false,
     val viewOnceKind: ViewOnceKind? = null, val viewOnceState: ViewOnceState? = null,
-    @kotlinx.serialization.Transient val attachment: AttachmentSummary? = null) {
+    @kotlinx.serialization.Transient val attachment: AttachmentSummary? = null,
+    val replyTo: ReplyReference? = null) {
     val activeExpiry: ExpiryDeadline? get() = if (direction == Direction.OUTGOING && state != MessageState.DELIVERED) null else expiry
     override fun toString() = "Message(redacted)"
 }

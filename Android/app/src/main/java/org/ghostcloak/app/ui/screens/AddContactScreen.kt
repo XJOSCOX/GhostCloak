@@ -5,7 +5,6 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
-import androidx.compose.runtime.saveable.rememberSaveable
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.foundation.layout.*
@@ -32,7 +31,7 @@ import org.ghostcloak.app.ui.qr.SecureQrCaptureActivity
     var copied by remember { mutableStateOf(false) }
     var unblockTarget by remember {mutableStateOf<String?>(null)}
     val context = LocalContext.current
-    var ghostCloakId by rememberSaveable { mutableStateOf("") }
+    var ghostCloakId by remember { mutableStateOf("") }
     var invalidQr by remember { mutableStateOf(false) }
     var cameraDenied by remember { mutableStateOf(false) }
     val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->

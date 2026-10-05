@@ -1,6 +1,8 @@
 package org.ghostcloak.app
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.activity.result.ActivityResultRegistry
 import androidx.activity.result.ActivityResultRegistryOwner
@@ -9,6 +11,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.RGBLuminanceSource
@@ -99,5 +102,79 @@ class ContactQrTest {
         compose.onNodeWithText("Camera access is needed to scan. You can still enter an ID manually.").assertIsDisplayed()
         compose.onNodeWithText("Ghost Cloak ID").performTextInput("7K4M-9Q2F-X8DR")
         compose.onNodeWithText("Find and add contact").assertIsDisplayed()
+    }
+
+    @Test fun failedLookupDraftIsDiscardedWhenLeavingAndReturning() {
+        val visible=mutableStateOf(true)
+        val existing=Contact("saved", "account", "Existing", "saved-device", ghostCloakId="UTSA2G8DBEVG")
+        val state=AppState(loading=false,networkConfigured=true,contacts=listOf(ContactStatus(existing,null,null)))
+        var attempts=0
+        compose.setContent { GhostCloakTheme { if(visible.value) AddContactScreen(state,{}, {}, { attempts++ },import={}) } }
+        compose.onNodeWithText("Ghost Cloak ID").performTextInput(id)
+        compose.onNodeWithText("Find and add contact").performScrollTo().performClick()
+        assertEquals(1,attempts)
+        compose.runOnIdle {visible.value=false}
+        compose.runOnIdle {visible.value=true}
+        compose.onNodeWithText("Find and add contact").assertIsNotEnabled()
+        compose.onNodeWithText("Ghost Cloak ID").performTextInput("UTSA-2G8D-BEVG")
+        compose.onNodeWithText("This contact is already on this device.").assertExists()
+        assertEquals(1,state.contacts.size)
+    }
+
+    @Test fun idDraftIsNotRestoredFromSavedInstanceState() {
+        val restoration=StateRestorationTester(compose)
+        restoration.setContent { GhostCloakTheme { AddContactScreen(AppState(loading=false,networkConfigured=true),{}, {}, {},import={}) } }
+        compose.onNodeWithText("Ghost Cloak ID").performTextInput(id)
+        compose.onNodeWithText("Find and add contact").assertIsEnabled()
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText("Find and add contact").assertIsNotEnabled()
+        compose.onNodeWithText("Ghost Cloak ID").performTextInput(id)
+        compose.onNodeWithText("Find and add contact").assertIsEnabled()
+    }
+
+    @Test fun successfulLookupCanReturnAsAnExistingContactWithoutRetainingDraft() {
+        val visible=mutableStateOf(true)
+        val state=mutableStateOf(AppState(loading=false,networkConfigured=true))
+        var additions=0
+        compose.setContent { GhostCloakTheme { if(visible.value) AddContactScreen(state.value,{}, {}, { requested ->
+            additions++
+            val contact=Contact("accepted", "account", "Accepted", "remote-device",ghostCloakId=requested)
+            state.value=state.value.copy(contacts=listOf(ContactStatus(contact,null,null)))
+        },import={}) } }
+        compose.onNodeWithText("Ghost Cloak ID").performTextInput(id)
+        compose.onNodeWithText("Find and add contact").performScrollTo().performClick()
+        assertEquals(1,additions)
+        compose.runOnIdle {visible.value=false}
+        compose.runOnIdle {visible.value=true}
+        compose.onNodeWithText("Find and add contact").assertIsNotEnabled()
+        compose.onNodeWithText("Ghost Cloak ID").performTextInput(id)
+        compose.onNodeWithText("This contact is already on this device.").assertExists()
+        assertEquals(1,additions)
+    }
+
+    @Test fun scannedQrUsesTheSameEphemeralDraftAndSuccessfulLookupPath() {
+        val registry=object:ActivityResultRegistry() {
+            override fun <I,O> onLaunch(requestCode:Int, contract:ActivityResultContract<I,O>, input:I,
+                options:androidx.core.app.ActivityOptionsCompat?) {
+                when(contract) {
+                    is androidx.activity.result.contract.ActivityResultContracts.RequestPermission -> dispatchResult(requestCode,true)
+                    is com.journeyapps.barcodescanner.ScanContract -> dispatchResult(requestCode,Activity.RESULT_OK,
+                        Intent().putExtra("SCAN_RESULT",GhostCloakContactQr.encode(id)))
+                }
+            }
+        }
+        val owner=object:ActivityResultRegistryOwner {override val activityResultRegistry=registry}
+        var requested:String?=null
+        val visible=mutableStateOf(true)
+        compose.setContent {CompositionLocalProvider(LocalActivityResultRegistryOwner provides owner) {
+            GhostCloakTheme {if(visible.value) AddContactScreen(AppState(loading=false,networkConfigured=true),{}, {},
+                {requested=it},import={})}
+        }}
+        compose.onNodeWithText("Scan QR").performClick()
+        compose.onNodeWithText("Find and add contact").assertIsEnabled().performClick()
+        assertEquals(id,requested)
+        compose.runOnIdle {visible.value=false}
+        compose.runOnIdle {visible.value=true}
+        compose.onNodeWithText("Find and add contact").assertIsNotEnabled()
     }
 }

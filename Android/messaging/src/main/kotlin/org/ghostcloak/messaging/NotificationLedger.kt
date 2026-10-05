@@ -33,7 +33,7 @@ class NotificationLedger(private val records: EndpointRecords, private val clock
     /** Prune before publication so read, deleted and blocked messages cannot cause an alert. */
     fun eligible(): List<Entry> = records.transaction {
         val repository = LocalRepository(records, clock)
-        val unread = repository.contacts().filter { !it.blocked }
+        val unread = repository.contacts().filter { !it.blocked && !it.muted }
             .associate { it.remoteDeviceId to repository.unreadMessageIds(it.remoteDeviceId) }
         records.keys(PREFIX).mapNotNull { key ->
             val parts = key.removePrefix(PREFIX).split('/')

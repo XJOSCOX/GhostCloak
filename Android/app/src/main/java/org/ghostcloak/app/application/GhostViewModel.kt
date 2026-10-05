@@ -195,6 +195,10 @@ class GhostViewModel internal constructor(application: Application, private val 
         it.block(id, blocked); withContext(Dispatchers.Main) { success() }; null
     }
     fun unblock(id:String)=run {it.unblock(id);null}
+    fun setLocalAlias(id:String,value:String?)=run {it.setLocalAlias(id,value);null}
+    fun setPinned(id:String,value:Boolean)=run {it.setPinned(id,value);null}
+    fun setArchived(id:String,value:Boolean)=run {it.setArchived(id,value);null}
+    fun setMuted(id:String,value:Boolean)=run {it.setMuted(id,value);null}
     fun removeContact(id:String,success:()->Unit)=run {
         it.removeContact(id); withContext(Dispatchers.Main) { success() }; null
     }

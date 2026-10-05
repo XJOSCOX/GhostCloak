@@ -235,6 +235,19 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun contacts(): List<Contact> = records.transaction { records.keys("app/contact/").map { read<Contact>(it) ?: throw EndpointStorageFailure() } }
     fun contact(id: String) = contacts().firstOrNull { it.remoteDeviceId == id } ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
     fun save(contact: Contact) = records.transaction { put("app/contact/${contact.remoteDeviceId}", contact) }
+    private fun editableContact(id:String):Contact {
+        val contact=contact(id)
+        if(contact.request || contact.blocked || !isActiveContact(id)) throw AppFailure(AppError.BLOCKED)
+        return contact
+    }
+    fun localAlias(id:String,value:String?)=records.transaction {
+        val alias=value?.trim()?.takeIf { it.isNotEmpty() }
+        if(alias!=null) TextRules.displayName(alias)
+        save(editableContact(id).copy(localAlias=alias))
+    }
+    fun pinned(id:String,value:Boolean)=records.transaction { save(editableContact(id).copy(pinned=value)) }
+    fun archived(id:String,value:Boolean)=records.transaction { save(editableContact(id).copy(archived=value)) }
+    fun muted(id:String,value:Boolean)=records.transaction { save(editableContact(id).copy(muted=value)) }
     fun pending(id: String): String? = records.transaction { read<String>("app/pending-card/$id") }
     fun pending(id: String, card: String) = records.transaction { put("app/pending-card/$id", card) }
     fun clearPending(id: String) = records.transaction { records.remove("app/pending-card/$id") }
@@ -397,6 +410,11 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun saveAccepted(message:Message,hash:ByteArray)=records.transaction {
         saveEnvelopeReceipt(message.conversationId,requireNotNull(message.envelopeId),hash)
         save(message)
+        if(message.direction==Direction.INCOMING && !message.policyEvent) {
+            val contact=read<Contact>("app/contact/${message.conversationId}")
+            if(contact!=null && contact.archived && !contact.request && !contact.blocked && isActiveContact(message.conversationId))
+                save(contact.copy(archived=false))
+        }
         // Same transaction as authenticated content and deduplication; never enqueue on FETCH alone.
         NotificationLedger.accepted(records, message)
     }

@@ -13,11 +13,13 @@ import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.identity.*
 import org.ghostcloak.messaging.ContactStatus
+import org.ghostcloak.messaging.TextRules
 import org.ghostcloak.protocol.GhostCloakIds
 
 @Composable fun ContactSecurityScreen(state: AppState, contact: ContactStatus, back: () -> Unit,
     load: (Boolean) -> Unit, verify: (String) -> Unit, trust: (String) -> Unit, block: (Boolean) -> Unit,
-    clear: () -> Unit = {}, remove: () -> Unit = {}, importUpdatedCard: (() -> Unit)? = null) {
+    clear: () -> Unit = {}, remove: () -> Unit = {}, importUpdatedCard: (() -> Unit)? = null,
+    setAlias:(String?)->Unit={}) {
     val changed = contact.identity?.trustState == IdentityTrustState.CHANGED
     val verified = contact.identity?.trustState == IdentityTrustState.VERIFIED
     val previouslyVerified = contact.identity?.previousTrustState == IdentityTrustState.VERIFIED
@@ -25,6 +27,8 @@ import org.ghostcloak.protocol.GhostCloakIds
     var confirmation by remember(contact.contact.remoteDeviceId, contact.contact.contactId, changed) { mutableStateOf<String?>(null) }
     var confirmUnblock by remember(contact.contact.remoteDeviceId, contact.contact.contactId) {mutableStateOf(false)}
     var manageAction by remember(contact.contact.remoteDeviceId, contact.contact.contactId) {mutableStateOf<String?>(null)}
+    var editingAlias by remember(contact.contact.remoteDeviceId) { mutableStateOf(false) }
+    var aliasDraft by remember(contact.contact.remoteDeviceId) { mutableStateOf("") }
     LaunchedEffect(contact.contact.remoteDeviceId, contact.contact.contactId, changed) { load(changed) }
     PageContent("Contact details", "Verify the person behind the name.", back) {
         Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.spacedBy(GhostDimensions.regular),verticalAlignment=Alignment.CenterVertically) {
@@ -50,6 +54,13 @@ import org.ghostcloak.protocol.GhostCloakIds
                     Text(alias, style = MaterialTheme.typography.titleMedium)
                 }
             }
+        }
+        if(!contact.contact.request && !contact.contact.blocked) {
+            TextButton(onClick={aliasDraft=contact.contact.localAlias.orEmpty();editingAlias=true}) {
+                Text(if(contact.contact.localAlias==null) "Set local alias" else "Edit local alias")
+            }
+            if(contact.contact.localAlias!=null) Text("Name from contact: ${contact.contact.displayName}",
+                style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (changed) InfoPanel(if (previouslyVerified) "! Previously verified identity changed" else "! Security identity changed",
             "Sending is blocked. The key differs from the one you knew. Compare the new safety number with this person in person or through another trusted channel.", warning = true, urgent = previouslyVerified)
@@ -94,6 +105,19 @@ import org.ghostcloak.protocol.GhostCloakIds
             dismissButton = { TextButton(onClick = { confirmation = null }) { Text("Cancel") } })
     }
     if(confirmUnblock) UnblockConfirmation({confirmUnblock=false}) {confirmUnblock=false;block(false)}
+    if(editingAlias) {
+        val normalized=aliasDraft.trim()
+        val valid=normalized.isEmpty() || runCatching {TextRules.displayName(normalized)}.isSuccess
+        AlertDialog(onDismissRequest={editingAlias=false},title={Text("Local alias")},
+            text={Column {
+                Text("Only this device sees the alias. Removing it restores the contact's name.")
+                OutlinedTextField(aliasDraft,{if(it.length<=64) aliasDraft=it},label={Text("Alias")},
+                    singleLine=true,isError=!valid)
+                if(!valid) Text("Use 1–32 characters without control characters.",color=MaterialTheme.colorScheme.error)
+            }},
+            confirmButton={TextButton(onClick={editingAlias=false;setAlias(normalized.takeIf {it.isNotEmpty()})},enabled=valid) {Text("Save")}},
+            dismissButton={TextButton(onClick={editingAlias=false}) {Text("Cancel")}})
+    }
     manageAction?.let { action ->
         AlertDialog(onDismissRequest={manageAction=null},
             title={Text(when(action) {"delete"->"Delete this conversation?";"remove"->"Remove this contact?";else->"Block this contact?"})},

@@ -352,6 +352,10 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         repository.card(id, pending); repository.clearPending(id)
     }
     suspend fun block(id: String, blocked: Boolean) = action { repository.block(id,blocked) }
+    suspend fun setLocalAlias(id:String,value:String?)=action { repository.localAlias(id,value) }
+    suspend fun setPinned(id:String,value:Boolean)=action { repository.pinned(id,value) }
+    suspend fun setArchived(id:String,value:Boolean)=action { repository.archived(id,value) }
+    suspend fun setMuted(id:String,value:Boolean)=action { repository.muted(id,value) }
     suspend fun removeContact(id:String) = action { repository.removeContact(id) }
     suspend fun delete(id: String, localId: String) = action { repository.contact(id); repository.delete(id, localId) }
     suspend fun clearConversation(id: String) = action { repository.contact(id); repository.clear(id) }

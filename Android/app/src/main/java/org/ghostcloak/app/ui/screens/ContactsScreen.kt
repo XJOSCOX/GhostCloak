@@ -16,23 +16,30 @@ import org.ghostcloak.app.ui.theme.GhostLayout
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.privacy.noSensitiveCopyCut
+import org.ghostcloak.messaging.ChatOrganization
 
-@Composable fun ContactsScreen(state: AppState, add: () -> Unit, open: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, directory: Boolean = false) {
+@Composable fun ContactsScreen(state: AppState, add: () -> Unit, open: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, directory: Boolean = false,
+    archived:Boolean=false,showArchived:()->Unit={},unarchive:(String)->Unit={},back:()->Unit={}) {
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
-    val matching = state.contacts.filter { (!it.contact.request || !it.contact.blocked) &&
-        (!directory || !it.contact.request) && it.contact.visibleName.contains(query,ignoreCase=true) }
-    val chats = if(directory) matching.sortedBy {it.contact.visibleName.lowercase()} else matching.sortedByDescending {state.previews[it.contact.remoteDeviceId]?.timestamp ?: 0}
-    val hasUnread = !directory && state.unreadCount > 0
+    val source=when {
+        directory -> state.contacts.filter { !it.contact.request && !it.contact.blocked }.sortedBy {it.contact.visibleName.lowercase()}
+        archived -> ChatOrganization.archived(state.contacts,state.previews)
+        else -> ChatOrganization.main(state.contacts,state.previews)
+    }
+    val chats=source.filter { it.contact.visibleName.contains(query,ignoreCase=true) }
+    val hasUnread = !directory && !archived && state.unreadCount > 0
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(Modifier.fillMaxSize()) {
-            PageHeader(if (directory) "Contacts" else if (hasUnread) "" else "Chats",
+            PageHeader(if (directory) "Contacts" else if(archived) "Archived chats" else if (hasUnread) "" else "Chats",
+                back=if(archived) back else null,
                 center = if (hasUnread) "${state.unreadCount} new ${if (state.unreadCount == 1) "message" else "messages"}" else null,
                 leading = if (hasUnread) {{ HeaderAction(Glyph.SEARCH, "Search conversations") { searching = !searching; query = "" } }} else null) {
                 if (!directory && !hasUnread) HeaderAction(Glyph.SEARCH, "Search conversations") { searching = !searching; query = "" }
-                HeaderAction(if(directory) Glyph.ADD_CONTACT else Glyph.COMPOSE, if (directory) "Add contact" else "New chat", add)
+                if(!archived) HeaderAction(if(directory) Glyph.ADD_CONTACT else Glyph.COMPOSE, if (directory) "Add contact" else "New chat", add)
             }
             Column(Modifier.weight(1f).padding(horizontal = GhostLayout.pageInset)) {
+            if(!directory && !archived) TextButton(onClick=showArchived) { Text("Archived chats") }
             if(directory || searching) OutlinedTextField(query,{if(it.length<=64) query=it},singleLine=true,placeholder={Text(if(directory) "Search contacts" else "Search conversations")},
                 leadingIcon={AppIcon(Glyph.SEARCH)},trailingIcon=if(query.isEmpty()) null else {{IconButton(onClick={query=""}) {AppIcon(Glyph.CLOSE,"Clear search")}}},
                 shape=RoundedCornerShape(GhostDimensions.fieldCorner),modifier=Modifier.fillMaxWidth().noSensitiveCopyCut(),
@@ -47,7 +54,7 @@ import org.ghostcloak.app.ui.privacy.noSensitiveCopyCut
                         Box(Modifier.size(GhostDimensions.emptyStateIcon),contentAlignment=Alignment.Center) {AppIcon(Glyph.CHAT,modifier=Modifier.size(GhostDimensions.featureIcon),tint=MaterialTheme.colorScheme.primary)}
                     }
                     Spacer(Modifier.height(GhostDimensions.large))
-                    Text(when {query.isNotEmpty()->"No matches found"; directory->"Your people, here"; else->"A little more private."},style=MaterialTheme.typography.titleLarge)
+                    Text(when {query.isNotEmpty()->"No matches found"; directory->"Your people, here";archived->"No archived chats"; else->"A little more private."},style=MaterialTheme.typography.titleLarge)
                     Spacer(Modifier.height(GhostDimensions.compact))
                     Text(when {query.isNotEmpty()->"Try another name."; else->"Start with someone's Ghost Cloak ID."},style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -56,6 +63,7 @@ import org.ghostcloak.app.ui.privacy.noSensitiveCopyCut
                 items(chats,key={it.contact.contactId}) { status ->
                     ChatRow(status,if(directory) null else state.previews[status.contact.remoteDeviceId],open,
                         unreadCount = if(directory) 0 else state.unreadByConversation[status.contact.remoteDeviceId] ?: 0)
+                    if(archived) TextButton(onClick={unarchive(status.contact.remoteDeviceId)}) {Text("Unarchive ${status.contact.visibleName}")}
                     Spacer(Modifier.height(GhostDimensions.micro))
                 }
             }

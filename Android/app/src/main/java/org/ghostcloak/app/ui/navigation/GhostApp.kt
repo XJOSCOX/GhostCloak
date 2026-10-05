@@ -71,7 +71,11 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
             Box(Modifier.widthIn(max = org.ghostcloak.app.ui.theme.GhostLayout.maxPageWidth).fillMaxSize()) {
                 if (state.identity == null) FirstLaunchScreen(state, model::create)
                 else NavHost(nav, startDestination = "contacts") {
-                    composable("contacts") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork) }
+                    composable("contacts") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") },
+                        model::connectNetwork, model::syncNetwork,showArchived={nav.navigate("archived")}) }
+                    composable("archived") { ContactsScreen(state, {}, { id -> nav.navigate("conversation/$id") },
+                        model::connectNetwork,model::syncNetwork,archived=true,
+                        unarchive={model.setArchived(it,false)},back={nav.popBackStack()}) }
                     composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("security/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
                     composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard,
                         {name->model.addNetwork(name) {nav.popBackStack()}},model::unblock,{nav.navigate("blocked")},
@@ -115,7 +119,10 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             { text,success -> model.send(id,text,success,true) },
                             { message, show -> model.revealViewOnceText(id,message,show) },
                             { message -> model.consumeViewOnce(id,message) },
-                            { text,reference,success -> model.send(id,text,success,replyTo=reference) })
+                            { text,reference,success -> model.send(id,text,success,replyTo=reference) },
+                            { model.setPinned(id,it) },
+                            { archived -> model.setArchived(id,archived); if(archived) nav.popBackStack() },
+                            { model.setMuted(id,it) })
                     }
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable
@@ -129,7 +136,8 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             } },
                             { model.clearConversation(id) },
                             { model.removeContact(id) { nav.navigate("contacts") { popUpTo("contacts"); launchSingleTop=true } } },
-                            { nav.navigate("add") })
+                            { nav.navigate("add") },
+                            { alias -> model.setLocalAlias(id,alias) })
                     }
                 }
                 if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))

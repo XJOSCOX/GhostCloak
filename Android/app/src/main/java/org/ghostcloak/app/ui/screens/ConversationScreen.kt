@@ -27,7 +27,8 @@ import org.ghostcloak.protocol.EnvelopeCodec
 @Composable fun ConversationScreen(state: AppState, status: ContactStatus, back: () -> Unit,
     security: () -> Unit, send: (String, () -> Unit) -> Unit, delete: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, accept: () -> Unit = {}, reject: () -> Unit = {}, clear: () -> Unit = {}, disappearing: (Int) -> Unit = {}, refresh: () -> Unit = {}, block:()->Unit={},
     sendViewOnce:(String,()->Unit)->Unit={_,_->},revealText:(String,(String)->Unit)->Unit={_,_->},consume:(String)->Unit={},
-    sendReply:(String,ReplyReference,()->Unit)->Unit={_,_,_->}) {
+    sendReply:(String,ReplyReference,()->Unit)->Unit={_,_,_->},
+    setPinned:(Boolean)->Unit={},setArchived:(Boolean)->Unit={},setMuted:(Boolean)->Unit={}) {
     var draft by remember(status.contact.remoteDeviceId) { mutableStateOf("") }
     var viewOnceText by remember(status.contact.remoteDeviceId) { mutableStateOf(false) }
     var revealed by remember(status.contact.remoteDeviceId) { mutableStateOf<Pair<String,String>?>(null) }
@@ -96,6 +97,14 @@ import org.ghostcloak.protocol.EnvelopeCodec
                     DropdownMenuItem(text = { Text("Contact details") }, onClick = { actions = false; security() })
                     if(!status.contact.request)
                         DropdownMenuItem(text = { Text("Delete conversation") }, onClick = { actions = false; clearing = true })
+                    if(!status.contact.request && !status.contact.blocked) {
+                        DropdownMenuItem(text={Text(if(status.contact.pinned) "Unpin chat" else "Pin chat")},
+                            onClick={actions=false;setPinned(!status.contact.pinned)})
+                        DropdownMenuItem(text={Text(if(status.contact.archived) "Unarchive chat" else "Archive chat")},
+                            onClick={actions=false;setArchived(!status.contact.archived)})
+                        DropdownMenuItem(text={Text(if(status.contact.muted) "Unmute chat" else "Mute chat")},
+                            onClick={actions=false;setMuted(!status.contact.muted)})
+                    }
                     if (state.networkConfigured && !state.demo && !status.contact.request)
                         DropdownMenuItem(text = { Text("Disappearing messages · ${DisappearingTimer.from(state.disappearingPolicies[status.contact.remoteDeviceId] ?: 0).label}") },
                             enabled = active && !state.loading, onClick = { actions = false; timerSelector = true })

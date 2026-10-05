@@ -8,9 +8,10 @@ import org.ghostcloak.protocol.GhostCloakIds
 @Serializable
 data class Contact(val contactId: String, val publicUserId: String, val displayName: String,
     val remoteDeviceId: String, val blocked: Boolean = false, val request: Boolean = false,
-    val ghostCloakId: String? = null, val localAlias: String? = null) {
+    val ghostCloakId: String? = null, val localAlias: String? = null,
+    val pinned: Boolean = false, val archived: Boolean = false, val muted: Boolean = false) {
     val visibleName: String get() = if (request) ghostCloakId?.let(GhostCloakIds::display) ?: "Message request"
-        else localAlias ?: displayName
+        else localAlias ?: displayName.takeIf { it.isNotBlank() } ?: ghostCloakId?.let(GhostCloakIds::display) ?: "Unknown contact"
     val blockedLabel: String get() = if (request) localAlias ?: ghostCloakId?.let(GhostCloakIds::display) ?: visibleName
         else localAlias ?: displayName
     override fun toString() = "Contact(redacted)"

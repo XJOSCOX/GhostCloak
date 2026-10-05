@@ -1,5 +1,7 @@
 # Phase 1B: identity, contacts and encrypted text
 
+> **HISTORICAL PHASE SNAPSHOT.** The implementation and rollout statements below record their phase and may predate v2 Ghost Cloak IDs, V007/V008, seven-day mailbox expiry, and later privacy controls. Use the [current audit](../SECURITY_AUDIT_CURRENT.md) and [deployment runbook](../infrastructure/DEPLOYMENT.md) for current status; do not execute old route or migration instructions against a live target.
+
 ## Implemented experience
 
 Ghost Cloak now has first-launch identity setup, Contacts, Add Contact, Conversation, Contact Security and Settings screens. Choose a 1–32 character username containing ASCII letters, digits or underscores. Existing Phase 1A identities open unchanged, even without prior UI metadata; absent UI state never triggers a reset. Settings uses renameLocalUser and preserves cryptographic identity and safety numbers.

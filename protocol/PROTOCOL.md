@@ -1,5 +1,7 @@
 # Phase 1A protocol profile
 
+> **HISTORICAL PHASE SNAPSHOT.** The implementation and rollout statements below record their phase and may predate v2 Ghost Cloak IDs, V007/V008, seven-day mailbox expiry, and later privacy controls. Use the [current audit](../SECURITY_AUDIT_CURRENT.md) and [deployment runbook](../infrastructure/DEPLOYMENT.md) for current status; do not execute old route or migration instructions against a live target.
+
 Use libsignal 0.102.1 SessionBuilder/SessionCipher, with signed EC and one-time Kyber prekeys. The library implements authenticated asynchronous session establishment and message ratchets. Application code never derives message keys. Bundle generation is endpoint-only. Public bundles cross the future directory boundary; private records never do.
 
 One random UUID device routing ID is the Signal address name; the library device slot is fixed to 1 because multi-device is out of scope. The public device UUID is independent of random user UUID and local username. Registration IDs follow Signal's small positive integer range. No phone or hardware identity is used.

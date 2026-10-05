@@ -1,5 +1,7 @@
 # Phase 1E.1 review and rollout
 
+> **HISTORICAL PHASE SNAPSHOT.** The implementation and rollout statements below record their phase and may predate v2 Ghost Cloak IDs, V007/V008, seven-day mailbox expiry, and later privacy controls. Use the [current audit](SECURITY_AUDIT_CURRENT.md) and [deployment runbook](infrastructure/DEPLOYMENT.md) for current status; do not execute old route or migration instructions against a live target.
+
 The backend already permitted authenticated one-way sends to published routes. Mutual-add was an application receive gate. The existing Signal engine supports Unverified first-contact sessions; this phase admits them as explicit message requests. Accept enables replies without marking the identity Verified. Block & delete retains a blocked tombstone to prevent automatic recreation. Known identity changes still require explicit approval.
 
 ## Receive and delivery safety

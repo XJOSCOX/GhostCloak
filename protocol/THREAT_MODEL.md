@@ -1,5 +1,7 @@
 # Threat model — Phase 0
 
+> **HISTORICAL PHASE SNAPSHOT.** The implementation and rollout statements below record their phase and may predate v2 Ghost Cloak IDs, V007/V008, seven-day mailbox expiry, and later privacy controls. Use the [current audit](../SECURITY_AUDIT_CURRENT.md) and [deployment runbook](../infrastructure/DEPLOYMENT.md) for current status; do not execute old route or migration instructions against a live target.
+
 Trust ends at the endpoint. The service, directory and network are untrusted. No master key, administrator decryption or server recovery secret is permitted.
 
 | Adversary | Required defense and residual risk |

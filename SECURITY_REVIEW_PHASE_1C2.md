@@ -1,5 +1,7 @@
 # Phase 1C.2 security review
 
+> **HISTORICAL PHASE SNAPSHOT.** The implementation and rollout statements below record their phase and may predate v2 Ghost Cloak IDs, V007/V008, seven-day mailbox expiry, and later privacy controls. Use the [current audit](SECURITY_AUDIT_CURRENT.md) and [deployment runbook](infrastructure/DEPLOYMENT.md) for current status; do not execute old route or migration instructions against a live target.
+
 Ghost Cloak is not anonymous yet. This is a locally validated production foundation, not an independent audit or evidence of a deployed public service. No owner VPS, DNS, firewall or certificate authority was contacted for deployment. Phase 1D has not begun.
 
 ## Database and endpoint secrets

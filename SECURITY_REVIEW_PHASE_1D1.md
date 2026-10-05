@@ -1,5 +1,7 @@
 # Phase 1D.1 security review — origin hiding preparation
 
+> **HISTORICAL PHASE SNAPSHOT.** The implementation and rollout statements below record their phase and may predate v2 Ghost Cloak IDs, V007/V008, seven-day mailbox expiry, and later privacy controls. Use the [current audit](SECURITY_AUDIT_CURRENT.md) and [deployment runbook](infrastructure/DEPLOYMENT.md) for current status; do not execute old route or migration instructions against a live target.
+
 Ghost Cloak is not anonymous. Cloudflare Tunnel is not Ghost Mode. This phase contains deployment design, templates, an IP-use audit and local tests only. No VPS login, public-origin probe, production certificate issuance, Cloudflare configuration, DNS cutover, proxy enabling or live firewall change occurred. The owner's supplied successful Phase 1C.2 staging results are accepted as context, not represented as newly measured facts.
 
 ## Scope and trust boundary

@@ -1,6 +1,6 @@
 # Backup policy
 
-No cloud provider or backup job is configured by this phase. A database backup contains usernames, public keys, routing IDs, token hashes, timestamps, rate-limit buckets, dedupe metadata and ciphertext. These are sensitive even though endpoint secrets and plaintext never belong in PostgreSQL.
+This is an operator policy, not an inspection of the live backup schedule. A current V007/V008 database backup contains public Ghost Cloak IDs (not a live username column), public keys, routing IDs, token hashes, timestamps, rate-limit buckets, prekey-allocation requester/target metadata, dedupe metadata and ciphertext. Older backups may still contain pre-V007 usernames. These are sensitive even though endpoint secrets and plaintext do not belong in PostgreSQL.
 
 Before production migrations, make an encrypted, access-controlled backup and verify restore in an isolated cluster. Use `pg_dump` with a matching supported client, an owner-controlled encryption recipient/key outside the VPS and Git, restrictive file permissions and a dedicated backup role. Do not pass passwords or encryption secrets on command lines. Do not leave an intermediate unencrypted dump on persistent storage. Disable shell tracing and account for WAL, snapshots, replicas and temporary files.
 

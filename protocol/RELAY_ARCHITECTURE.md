@@ -1,5 +1,7 @@
 # Relay architecture — Phase 1D.3
 
+> **HISTORICAL PHASE SNAPSHOT.** This is future relay design, not a deployed Ghost Cloak anonymity service. Rate-limit and username-era statements below predate v2/V008. Use [current server metadata](SERVER_METADATA.md) and [the audit](../SECURITY_AUDIT_CURRENT.md) for implemented behavior.
+
 Status: preparation only, 2026-09-11. The owner reports Phase 1D.1/1D.2 staging validation; this phase does not probe or change staging, Cloudflare, DNS, the VPS, certificates or firewall. No relay is implemented or enabled.
 
 Current path: client → Cloudflare TLS edge → outbound Tunnel → private nginx Unix TLS socket → loopback backend → loopback PostgreSQL.

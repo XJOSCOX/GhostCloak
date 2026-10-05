@@ -1,5 +1,7 @@
 # Android Studio development
 
+The chronological Phase 1 sections below include historical rollout and clock decisions. Use [the current audit](../SECURITY_AUDIT_CURRENT.md) for finding status, [the current deployment runbook](../infrastructure/DEPLOYMENT.md) for v2/V007–V008 server work, and [request clock correction](REQUEST_CLOCK_CORRECTION.md) for current 72-hour request timing. Do not treat an older phase's username/route/retention prose as current behavior.
+
 ## Phase 1M status
 
 Inactive Device Protection is opt-in and Off by default. Same-boot expiry uses

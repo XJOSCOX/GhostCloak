@@ -1,5 +1,7 @@
 # Sealed-sender direction — design only
 
+> **HISTORICAL PHASE SNAPSHOT.** The implementation and rollout statements below record their phase and may predate v2 Ghost Cloak IDs, V007/V008, seven-day mailbox expiry, and later privacy controls. Use the [current audit](../SECURITY_AUDIT_CURRENT.md) and [deployment runbook](../infrastructure/DEPLOYMENT.md) for current status; do not execute old route or migration instructions against a live target.
+
 Phase 1D.3 changes no authentication, cryptography or mailbox schema. A privacy relay and sender-metadata reduction solve different problems. Replacing the network source does not remove authenticated sender identity at the service.
 
 ## Current service visibility

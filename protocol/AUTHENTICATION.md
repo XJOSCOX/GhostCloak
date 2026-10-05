@@ -1,5 +1,7 @@
 # Device authentication v1
 
+> **HISTORICAL PHASE SNAPSHOT.** The implementation and rollout statements below record their phase and may predate v2 Ghost Cloak IDs, V007/V008, seven-day mailbox expiry, and later privacy controls. Use the [current audit](../SECURITY_AUDIT_CURRENT.md) and [deployment runbook](../infrastructure/DEPLOYMENT.md) for current status; do not execute old route or migration instructions against a live target.
+
 Account control uses a separate P-256/secp256r1 key pair with the platform JCA `SHA256withECDSA` signature implementation. Signatures use provider DER encoding; public keys use canonical X.509 SPKI. The verifier checks curve parameters rather than merely accepting any EC key of the same size. Key generation uses JCA KeyPairGenerator and SecureRandom. No custom signature, JWT or password scheme is used.
 
 References: [Java Signature](https://docs.oracle.com/en/java/javase/26/docs/api/java.base/java/security/Signature.html), [JDK provider algorithms](https://docs.oracle.com/en/java/javase/21/security/oracle-providers.html), [Android Keystore](https://developer.android.com/privacy-and-security/keystore). Android supports platform EC signing; the implementation here stores the PKCS#8 auth private key inside the existing SQLCipher EndpointRecords, whose random database key is Keystore-wrapped. It does **not** claim the auth private key is a non-exportable hardware key. Temporary PKCS#8 byte arrays are wiped; provider/GC copies cannot be guaranteed erased.

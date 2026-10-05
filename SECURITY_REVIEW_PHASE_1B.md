@@ -1,5 +1,7 @@
 # Phase 1B security self-review
 
+> **HISTORICAL PHASE SNAPSHOT.** The implementation and rollout statements below record their phase and may predate v2 Ghost Cloak IDs, V007/V008, seven-day mailbox expiry, and later privacy controls. Use the [current audit](SECURITY_AUDIT_CURRENT.md) and [deployment runbook](infrastructure/DEPLOYMENT.md) for current status; do not execute old route or migration instructions against a live target.
+
 Developer self-review only; no independent security audit or production-readiness claim. Phase 0, 1A and 1A.1 remain the foundation. Phase 1C has not begun.
 
 ## Implemented

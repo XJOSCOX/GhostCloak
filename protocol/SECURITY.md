@@ -1,5 +1,7 @@
 # Security architecture
 
+Current-source overview; historical Phase 1B details below describe the implementation at that stage. See [the audit register](../SECURITY_AUDIT_CURRENT.md) for present findings and [metadata privacy](METADATA_PRIVACY.md) for observer-specific limits.
+
 UI calls domain APIs. Identity contains public domain types. Crypto owns the libsignal adapter. Storage supplies atomic endpoint-only secret records. Protocol defines bounded, versioned wire records. Transport and backend depend only on protocol/public types, never crypto or endpoint storage.
 
 Private identity keys authenticate session establishment, never directly encrypt chat. Signal's library owns key agreement, ratcheting, message authentication and safety fingerprints. Android Keystore protects a randomly generated SQLCipher database secret. Its AES-GCM wrapping operation is local storage protection, not a messaging protocol.
@@ -8,4 +10,4 @@ Every crypto operation must commit all changes atomically before releasing ciphe
 
 Logging accepts fixed event codes only. Do not log messages, keys, tokens, passwords, envelopes, recovery secrets or database secrets. The developer harness may display fixed synthetic messages and opaque ciphertext in test output only.
 
-Phase 1B adds ConversationService and LocalRepository above those boundaries. Contact metadata and local message history are serialized only into the existing SQLCipher endpoint records. Crypto commits remain separate from history writes; a crash between acceptance and history persistence can lose an application result. No automatic retry or exactly-once guarantee is implied. The debug router still has no decryption capability. See PHASE_1B.md for the UI, simulator, clipboard and future app-lock design.
+ConversationService and LocalRepository sit above those boundaries. Contact metadata and local message history are serialized into SQLCipher endpoint records. Crypto commits and application history writes have distinct failure boundaries; no exactly-once network-delivery guarantee is implied. The backend has no endpoint decryption key. See [the current audit](../SECURITY_AUDIT_CURRENT.md) for App Lock, Safe Exit, request privacy, View Once and residual risks; [Phase 1B](PHASE_1B.md) is historical design context.

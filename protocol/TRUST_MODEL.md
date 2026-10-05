@@ -1,5 +1,7 @@
 # Trust model — implemented in Phase 1A.1
 
+> **HISTORICAL PHASE SNAPSHOT.** The implementation and rollout statements below record their phase and may predate v2 Ghost Cloak IDs, V007/V008, seven-day mailbox expiry, and later privacy controls. Use the [current audit](../SECURITY_AUDIT_CURRENT.md) and [deployment runbook](../infrastructure/DEPLOYMENT.md) for current status; do not execute old route or migration instructions against a live target.
+
 Trust belongs to the random device ID and its pinned public identity key. A username is a local display label, never a trust anchor. `renameLocalUser("Robert")` changes no device ID, private identity or safety number. Another endpoint named Robert receives no trust from that name. A future username directory must prevent silent rebinding to another device ID; that service is not implemented.
 
 ## Persistent state and approval

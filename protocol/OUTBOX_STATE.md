@@ -1,5 +1,7 @@
 # Durable outgoing state
 
+> **HISTORICAL PHASE SNAPSHOT.** The state-machine design below records its phase; later v2 routing, request privacy, ACK and seven-day mailbox expiry are covered by [the current audit](../SECURITY_AUDIT_CURRENT.md) and [Android request design](../Android/REQUEST_PRIVACY_DESIGN.md).
+
 `DurableOutbox` is a process-owned endpoint worker over encrypted EndpointRecords and SecureSessionEngine. Network submission happens only through IdempotentMessageTransport, which extends the existing ciphertext transport boundary. It does not teach SecureSessionEngine about HTTP. The Phase 1B ConversationService/local UI remains available; network controllers must use this worker rather than the earlier demo send path. UI network onboarding is not added in this backend-contract phase.
 
 | Durable state | Stored material | Recovery |

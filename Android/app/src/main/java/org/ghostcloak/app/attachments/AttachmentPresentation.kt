@@ -18,7 +18,8 @@ data class MediaUi(val conversation: String = "", val message: String? = null,
     val busy: Boolean = false, val error: String? = null, val ready: Boolean = false,
     val preview: Bitmap? = null, val sending: Boolean = false, val uploadPrepared: Boolean = false,
     val viewOnce:Boolean=false,val voice:Boolean=false,val recording:Boolean=false,
-    val durationMillis:Long=0,val caption:String="") {
+    val durationMillis:Long=0,val caption:String="",val voiceMask:VoiceMask=VoiceMask.OFF,
+    val voicePreviewPlaying:Boolean=false) {
     override fun toString() = "MediaUi(redacted)"
 }
 
@@ -39,6 +40,8 @@ class AttachmentPresentation(private val app: GhostApplication) {
     private val scratch = PlaintextScratch(File(app.noBackupFilesDir,"media-presentation"))
     private val voiceCapture=VoiceCapture(app,scratch)
     private var file: File? = null
+    private var maskedFile: File? = null
+    private var composePlayer: MediaPlayer? = null
     private var blob: String? = null
     private var job: Job? = null
     private var recorderTicker:Job?=null
@@ -75,6 +78,17 @@ class AttachmentPresentation(private val app: GhostApplication) {
         catch(failure: Exception) { trace?.begin(PhotoOperation.ACCESS_CHECK);throw failure }
     }
     private fun temporary() = scratch.newFile()
+    private suspend fun transformVoice(original:File,preset:VoiceMask,expected:Long):File {
+        val target=temporary()
+        try {
+            withContext(Dispatchers.Default) { VoiceMasking.transform(original,target,preset) }
+            check(expected)
+            return target
+        } catch (failure:Throwable) {
+            scratch.delete(target)
+            throw failure
+        }
+    }
     fun start() {
         app.localOperationGate.requireNormal()
         revokeLease()
@@ -87,6 +101,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
     fun clear() {
         if(app.localOperationGate.blocked) return
         recorderTicker?.cancel();recorderTicker=null;voiceCapture.cancel()
+        stopComposePreview()
         stopVoicePlayback()
         val consumed=mutable.value.takeIf {it.viewOnce && it.message!=null}
         val revoked=synchronized(inputGate) {
@@ -98,6 +113,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
         try { revoked.second?.close() } catch (_: Exception) {}
         revokeLease()
         file?.let(scratch::delete); file=null; blob=null
+        maskedFile?.let(scratch::delete);maskedFile=null
         // Removing references prevents the UI from presenting it after background/lock.
         mutable.value=MediaUi()
         consumed?.let { current -> scope.launch {
@@ -138,6 +154,49 @@ class AttachmentPresentation(private val app: GhostApplication) {
         } else {
             file=result.file
             mutable.value=mutable.value.copy(recording=false,ready=true,bytes=result.bytes,durationMillis=result.durationMillis)
+        }
+    }
+    private fun stopComposePreview() {
+        try { composePlayer?.stop() } catch (_: Exception) {}
+        try { composePlayer?.release() } catch (_: Exception) {}
+        composePlayer=null
+        mutable.value=mutable.value.copy(voicePreviewPlaying=false)
+    }
+    fun selectVoiceMask(preset:VoiceMask) {
+        val current=mutable.value
+        if(!current.voice || current.message!=null || current.recording || current.busy || current.uploadPrepared) return
+        stopComposePreview()
+        maskedFile?.let(scratch::delete);maskedFile=null
+        mutable.value=mutable.value.copy(voiceMask=preset,error=null)
+    }
+    fun toggleVoicePreview() {
+        val current=mutable.value
+        if(!current.voice || !current.ready || current.message!=null || current.busy) return
+        if(composePlayer!=null) {stopComposePreview();return}
+        mutable.value=current.copy(busy=true,error=null)
+        launch { expected ->
+            try {
+                val source=if(current.voiceMask==VoiceMask.OFF) file ?: error("voice_missing") else {
+                    maskedFile ?: transformVoice(file ?: error("voice_missing"),current.voiceMask,expected)
+                        .also { maskedFile=it }
+                }
+                check(expected)
+                val media=MediaPlayer()
+                try {
+                    media.setDataSource(source.absolutePath)
+                    withContext(Dispatchers.IO) { media.prepare() }
+                    check(expected)
+                    composePlayer=media
+                    media.setOnCompletionListener {stopComposePreview()}
+                    media.start()
+                    mutable.value=mutable.value.copy(busy=false,voicePreviewPlaying=true)
+                } catch (failure:Exception) {media.release();throw failure}
+            } catch (_:Exception) {
+                maskedFile?.let(scratch::delete);maskedFile=null
+                file?.let(scratch::delete);file=null
+                if(expected==epoch) mutable.value=mutable.value.copy(busy=false,ready=false,
+                    error="Voice masking failed. Choose Original or record again.")
+            }
         }
     }
     fun setCaption(value:String) {
@@ -223,11 +282,15 @@ class AttachmentPresentation(private val app: GhostApplication) {
             catch (failure: CancellationException) { throw failure }
             catch (failure: OutOfMemoryError) {
                 trace?.failed(failure)
+                maskedFile?.let(scratch::delete);maskedFile=null
                 if(mutable.value.photo) PhotoDiagnostics.failed(PhotoFailureReason.MEMORY)
                 if(expected==epoch) { file?.let(scratch::delete);file=null;mutable.value=mutable.value.copy(busy=false,ready=false,preview=null,sending=mutable.value.uploadPrepared,error=PhotoFailureReason.MEMORY.userMessage) }
             }
             catch (failure: Exception) {
                 trace?.failed(failure)
+                if(expected==epoch && mutable.value.voice && blob==null) {
+                    maskedFile?.let(scratch::delete);maskedFile=null
+                }
                 if (expected == epoch && mutable.value.photo && mutable.value.message==null && blob==null) {
                     if(failure.message=="attachment_size") PhotoDiagnostics.emit(PhotoEvent.SIZE_OVER)
                     PhotoDiagnostics.failed(when {
@@ -332,6 +395,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
             catch (_:Exception) { mutable.value=before.copy(error="Caption is too long or contains unsupported characters.");return }
         if(before.viewOnce && caption.isNotEmpty()) return
         mutable.value=before.copy(busy=true,error=null,sending=before.photo)
+        stopComposePreview()
         launch { expected ->
             if(!app.runtime.supportsAttachments(before.conversation)) {
                 mutable.value=mutable.value.copy(busy=false,error=supportNotConfirmed)
@@ -342,13 +406,31 @@ class AttachmentPresentation(private val app: GhostApplication) {
                 return@launch
             }
             if(blob==null) {
-                val source=file ?: error("attachment_missing")
+                val source=if(before.voice && before.voiceMask!=VoiceMask.OFF) {
+                    val original=file ?: error("voice_missing")
+                    try {
+                        val transformed=maskedFile ?: transformVoice(original,before.voiceMask,expected)
+                            .also { maskedFile=it }
+                        check(expected)
+                        check(VoiceMasking.validate(transformed) in 500..300_000)
+                        check(scratch.delete(original))
+                        file=null
+                        transformed
+                    } catch (failure:Exception) {
+                        file?.let(scratch::delete);file=null
+                        maskedFile?.let(scratch::delete);maskedFile=null
+                        mutable.value=mutable.value.copy(busy=false,ready=false,
+                            error="Voice masking failed. Choose Original or record again.")
+                        return@launch
+                    }
+                } else file ?: error("attachment_missing")
                 val duration=app.runtime.attachmentDuration(before.conversation)
                 val descriptor=app.runtime.prepareAttachment(source.inputStream(),source.length(),
                     if(before.photo) AttachmentKind.IMAGE else if(before.voice) AttachmentKind.VOICE_NOTE else AttachmentKind.DOCUMENT,
                     duration,if(before.voice || before.photo) null else before.filename,
-                    if(before.voice) before.durationMillis else null)
+                    if(before.voice) if(before.voiceMask==VoiceMask.OFF) before.durationMillis else VoiceMasking.validate(source) else null)
                 check(expected); blob=descriptor.id;file?.let(scratch::delete);file=null
+                maskedFile?.let(scratch::delete);maskedFile=null
                 mutable.value=mutable.value.copy(uploadPrepared=true)
             }
             val id=blob!!
@@ -448,7 +530,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
      * Existing operation rollback may clean its own incomplete scratch as before; durable data stays. */
     internal suspend fun quiesce() {
         visible=false; epoch++
-        recorderTicker?.cancel();recorderTicker=null;voiceCapture.cancel()
+        recorderTicker?.cancel();recorderTicker=null;voiceCapture.cancel();stopComposePreview()
         stopVoicePlayback()
         mutable.value=MediaUi(); photos.clear()
         val revoked=synchronized(inputGate) { sourceSignal to activeInput }
@@ -463,7 +545,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
         lease=null; leaseMessage=null
         closeOwnedViewerHandles()
         scope.coroutineContext[Job]!!.cancelAndJoin()
-        job=null; file=null; blob=null
+        job=null; file=null; maskedFile=null; blob=null
     }
     internal fun leaseFile(uri: Uri): File {
         app.localOperationGate.requireNormal()

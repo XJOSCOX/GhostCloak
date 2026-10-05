@@ -7,6 +7,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,6 +25,7 @@ import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.messaging.Message
 import org.ghostcloak.messaging.ConversationPayload
 import org.ghostcloak.attachments.AttachmentKind
+import org.ghostcloak.app.attachments.VoiceMask
 
 @Composable fun AttachmentComposer(conversation: String, enabled: Boolean, refresh: ()->Unit) {
     val context=LocalContext.current
@@ -80,6 +82,15 @@ import org.ghostcloak.attachments.AttachmentKind
         text={ Column(verticalArrangement=Arrangement.spacedBy(GhostDimensions.medium)) {
             if(state.voice) Text(if(state.recording) "Recording ${voiceTime(state.durationMillis)}"
                 else if(state.ready) "Voice note · ${voiceTime(state.durationMillis)}" else "Preparing microphone…")
+            if(state.voice && state.message==null && state.ready && !state.recording) {
+                VoiceMaskSelector(state.voiceMask,enabled && !state.busy,owner::selectVoiceMask)
+                Text("Voice masking changes vocal characteristics to reduce recognizability. It does not guarantee anonymity. Accent, speech patterns, background sounds, and other characteristics may still identify you.",
+                    style=MaterialTheme.typography.bodySmall)
+                TextButton(onClick=owner::toggleVoicePreview,enabled=enabled && !state.busy) {
+                    Text(if(state.voicePreviewPlaying) "Stop preview" else "Preview")
+                }
+                TextButton(onClick={owner.startVoiceRecording(conversation)},enabled=enabled && !state.busy) {Text("Record again")}
+            }
             state.preview?.let { Image(it.asImageBitmap(),"Photo preview",Modifier.fillMaxWidth().heightIn(max=GhostDimensions.previewWidth)) }
             if(state.filename.isNotEmpty()) Text(state.filename)
             if(state.bytes>0) Text("${(state.bytes+1023)/1024} KiB",style=MaterialTheme.typography.bodySmall)
@@ -93,7 +104,7 @@ import org.ghostcloak.attachments.AttachmentKind
                     isError=runCatching {ConversationPayload.validateCaption(state.caption)}.isFailure)
                 Text("Caption is encrypted with the message (maximum 512 UTF-8 bytes).",style=MaterialTheme.typography.bodySmall)
             }
-            if(state.busy) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(if(state.message==null && state.photo && !state.uploadPrepared) "Preparing photo…" else if(state.message==null) "Preparing / uploading…" else "Downloading / verifying…") }
+            if(state.busy) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(if(state.voice && state.message==null) "Preparing voice note…" else if(state.message==null && state.photo && !state.uploadPrepared) "Preparing photo…" else if(state.message==null) "Preparing / uploading…" else "Downloading / verifying…") }
             state.error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
             if(!state.photo && !state.voice && state.message==null) Text("Documents keep embedded metadata. The complete file is encrypted before upload.",style=MaterialTheme.typography.bodySmall)
             if(viewerError) Text("No document viewer is available, or access has expired.",color=MaterialTheme.colorScheme.error)
@@ -102,6 +113,9 @@ import org.ghostcloak.attachments.AttachmentKind
             if(state.voice && state.recording) TextButton(onClick=owner::stopVoiceRecording) {Text("Stop recording")}
             else if(state.voice && state.message==null && state.error!=null && !state.uploadPrepared)
                 TextButton(onClick={owner.startVoiceRecording(conversation)},enabled=enabled) {Text("Record again")}
+            else if(state.voice && state.message==null)
+                TextButton(onClick={owner.send(refresh)},enabled=enabled && !state.busy && state.ready &&
+                    runCatching {ConversationPayload.validateCaption(state.caption)}.isSuccess) {Text("Send")}
             else if(state.message==null) PreparationAction(state,enabled,
                 {owner.cancel();if(state.photo) photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) else document.launch(arrayOf("*/*"))},
                 {owner.send(refresh)})
@@ -115,6 +129,21 @@ import org.ghostcloak.attachments.AttachmentKind
             try { context.startActivity(owner.documentIntent()); viewerError=false }
             catch (_: Exception) { viewerError=true }
         }}) { Text("Choose viewer") }},dismissButton={TextButton(onClick={external=false}) { Text("Cancel") }})
+}
+
+@Composable internal fun VoiceMaskSelector(selected:VoiceMask,enabled:Boolean,onSelect:(VoiceMask)->Unit) {
+    Column {
+        Text("Voice mask",style=MaterialTheme.typography.titleSmall)
+        VoiceMask.entries.forEach { preset ->
+            Row(Modifier.fillMaxWidth().selectable(selected=selected==preset,
+                enabled=enabled,onClick={onSelect(preset)},
+                role=androidx.compose.ui.semantics.Role.RadioButton),
+                verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                RadioButton(selected=selected==preset,onClick=null,enabled=enabled)
+                Text(preset.label)
+            }
+        }
+    }
 }
 
 @Composable internal fun PreparationAction(state: org.ghostcloak.app.attachments.MediaUi, enabled: Boolean,

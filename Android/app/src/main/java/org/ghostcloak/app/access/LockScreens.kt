@@ -26,6 +26,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import kotlinx.coroutines.launch
 import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.theme.GhostLayout
@@ -136,7 +137,8 @@ private fun Context.fragmentActivity(): FragmentActivity? {
         onDispose { lifecycle.removeObserver(observer); ticket?.let { controller.cancelBiometric(it) }; prompt?.cancelAuthentication() }
     }
     val available = remember(revision) { BiometricManager.from(context).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS }
-    val hostReady = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && activity != null && !activity.supportFragmentManager.isStateSaved
+    val hostReady = biometricLifecycleReady(lifecycle) && activity != null &&
+        !activity.supportFragmentManager.isStateSaved
     val launchPrompt: (Long) -> Unit = { id ->
         if (activity != null) {
             ticket = id
@@ -171,6 +173,11 @@ private fun Context.fragmentActivity(): FragmentActivity? {
         Text("Strong biometric unavailable. Use your PIN if configured, or check Android security settings.", style = MaterialTheme.typography.bodySmall)
         TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) }) { Text("Android security settings") }
     }
+}
+
+@Composable internal fun biometricLifecycleReady(lifecycle: Lifecycle): Boolean {
+    val lifecycleState by lifecycle.currentStateAsState()
+    return lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
 }
 
 @Composable fun AppLockSettingsScreen(controller: AppLockController, back: () -> Unit) {

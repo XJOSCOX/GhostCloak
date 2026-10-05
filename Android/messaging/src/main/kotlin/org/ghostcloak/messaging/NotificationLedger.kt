@@ -5,6 +5,7 @@ import org.ghostcloak.crypto.EndpointStorageFailure
 
 /** References stay in encrypted records, never in Android notification or intent metadata. */
 class NotificationLedger(private val records: EndpointRecords, private val clock: ExpiryClock = ExpiryClock()) {
+    @ConsistentCopyVisibility
     data class Entry internal constructor(internal val key: String, val state: Int) {
         override fun toString() = "NotificationEntry(redacted)"
     }

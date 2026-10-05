@@ -155,3 +155,74 @@ Strict offline JVM tests passed: app debug 114, app release 107, test-support 17
 `lintDebug` reported **8 errors and 40 warnings** and failed. Six `MissingClass` errors refer to WorkManager alarm-service removal entries in `Android/app/src/main/AndroidManifest.xml`; the WorkManager catalog is user-modified, so R2 did not edit the manifest or dependency. One `LifecycleCurrentStateInComposition` error is at `LockScreens.kt:139`, and one `PermissionImpliesUnsupportedChromeOsHardware` error is at manifest line 7. These are additional findings, not proven R2-introduced regressions. The 40 warnings include user-edited dependency-version suggestions, current icon resources, a Compose modifier-order suggestion, optional KTX conversions, exported-provider review and other manifest/resource checks. They require separate triage; no lint baseline or blanket suppression was added. No Android app was installed.
 
 Remaining original LOW-risk candidates: R01, R03, T01 and T03 (four). All were skipped for reference/ownership or security-test uncertainty. The new lint findings should be assessed before a formal reviewed-build gate; they do not authorize changes to lock behavior, WorkManager, app distribution or user icon assets in R2.
+
+## Phase R2.5 — Android lint and build-warning triage (2026-10-04)
+
+Baseline: app lintDebug from the pre-R2.5 Android Studio worktree reported **8 errors and 40 warnings**. The catalog, wrapper, verification metadata and launcher/icon work below were pre-existing user edits and were not changed. Each baseline finding is recorded verbatim below; file and line identify the source at triage time. SAFE FIX means the R2.5 patch addresses that finding. DEFER TO R3/R4 means no source change in this phase.
+
+| Severity | Rule ID | File:line | Exact lint message | Disposition |
+|---|---|---|---|---|
+| Error | MissingClass | Android/app/src/main/AndroidManifest.xml:34 | Class referenced in the manifest, androidx.work.impl.background.systemalarm.SystemAlarmService, was not found in the project or the libraries | SAFE FIX |
+| Error | MissingClass | Android/app/src/main/AndroidManifest.xml:35 | Class referenced in the manifest, androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryChargingProxy, was not found in the project or the libraries | SAFE FIX |
+| Error | MissingClass | Android/app/src/main/AndroidManifest.xml:36 | Class referenced in the manifest, androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryNotLowProxy, was not found in the project or the libraries | SAFE FIX |
+| Error | MissingClass | Android/app/src/main/AndroidManifest.xml:37 | Class referenced in the manifest, androidx.work.impl.background.systemalarm.ConstraintProxy$StorageNotLowProxy, was not found in the project or the libraries | SAFE FIX |
+| Error | MissingClass | Android/app/src/main/AndroidManifest.xml:38 | Class referenced in the manifest, androidx.work.impl.background.systemalarm.ConstraintProxy$NetworkStateProxy, was not found in the project or the libraries | SAFE FIX |
+| Error | MissingClass | Android/app/src/main/AndroidManifest.xml:39 | Class referenced in the manifest, androidx.work.impl.background.systemalarm.ConstraintProxyUpdateReceiver, was not found in the project or the libraries | SAFE FIX |
+| Error | LifecycleCurrentStateInComposition from androidx.lifecycle | Android/app/src/main/java/org/ghostcloak/app/access/LockScreens.kt:139 | Lifecycle.currentState should not be called within composition | SAFE FIX |
+| Error | PermissionImpliesUnsupportedChromeOsHardware | Android/app/src/main/AndroidManifest.xml:7 | Permission exists without corresponding hardware <uses-feature android:name="android.hardware.camera" android:required="false" /> tag | SAFE FIX |
+| Warning | RedundantLabel | Android/app/src/main/AndroidManifest.xml:44 | Redundant label can be removed | SAFE FIX |
+| Warning | DiscouragedApi | Android/app/src/main/AndroidManifest.xml:22 | Fixed screen orientations will be ignored in most cases, starting from Android 16. Android is moving toward a model where apps are expected to adapt to various orientations, display sizes, and aspect ratios. | SAFE FIX |
+| Warning | ExportedContentProvider | Android/app/src/main/AndroidManifest.xml:28 | Exported content providers can provide access to potentially sensitive data | SAFE FIX |
+| Warning | ObsoleteSdkInt | Android/app/src/main/res/mipmap-anydpi-v26 | This folder configuration (v26) is unnecessary; minSdkVersion is 30. Merge all the resources in this folder into mipmap-anydpi. | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:3 | A newer version of androidx.work:work-runtime than 2.11.2 is available: 2.12.0 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:3 | A newer version of androidx.work:work-testing than 2.11.2 is available: 2.12.0 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:5 | A newer version of net.zetetic:sqlcipher-android than 4.19.0 is available: 4.19.1 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:6 | A newer version of androidx.room:room-compiler than 2.8.4 is available: 2.8.5 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:6 | A newer version of androidx.room:room-runtime than 2.8.4 is available: 2.8.5 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:7 | A newer version of org.jetbrains.kotlinx:kotlinx-coroutines-core than 1.10.2 is available: 1.11.0 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:8 | A newer version of org.jetbrains.kotlinx:kotlinx-serialization-cbor than 1.9.0 is available: 1.11.0 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:11 | A newer version of androidx.core:core-ktx than 1.10.1 is available: 1.19.1 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:13 | A newer version of androidx.test.ext:junit than 1.1.5 is available: 1.3.0 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:15 | A newer version of androidx.lifecycle:lifecycle-runtime-ktx than 2.6.1 is available: 2.11.0 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:16 | A newer version of androidx.activity:activity-compose than 1.8.2 is available: 1.13.0 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:17 | A newer version of androidx.fragment:fragment than 1.8.9 is available: 1.9.1 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:18 | A newer version of org.jetbrains.kotlin.jvm than 2.2.10 is available: 2.4.20 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:18 | A newer version of org.jetbrains.kotlin.plugin.compose than 2.2.10 is available: 2.4.20 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:18 | A newer version of org.jetbrains.kotlin.plugin.serialization than 2.2.10 is available: 2.4.20 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:19 | A newer version of androidx.compose:compose-bom than 2026.02.01 is available: 2026.09.00 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:20 | A newer version of androidx.navigation:navigation-compose than 2.9.7 is available: 2.10.2 | DEFER TO R3 |
+| Warning | GradleDependency | Android/gradle/libs.versions.toml:21 | A newer version of androidx.lifecycle:lifecycle-viewmodel-compose than 2.9.4 is available: 2.11.0 | DEFER TO R3 |
+| Warning | ModifierParameter from androidx.compose.ui | Android/app/src/main/java/org/ghostcloak/app/ui/components/AppIcon.kt:32 | Modifier parameter should be the first optional parameter | DEFER TO R3 |
+| Warning | UnusedResources | Android/app/src/main/res/values/colors.xml:3 | The resource R.color.purple_200 appears to be unused | DEFER TO R3 |
+| Warning | UnusedResources | Android/app/src/main/res/values/colors.xml:4 | The resource R.color.purple_500 appears to be unused | DEFER TO R3 |
+| Warning | UnusedResources | Android/app/src/main/res/values/colors.xml:5 | The resource R.color.purple_700 appears to be unused | DEFER TO R3 |
+| Warning | UnusedResources | Android/app/src/main/res/values/colors.xml:6 | The resource R.color.teal_200 appears to be unused | DEFER TO R3 |
+| Warning | UnusedResources | Android/app/src/main/res/values/colors.xml:7 | The resource R.color.teal_700 appears to be unused | DEFER TO R3 |
+| Warning | UnusedResources | Android/app/src/main/res/values/colors.xml:8 | The resource R.color.black appears to be unused | DEFER TO R3 |
+| Warning | UnusedResources | Android/app/src/main/res/values/colors.xml:9 | The resource R.color.white appears to be unused | DEFER TO R3 |
+| Warning | UnusedResources | Android/app/src/main/res/drawable/ic_launcher_background.xml:2 | The resource R.drawable.ic_launcher_background appears to be unused | DEFER TO R3 |
+| Warning | UnusedResources | Android/app/src/main/res/drawable/ic_launcher_foreground.xml:1 | The resource R.drawable.ic_launcher_foreground appears to be unused | DEFER TO R3 |
+| Warning | UseKtx | Android/app/src/main/java/org/ghostcloak/app/access/AndroidLocalDestruction.kt:71 | Use the KTX extension function String.toUri instead? | DEFER TO R4 |
+| Warning | UseKtx | Android/app/src/main/java/org/ghostcloak/app/access/AndroidLocalDestruction.kt:77 | Use the KTX extension function SharedPreferences.edit instead? | DEFER TO R4 |
+| Warning | UseKtx | Android/app/src/main/java/org/ghostcloak/app/ui/theme/Appearance.kt:19 | Use the KTX extension function SharedPreferences.edit instead? | DEFER TO R3 |
+| Warning | UseKtx | Android/app/src/main/java/org/ghostcloak/app/attachments/AttachmentPresentation.kt:302 | Use the KTX extension function String.toUri instead? | DEFER TO R3 |
+| Warning | UseKtx | Android/app/src/main/java/org/ghostcloak/app/ui/qr/ContactQrScreen.kt:40 | Use the KTX function createBitmap instead? | DEFER TO R3 |
+| Warning | UseKtx | Android/app/src/main/java/org/ghostcloak/app/ui/components/NotificationSettings.kt:41 | Use the KTX extension function SharedPreferences.edit instead? | DEFER TO R3 |
+| Warning | UseKtx | Android/app/src/main/java/org/ghostcloak/app/attachments/PhotoPreparation.kt:173 | Use the KTX function createBitmap instead? | DEFER TO R3 |
+| Warning | UseTomlInstead | Android/app/build.gradle.kts:123 | Use version catalog instead | DEFER TO R3 |
+
+WorkManager 2.11.2's runtime AAR has no SystemAlarmService or ConstraintProxy components named by the six stale removal nodes. Both baseline merged variants already omit them. The active startup initializer removal, foreground-service removal and diagnostics receiver removal remain; the AndroidX Startup provider stays non-exported and the JobScheduler/RescheduleReceiver entries are untouched. The QR scanner is optional and the merged variants already declare camera hardware optional through the scanner dependency, so the app manifest now states this directly. The merged provider already had android:exported=false; stating it in the source closes a misleading warning without opening a component. The redundant launcher label and default unspecified orientation were removed with identical inherited/default behavior. The lifecycle-state read could miss Compose recomposition, so the biometric readiness check observes lifecycle state and has a focused lifecycle transition UI test. No direct side effect was performed in composition.
+
+Additional compiler/build findings (outside Android lint):
+
+| Severity | Rule / source | File:line or symbol | Exact message | Disposition |
+|---|---|---|---|---|
+| Warning | Kotlin data-class copy visibility | Android/messaging/src/main/kotlin/org/ghostcloak/messaging/NotificationLedger.kt:8:22 | Non-public primary constructor is exposed via the generated 'copy()' method of the 'data' class. The generated 'copy()' will change its visibility in future releases. | SAFE FIX |
+| Warning | Gradle deprecation | com.android.internal.application / Configuration.setVisible(boolean) | The Configuration.setVisible(boolean) method has been deprecated. This is scheduled to be removed in Gradle 11. | DEFER TO R4 |
+| Warning | JDK native/Unsafe libraries | Tink shaded protobuf UnsafeUtil / libsignal runtime | sun.misc.Unsafe::arrayBaseOffset has been called by com.google.crypto.tink.shaded.protobuf.UnsafeUtil$MemoryAccessor. | DEFER TO R3 |
+
+The NotificationLedger copy-visibility compiler warning is handled by @ConsistentCopyVisibility; its internal constructor and copy API stay internal. The Gradle Configuration.setVisible(boolean) deprecation originates from plugin com.android.internal.application in the Gradle problems report, not repository build logic; changing the user-modified AGP version or plugin internals is deferred to R4 toolchain review. It is scheduled for Gradle 11 removal, not an immediate Gradle 9.8 failure. JVM library warnings about native access/Unsafe also originate in third-party Tink/libsignal code and are deferred to dependency review. The 18 GradleDependency warnings overlap the user's catalog experiments; the icon resource and mipmap-anydpi-v26 warnings overlap user asset work. No such file was edited.
+
+Final strict, offline debug and release lint: **0 errors, 37 warnings each**. Debug and release APK assemblies passed. Debug Android test APK compiled and was installed only on disposable emulator-5554; the focused biometric lifecycle and Contact QR suite passed (11 tests). The QR tests cover QR payload decoding, the scan-result contract and camera-denied manual fallback; they do not establish optical camera decoding through the emulator's virtual camera. Final merged debug and release manifests retain a non-exported AndroidX Startup provider, JobScheduler service and RescheduleReceiver; WorkManager auto-initializer, foreground service and diagnostics receiver remain removed. The camera remains optional. No genuine exposed-component, backup, cleartext, or authentication bypass defect was found in this triage. The two Safe Exit UseKtx suggestions are deferred to R4 because changing synchronous deletion calls merits dedicated failure/recovery review. No medium/high-risk architecture refactor was performed.
+
+The strict, offline JVM matrix passed: app debug 114, app release 107, test-support 170 (one opt-in A1 test skipped), and attachments 4: **395 passed, 0 failed, 1 skipped**. Backend build was not rerun because no shared or backend build logic changed. All emulator ADB commands explicitly targeted emulator-5554; no physical phone or VPS was accessed.

@@ -227,6 +227,10 @@ class AppRuntime internal constructor(
         check(networkConfigured && !inDemo)
         network!!.react(service,id,target,emoji)
     }
+    suspend fun deleteForEveryone(service:ConversationService,id:String,localId:String):org.ghostcloak.messaging.DeleteRequestStatus {
+        check(networkConfigured && !inDemo)
+        return network!!.deleteForEveryone(service,id,localId)
+    }
     suspend fun retrySubmission(service:ConversationService,id:String,localId:String) {
         check(networkConfigured && !inDemo)
         network!!.retrySubmission(service,id,localId)

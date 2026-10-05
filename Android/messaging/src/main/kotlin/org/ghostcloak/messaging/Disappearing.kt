@@ -22,6 +22,7 @@ object ConversationPayload {
     private val mediaSupport = "GhostCloak/padding/media/v1!".toByteArray(Charsets.US_ASCII)
     private val reactionSupport = "GhostCloak/padding/reactions/v1!".toByteArray(Charsets.US_ASCII)
     private val profileSupport = "GhostCloak/padding/profile/v2!".toByteArray(Charsets.US_ASCII)
+    private val deleteSupport = "GhostCloak/padding/delete/v1!".toByteArray(Charsets.US_ASCII)
     val reactionEmoji = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
     private val profileMarker = "GhostCloak/profile/v1!".toByteArray(Charsets.US_ASCII)
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
@@ -32,7 +33,8 @@ object ConversationPayload {
         val profileUpdate: Boolean = false, val viewOnceKind: ViewOnceKind? = null,
         val replyTo: ReplyReference? = null, val supportsMedia:Boolean=false,
         val supportsReactions:Boolean=false,val reaction:ReactionUpdate?=null,
-        val supportsProfiles:Boolean=false,val profile:ProfileUpdate?=null) {
+        val supportsProfiles:Boolean=false,val profile:ProfileUpdate?=null,
+        val supportsDelete:Boolean=false,val deleteTargetId:String?=null) {
         override fun toString() = "Content(redacted)"
     }
     private fun profileBytes(displayName:String?):ByteArray = displayName?.let {
@@ -90,6 +92,15 @@ object ConversationPayload {
             .put(emoji.toByte()).put(0)
         return bytes
     }
+    /** Type 11 is an authenticated delete request, gated by the peer's padding advertisement. */
+    fun encodeDelete(targetMessageId:String):ByteArray {
+        require(RandomIdentifiers.valid(targetMessageId))
+        return ByteArray(256).also { bytes ->
+            SecureRandom().nextBytes(bytes)
+            ByteBuffer.wrap(bytes).put(magic).put(1).put(11).putShort(0).putInt(0).putInt(36)
+                .put(targetMessageId.toByteArray(Charsets.US_ASCII))
+        }
+    }
     fun encodeAttachment(descriptor: org.ghostcloak.attachments.AttachmentDescriptor, displayName:String?=null,
         viewOnce:Boolean=false, caption:String=""): ByteArray {
         if(viewOnce) require(descriptor.kind==org.ghostcloak.attachments.AttachmentKind.IMAGE && caption.isBlank())
@@ -138,6 +149,9 @@ object ConversationPayload {
             val profileOffset=reactionOffset+(if(extension.isNotEmpty() && reactionOffset+reactionSupport.size<=size) reactionSupport.size else 0)
             if(extension.isNotEmpty() && profileOffset+profileSupport.size<=size)
                 profileSupport.copyInto(bytes,profileOffset)
+            val deleteOffset=profileOffset+(if(extension.isNotEmpty() && profileOffset+profileSupport.size<=size) profileSupport.size else 0)
+            if(extension.isNotEmpty() && deleteOffset+deleteSupport.size<=size)
+                deleteSupport.copyInto(bytes,deleteOffset)
             return bytes
         } finally { text.fill(0) }
     }
@@ -155,7 +169,7 @@ object ConversationPayload {
         if (!ByteArray(4).also { input.get(it) }.contentEquals(magic) || input.get().toInt() != 1)
             throw AppFailure(AppError.INVALID_TEXT)
         val type = input.get().toInt()
-        if (type !in 1..10 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
+        if (type !in 1..11 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
         val seconds = input.int; DisappearingTimer.from(seconds)
         val length = input.int
         if (length !in 0..MAX_TEXT || length > input.remaining() || (type in setOf(2,4) && length != 0) ||
@@ -193,6 +207,12 @@ object ConversationPayload {
                 throw AppFailure(AppError.INVALID_TEXT)
             return Content("",0,true,reaction=ReactionUpdate(target,sequence,
                 if(emoji==0) null else reactionEmoji[emoji-1]))
+        }
+        if(type==11) {
+            if(length!=36 || seconds!=0 || bytes.size!=256) throw AppFailure(AppError.INVALID_TEXT)
+            val target=text.toString(Charsets.US_ASCII);text.fill(0)
+            if(!RandomIdentifiers.valid(target)) throw AppFailure(AppError.INVALID_TEXT)
+            return Content("",0,true,deleteTargetId=target)
         }
         val reply = if(type==7) {
             if(input.remaining()<37) throw AppFailure(AppError.INVALID_TEXT)
@@ -234,6 +254,9 @@ object ConversationPayload {
         val profiles=supports && bytes.size-offset>=profileSupport.size &&
             bytes.copyOfRange(offset,offset+profileSupport.size).contentEquals(profileSupport)
         if(profiles) offset+=profileSupport.size
+        val deletes=supports && bytes.size-offset>=deleteSupport.size &&
+            bytes.copyOfRange(offset,offset+deleteSupport.size).contentEquals(deleteSupport)
+        if(deletes) offset+=deleteSupport.size
         val minimum=offset
         if(((minimum+255)/256)*256!=bytes.size)
             throw AppFailure(AppError.INVALID_TEXT)
@@ -255,7 +278,7 @@ object ConversationPayload {
         if (type == 1 || type == 5 || type == 7) TextRules.encode(body).fill(0)
         return Content(body, seconds, type == 2, supportsAttachments = supports,displayName=name,
             viewOnceKind=if(type==5) ViewOnceKind.TEXT else null,replyTo=reply,supportsMedia=media,
-            supportsReactions=reactions,supportsProfiles=profiles)
+            supportsReactions=reactions,supportsProfiles=profiles,supportsDelete=deletes)
     }
     fun policyText(seconds: Int) = if (seconds == 0) "Disappearing messages turned off"
         else "Disappearing messages set to ${DisappearingTimer.from(seconds).label}"

@@ -20,6 +20,7 @@ data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? =
     val requireRequestConfirmation:Boolean=true,
     val blockedContacts:List<Contact> = emptyList(),
     val reactionsAvailable:Boolean=false,
+    val deleteAvailable:Boolean=false,
     val cachedAttachments: Set<String> = emptySet(),
     val disappearingPolicies: Map<String, Int> = emptyMap(),
     val unreadExpiries: Map<String, List<ExpiryDeadline>> = emptyMap(),
@@ -79,9 +80,12 @@ class GhostViewModel internal constructor(application: Application, private val 
                     val conversation = loadConversationRefreshSnapshot(contacts, selected, active::messagesForUi)
                     val reactionsAvailable=selected?.takeIf {id -> contacts.any {it.contact.remoteDeviceId==id && !it.contact.request && !it.contact.blocked}}
                         ?.let {id -> runCatching {active.reactionPeer(id)}.getOrDefault(false)} ?: false
+                    val deleteAvailable=selected?.takeIf {id -> contacts.any {it.contact.remoteDeviceId==id && !it.contact.request && !it.contact.blocked}}
+                        ?.let {id -> runCatching {active.deletePeer(id)}.getOrDefault(false)} ?: false
                     mutable.value = mutable.value.copy(identity = identity, ghostCloakId=if(identity!=null) runtime.ownGhostCloakId() else null, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
                         ownProfile=if(identity!=null) active.localProfile() else LocalProfile(),
                         reactionsAvailable=reactionsAvailable,
+                        deleteAvailable=deleteAvailable,
                         requireRequestConfirmation=active.requireRequestConfirmation(),
                         blockedContacts=if(identity!=null) active.blockedContacts() else emptyList(),
                         cachedAttachments = runtime.cachedAttachments(selected),
@@ -226,7 +230,20 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun removeContact(id:String,success:()->Unit)=run {
         it.removeContact(id); withContext(Dispatchers.Main) { success() }; null
     }
-    fun delete(id: String, localId: String) = run { it.delete(id, localId); null }
+    fun delete(id: String, localId: String) = run {
+        withContext(Dispatchers.Main.immediate) {getApplication<GhostApplication>().media.clear()}
+        runtime.revokeAttachmentAccess()
+        it.delete(id, localId); null
+    }
+    fun deleteForEveryone(id:String,localId:String)=run {
+        withContext(Dispatchers.Main.immediate) {getApplication<GhostApplication>().media.clear()}
+        runtime.revokeAttachmentAccess()
+        when(runtime.deleteForEveryone(it,id,localId)) {
+            DeleteRequestStatus.PENDING -> "Delete request pending. The recipient may still retain the message."
+            DeleteRequestStatus.FAILED -> "Delete request could not be sent. The local message was deleted."
+            DeleteRequestStatus.SENT -> "Delete request sent. Recipient deletion is not confirmed."
+        }
+    }
     fun react(id:String,target:String,emoji:String?)=run {
         if(!mutable.value.reactionsAvailable) return@run "Both contacts need an updated Ghost Cloak app before using reactions."
         runtime.react(it,id,target,emoji)

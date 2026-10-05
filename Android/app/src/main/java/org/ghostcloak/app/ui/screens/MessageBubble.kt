@@ -18,6 +18,7 @@ import java.time.format.DateTimeFormatter
 @Composable fun MessageBubble(message: Message, onDelete: () -> Unit, onReply: (() -> Unit)? = null,
     onCopy: (() -> Unit)? = null, replyPreview: String? = null,
     onReact:((String?)->Unit)?=null,onRetry:(()->Unit)?=null,
+    onDeleteEveryone:(()->Unit)?=null,
     content: (@Composable () -> Unit)? = null) {
     val outgoing = message.direction == Direction.OUTGOING
     var menu by remember { mutableStateOf(false) }
@@ -42,20 +43,27 @@ import java.time.format.DateTimeFormatter
                 }
             }
             DropdownMenu(expanded=menu,onDismissRequest={menu=false}) {
-                if(onReply!=null) DropdownMenuItem(text={Text("Reply")},onClick={menu=false;onReply()})
+                if(onReply!=null && !message.deleted) DropdownMenuItem(text={Text("Reply")},onClick={menu=false;onReply()})
                 if(onReact!=null) DropdownMenuItem(text={Text("React")},onClick={menu=false;reactionPicker=true})
                 if(onCopy!=null) DropdownMenuItem(text={Text("Copy")},onClick={menu=false;onCopy()})
                 if(onRetry!=null) DropdownMenuItem(text={Text("Retry pending message")},onClick={menu=false;onRetry()})
                 if(message.state==MessageState.FAILED) DropdownMenuItem(text={Text("Retry unavailable for this attempt")},enabled=false,onClick={})
-                DropdownMenuItem(text={Text("Details")},onClick={menu=false;details=true})
+                if(!message.deleted) DropdownMenuItem(text={Text("Details")},onClick={menu=false;details=true})
                 DropdownMenuItem(text={Text("Delete for me")},onClick={menu=false;onDelete()})
+                if(onDeleteEveryone!=null && !message.deleted)
+                    DropdownMenuItem(text={Text("Delete for everyone")},onClick={menu=false;onDeleteEveryone()})
             }
         }
         if(message.reactions.isNotEmpty()) Row(horizontalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
             message.reactions.forEach {badge -> Text(if(badge.mine) "${badge.emoji} · You" else badge.emoji,
                 style=MaterialTheme.typography.labelMedium) }
         }
-        if(outgoing) Text(when(message.state) {
+        if(outgoing) Text(if(message.deleted) when(message.deleteStatus) {
+            DeleteRequestStatus.PENDING -> "Delete request pending"
+            DeleteRequestStatus.SENT -> "Delete request sent"
+            DeleteRequestStatus.FAILED -> "Delete request not sent"
+            null -> "Deleted locally"
+        } else when(message.state) {
             MessageState.PENDING -> "Pending"; MessageState.ENCRYPTED -> "Encrypted"
             MessageState.SENT_TO_TRANSPORT -> "Sent locally"; MessageState.DELIVERED_LOCAL_SIMULATION -> "Delivered locally"
             MessageState.FAILED -> "Not delivered"; MessageState.SERVER_ACCEPTED -> "Encrypting, Waiting…"

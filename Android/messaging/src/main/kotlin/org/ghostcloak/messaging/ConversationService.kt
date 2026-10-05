@@ -111,6 +111,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         if(contact.request && (!repository.requestActive(id) || repository.requestHidden(id) || (repository.request(id).acceptedAt!=null && repository.serverNow()==null))) return@action emptyList<Message>()
         val reactions=if(contact.request || contact.blocked) emptyMap() else repository.reactionSnapshot(id)
         repository.messages(id).map { message ->
+            if(message.deleted) return@map message.copy(body="This message was deleted",attachment=null)
             repository.attachment(id,message.localId)?.let { descriptor ->
                 val summary = if (contact.request) AttachmentSummary(false,"Attachment",0)
                     else AttachmentSummary(descriptor.kind == org.ghostcloak.attachments.AttachmentKind.IMAGE,
@@ -134,6 +135,20 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     suspend fun attachmentPeer(id: String) = action { networkAllowed(id); repository.attachmentPeer(id) }
     suspend fun mediaPeer(id:String)=action { networkAllowed(id);repository.mediaPeer(id) }
     suspend fun reactionPeer(id:String)=action {networkAllowed(id);repository.reactionPeer(id)}
+    suspend fun deletePeer(id:String)=action {networkAllowed(id);repository.deletePeer(id)}
+    suspend fun deleteForEveryone(id:String,localId:String,outbox:DurableOutbox)=action {
+        networkAllowed(id)
+        require(repository.deletePeer(id)) { "delete_capability_required" }
+        val target=repository.ownDeleteTarget(id,localId)
+        val bytes=ConversationPayload.encodeDelete(target)
+        val submission=try {outbox.enqueue(id,bytes) {repository.requestOwnDelete(id,localId,it)}}
+            finally {bytes.fill(0)}
+        val result=try {outbox.process(submission) {repository.finishDeleteSubmission(submission,true)}}
+            catch (_:ApiFailure) {return@action DeleteRequestStatus.PENDING}
+        if(result.state==OutboxState.FAILED) repository.finishDeleteSubmission(submission,false)
+        if(result.state in setOf(OutboxState.FAILED,OutboxState.SERVER_ACCEPTED)) outbox.removeFinished(submission)
+        if(result.state==OutboxState.SERVER_ACCEPTED) DeleteRequestStatus.SENT else DeleteRequestStatus.FAILED
+    }
     suspend fun react(id:String,target:String,emoji:String?,outbox:DurableOutbox)=action {
         networkAllowed(id)
         require(repository.reactionPeer(id)) {"reaction_capability_required"}
@@ -271,7 +286,9 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             val result=outbox.process(id) {
                 repository.acceptedOutgoing(entry.deviceId, it.submissionId,it.envelopeId)
                 repository.profileSynced(entry.deviceId,it.submissionId)
+                repository.finishDeleteSubmission(it.submissionId,true)
             }
+            if(result.state==OutboxState.FAILED) repository.finishDeleteSubmission(id,false)
             repository.messages(entry.deviceId).firstOrNull {it.localId==id}?.let { message ->
                 repository.save(message.copy(state=if(result.state==OutboxState.SERVER_ACCEPTED) MessageState.SERVER_ACCEPTED else MessageState.FAILED))
             }
@@ -346,6 +363,11 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
+            if(content.deleteTargetId!=null) {
+                repository.applyRemoteDelete(contact.remoteDeviceId,content.deleteTargetId)
+                repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
+                return@decryptAndCommit
+            }
             // Defer controls until this side has explicitly accepted/added the contact.
             if (content.control && (contacts.none { it.remoteDeviceId == contact.remoteDeviceId } || contact.request))
                 throw AppFailure(AppError.BLOCKED)
@@ -358,6 +380,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 repository.attachmentPeer(contact.remoteDeviceId,content.supportsAttachments)
                 repository.mediaPeer(contact.remoteDeviceId,content.supportsMedia)
                 repository.reactionPeer(contact.remoteDeviceId,content.supportsReactions)
+                repository.deletePeer(contact.remoteDeviceId,content.supportsDelete)
                 val firstProfile=content.supportsProfiles && !repository.profilePeer(contact.remoteDeviceId)
                 repository.profilePeer(contact.remoteDeviceId,content.supportsProfiles)
                 if(firstProfile && !contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId})
@@ -373,7 +396,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 replyTo=content.replyTo),hash)
             if (content.control) repository.policy(contact.remoteDeviceId, content.seconds)
             content.attachment?.let { encoded ->
-                try { repository.attachment(contact.remoteDeviceId,envelope.envelopeId,encoded) }
+                try { if(!repository.isDeleted(contact.remoteDeviceId,envelope.envelopeId))
+                    repository.attachment(contact.remoteDeviceId,envelope.envelopeId,encoded) }
                 finally { encoded.fill(0) }
             }
             if(contact.request) {

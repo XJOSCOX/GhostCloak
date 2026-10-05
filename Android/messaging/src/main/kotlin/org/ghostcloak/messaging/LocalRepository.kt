@@ -116,6 +116,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         records.remove("app/profile/ready/$id")
         records.remove("app/media-peer/$id")
         records.remove("app/reaction-peer/$id")
+        records.remove("app/delete-peer/$id")
     }
     fun removeContact(id:String)=records.transaction {
         endAcceptedRelationship(id,RequestState.REJECTED,false)
@@ -307,13 +308,17 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun reactionPeer(id:String,supported:Boolean)=records.transaction {
         if(supported) records.write("app/reaction-peer/$id",byteArrayOf(1)) else records.remove("app/reaction-peer/$id")
     }
+    fun deletePeer(id:String):Boolean=records.transaction {records.read("app/delete-peer/$id")?.contentEquals(byteArrayOf(1))==true}
+    fun deletePeer(id:String,supported:Boolean)=records.transaction {
+        if(supported) records.write("app/delete-peer/$id",byteArrayOf(1)) else records.remove("app/delete-peer/$id")
+    }
     private fun reactionKey(id:String,target:String,mine:Boolean):String {
         require(RandomIdentifiers.valid(id) && RandomIdentifiers.valid(target))
         return "app/reaction/$id/$target/${if(mine) "mine" else "peer"}"
     }
     fun reactionTarget(id:String,target:String):Message?=records.transaction {
         if(!isActiveContact(id)) return@transaction null
-        messages(id).firstOrNull {it.envelopeId==target && !it.policyEvent && it.viewOnceKind==null &&
+        messages(id).firstOrNull {it.envelopeId==target && !it.deleted && !it.policyEvent && it.viewOnceKind==null &&
             it.state in setOf(MessageState.RECEIVED,MessageState.SERVER_ACCEPTED,MessageState.DELIVERED,
                 MessageState.DELIVERED_LOCAL_SIMULATION)}
     }
@@ -431,11 +436,11 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     }
     fun unreadCount(id: String): Int = records.transaction {
         val seen = read<List<String>>("app/read/$id").orEmpty().toSet()
-        messages(id).count { it.direction == Direction.INCOMING && !it.policyEvent && it.localId !in seen }
+        messages(id).count { it.direction == Direction.INCOMING && !it.deleted && !it.policyEvent && it.localId !in seen }
     }
     fun unreadMessages(id: String): List<Message> = records.transaction {
         val seen = read<List<String>>("app/read/$id").orEmpty().toSet()
-        messages(id).filter { it.direction == Direction.INCOMING && !it.policyEvent && it.localId !in seen }
+        messages(id).filter { it.direction == Direction.INCOMING && !it.deleted && !it.policyEvent && it.localId !in seen }
     }
     fun unreadMessageIds(id: String): Set<String> = unreadMessages(id).map { it.localId }.toSet()
     fun markRead(id: String) = records.transaction {
@@ -447,6 +452,61 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         val existing = records.keys("app/message/")
         if (key !in existing && existing.size >= 5000) throw AppFailure(AppError.LOCAL_CAPACITY)
         put(key, message)
+    }
+    private fun deleteKey(id:String,target:String):String {
+        require(RandomIdentifiers.valid(id) && RandomIdentifiers.valid(target))
+        return "app/delete/$id/$target"
+    }
+    fun isDeleted(id:String,target:String):Boolean=records.transaction { records.read(deleteKey(id,target))!=null }
+    private fun scrub(message:Message,status:DeleteRequestStatus?=null,submission:String?=null):Message =
+        message.copy(body="",deleted=true,deleteStatus=status,deleteSubmissionId=submission,
+            viewOnceKind=null,viewOnceState=null,replyTo=null)
+    private fun removeTargetState(id:String,target:String,localId:String) {
+        records.remove("app/attachment/$id/$localId")
+        records.keys("app/reaction/$id/$target/").forEach(records::remove)
+        NotificationLedger.remove(records,id,localId)
+    }
+    /** The Signal sender is this conversation's remote device; never touch our outgoing message. */
+    fun applyRemoteDelete(id:String,target:String):Boolean=records.transaction {
+        val key=deleteKey(id,target)
+        val existing=read<Message>("app/message/$id/$target")
+        if(existing!=null && (existing.direction!=Direction.INCOMING || existing.envelopeId!=target || existing.policyEvent))
+            return@transaction false
+        if(records.read(key)==null) {
+            require(records.keys("app/delete/").size<10000) { "delete_tombstone_capacity" }
+            records.write(key,byteArrayOf(1))
+        }
+        if(existing!=null && !existing.deleted) {
+            save(scrub(existing))
+            removeTargetState(id,target,existing.localId)
+        }
+        true
+    }
+    /** Called within DurableOutbox.enqueue's transaction: queue and plaintext removal commit together. */
+    fun requestOwnDelete(id:String,localId:String,submission:String)=records.transaction {
+        require(RandomIdentifiers.valid(submission))
+        val message=read<Message>("app/message/$id/$localId") ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        val target=message.envelopeId ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        require(message.direction==Direction.OUTGOING && !message.deleted && !message.policyEvent &&
+            message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED))
+        save(scrub(message,DeleteRequestStatus.PENDING,submission))
+        removeTargetState(id,target,localId)
+        records.write("app/delete-submission/$submission","$id/$localId".encodeToByteArray())
+    }
+    fun ownDeleteTarget(id:String,localId:String):String=records.transaction {
+        val message=read<Message>("app/message/$id/$localId") ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        require(message.direction==Direction.OUTGOING && !message.deleted && !message.policyEvent &&
+            message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED))
+        message.envelopeId ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+    }
+    fun finishDeleteSubmission(submission:String,sent:Boolean)=records.transaction {
+        val key="app/delete-submission/$submission"
+        val reference=records.read(key)?.decodeToString() ?: return@transaction
+        val message=read<Message>("app/message/$reference")
+        if(message?.deleted==true && message.deleteSubmissionId==submission)
+            save(message.copy(deleteStatus=if(sent) DeleteRequestStatus.SENT else DeleteRequestStatus.FAILED,
+                deleteSubmissionId=null))
+        records.remove(key)
     }
     fun delete(id: String, localId: String) = records.transaction {
         read<Message>("app/message/$id/$localId")?.envelopeId?.let {target ->
@@ -474,10 +534,10 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun retainedAttachmentReferences():Set<String> = records.transaction {
         records.keys("app/message/").mapNotNull { key ->
             val message=read<Message>(key) ?: throw EndpointStorageFailure()
-            if(message.viewOnceKind!=null &&
+            if(message.deleted || (message.viewOnceKind!=null &&
                 (message.viewOnceState==ViewOnceState.CONSUMED ||
                     (message.direction==Direction.OUTGOING &&
-                        message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED)))) null
+                        message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED))))) null
             else key.removePrefix("app/message/")
         }.toSet()
     }
@@ -517,15 +577,20 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         require(java.security.MessageDigest.isEqual(existing,hash)) {"Envelope receipt conflict"}; true
     }
     fun saveAccepted(message:Message,hash:ByteArray)=records.transaction {
-        saveEnvelopeReceipt(message.conversationId,requireNotNull(message.envelopeId),hash)
-        save(message)
-        if(message.direction==Direction.INCOMING && !message.policyEvent) {
+        val envelopeId=requireNotNull(message.envelopeId)
+        saveEnvelopeReceipt(message.conversationId,envelopeId,hash)
+        val deleted=message.direction==Direction.INCOMING && !message.policyEvent &&
+            RandomIdentifiers.valid(message.conversationId) && RandomIdentifiers.valid(envelopeId) &&
+            isDeleted(message.conversationId,envelopeId)
+        val stored=if(deleted) scrub(message) else message
+        save(stored)
+        if(!deleted && message.direction==Direction.INCOMING && !message.policyEvent) {
             val contact=read<Contact>("app/contact/${message.conversationId}")
             if(contact!=null && contact.archived && !contact.request && !contact.blocked && isActiveContact(message.conversationId))
                 save(contact.copy(archived=false))
         }
         // Same transaction as authenticated content and deduplication; never enqueue on FETCH alone.
-        NotificationLedger.accepted(records, message)
+        if(!deleted) NotificationLedger.accepted(records, message)
     }
     /** Security receipt only: no plaintext, descriptor, read state or notification ledger entry. */
     fun saveEnvelopeReceipt(sender:String,id:String,hash:ByteArray)=records.transaction {

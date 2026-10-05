@@ -40,11 +40,11 @@ class LocalDeletionScreenTest {
             compose.onNodeWithText("First local message").performClick()
             compose.onNodeWithText("Delete").assertDoesNotExist()
             compose.onNodeWithText("First local message").performTouchInput { longClick() }
-            compose.onNodeWithText("Delete").performClick()
+            compose.onNodeWithText("Delete for me").performClick()
             compose.onNodeWithText("This removes the message from this device only.").assertIsDisplayed()
             compose.onNodeWithText("Cancel").performClick(); assertEquals(0, deletes)
             compose.onNodeWithText("First local message").performTouchInput { longClick() }
-            compose.onNodeWithText("Delete").performClick()
+            compose.onNodeWithText("Delete for me").performClick()
             compose.onNodeWithText("Delete").performClick()
             compose.onNodeWithText("First local message").assertDoesNotExist()
             compose.onNodeWithText("Second local message").assertExists(); assertEquals(1, deletes)

@@ -29,7 +29,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
     sendViewOnce:(String,()->Unit)->Unit={_,_->},revealText:(String,(String)->Unit)->Unit={_,_->},consume:(String)->Unit={},
     sendReply:(String,ReplyReference,()->Unit)->Unit={_,_,_->},
     setPinned:(Boolean)->Unit={},setArchived:(Boolean)->Unit={},setMuted:(Boolean)->Unit={},
-    react:(String,String?)->Unit={_,_->},retryMessage:(String)->Unit={}) {
+    react:(String,String?)->Unit={_,_->},retryMessage:(String)->Unit={},deleteEveryone:(String)->Unit={}) {
     var draft by remember(status.contact.remoteDeviceId) { mutableStateOf("") }
     var viewOnceText by remember(status.contact.remoteDeviceId) { mutableStateOf(false) }
     var revealed by remember(status.contact.remoteDeviceId) { mutableStateOf<Pair<String,String>?>(null) }
@@ -58,6 +58,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
     var rejectedPaste by remember { mutableStateOf(false) }
     var actions by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<String?>(null) }
+    var deletingEveryone by remember { mutableStateOf<String?>(null) }
     var clearing by remember { mutableStateOf(false) }
     var timerSelector by remember { mutableStateOf(false) }
     var replyTo by remember(status.contact.remoteDeviceId) { mutableStateOf<ReplyReference?>(null) }
@@ -149,9 +150,13 @@ import org.ghostcloak.protocol.EnvelopeCodec
                             Text(if (message.state == MessageState.PENDING) "Update pending · applies locally" else "Update not delivered · choose the timer again to retry",
                                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
+                    else if(message.deleted) MessageBubble(message.copy(body="This message was deleted"),
+                        onDelete={deleting=message.localId})
                     else if(message.viewOnceKind!=null) MessageBubble(message,onDelete={deleting=message.localId},
                         onReply=if(active && ReplyPresentation.reference(message)!=null) {{replyTo=ReplyPresentation.reference(message);viewOnceText=false}} else null,
-                        replyPreview=message.replyTo?.let {ReplyPresentation.preview(it,status.contact.remoteDeviceId,state.messages)}) {
+                        replyPreview=message.replyTo?.let {ReplyPresentation.preview(it,status.contact.remoteDeviceId,state.messages)},
+                        onDeleteEveryone=if(active && state.deleteAvailable && message.direction==Direction.OUTGOING &&
+                            message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED)) {{deletingEveryone=message.localId}} else null) {
                         Column {
                             Text(message.body,style=MaterialTheme.typography.bodyLarge)
                             if(message.direction==Direction.INCOMING && message.viewOnceState==ViewOnceState.AVAILABLE &&
@@ -168,6 +173,8 @@ import org.ghostcloak.protocol.EnvelopeCodec
                         }
                     }
                     else if(message.attachment!=null) MessageBubble(message,onDelete={deleting=message.localId},
+                        onDeleteEveryone=if(active && state.deleteAvailable && message.direction==Direction.OUTGOING &&
+                            message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED)) {{deletingEveryone=message.localId}} else null,
                         onReply=if(active && ReplyPresentation.reference(message)!=null) {{replyTo=ReplyPresentation.reference(message);viewOnceText=false}} else null,
                         replyPreview=message.replyTo?.let {ReplyPresentation.preview(it,status.contact.remoteDeviceId,state.messages)},
                         onReact=message.envelopeId?.takeIf {active && state.networkConfigured && !state.demo && state.reactionsAvailable && message.state!=MessageState.EXPIRED_UNDELIVERED}
@@ -176,6 +183,8 @@ import org.ghostcloak.protocol.EnvelopeCodec
                             {{retryMessage(message.localId)}} else null) {
                         AttachmentMessage(message,active,message.localId in state.cachedAttachments,refresh)
                     } else MessageBubble(message,onDelete={deleting=message.localId},
+                        onDeleteEveryone=if(active && state.deleteAvailable && message.direction==Direction.OUTGOING &&
+                            message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED)) {{deletingEveryone=message.localId}} else null,
                         onReply=if(active && ReplyPresentation.reference(message)!=null) {{replyTo=ReplyPresentation.reference(message);viewOnceText=false}} else null,
                         onCopy=if(!status.contact.request && !status.contact.blocked && message.body.isNotBlank())
                             {{copySensitive(context,message.body)}} else null,
@@ -243,6 +252,11 @@ import org.ghostcloak.protocol.EnvelopeCodec
         text = { Text("This removes the message from this device only.") },
         confirmButton = { TextButton(onClick = { deleting = null; delete(id) }) { Text("Delete") } },
         dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } }) }
+    deletingEveryone?.let { id -> AlertDialog(onDismissRequest={deletingEveryone=null},
+        title={Text("Delete for everyone?")},
+        text={Text("This requests deletion from participating Ghost Cloak clients while the relationship is active and unblocked. A blocked recipient may retain the message. It cannot erase copies someone already viewed, saved, copied, or captured. No recipient deletion is confirmed.")},
+        confirmButton={TextButton(onClick={deletingEveryone=null;deleteEveryone(id)}) {Text("Delete for everyone")}},
+        dismissButton={TextButton(onClick={deletingEveryone=null}) {Text("Cancel")}}) }
     if (clearing) AlertDialog(onDismissRequest = { clearing = false }, title = { Text("Delete this conversation?") },
         text = { Text("This removes the local message history from this device.") },
         confirmButton = { TextButton(onClick = { clearing = false; clear() }) { Text("Delete") } },

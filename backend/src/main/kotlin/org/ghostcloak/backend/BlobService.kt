@@ -149,7 +149,7 @@ class BlobService(private val db: BackendDatabase, private val auth: MailboxServ
     }
     fun cleanup() {
         db.transaction {
-            db.blobs.all().filter { it.expires <= now() && !it.uploading }.take(128).forEach {
+            db.expiredBlobs(now()).forEach {
                 val body = file(it.id); val partial = file(it.id,true)
                 if ((!body.exists() || body.delete()) && (!partial.exists() || partial.delete())) db.blobs.remove(it.id)
             }

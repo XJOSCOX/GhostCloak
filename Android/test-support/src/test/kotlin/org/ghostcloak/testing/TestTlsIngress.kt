@@ -34,7 +34,7 @@ internal class TestTlsIngress(port:Int):AutoCloseable {
         server=HttpsServer.create(InetSocketAddress("127.0.0.1",0),16).apply {
             httpsConfigurator=HttpsConfigurator(ssl); this.executor=this@TestTlsIngress.executor
             createContext("/") {exchange->
-                val fault=if(exchange.requestURI.rawPath=="/v1/messages") failNextSubmission.also {failNextSubmission=null} else null
+                val fault=if(exchange.requestURI.rawPath=="/v2/messages") failNextSubmission.also {failNextSubmission=null} else null
                 if(fault=="before") {exchange.sendResponseHeaders(504,-1);exchange.close();return@createContext}
                 val connection=URI("http://127.0.0.1:$port"+exchange.requestURI.rawPath).toURL().openConnection() as HttpURLConnection
                 try {

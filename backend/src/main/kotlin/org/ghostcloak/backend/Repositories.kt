@@ -13,6 +13,18 @@ interface MailboxRepository : DedupeRepository { val mailbox: Rows<MailboxRow> }
 interface ChallengeRepository { val challenges: Rows<ChallengeRow> }
 interface SessionRepository { val sessions: Rows<SessionRow> }
 interface BackendDatabase : AccountRepository, DeviceRepository, PreKeyRepository, MailboxRepository, ChallengeRepository, SessionRepository {
+    fun accountByGhostCloakId(id: String): AccountRow? = accounts.all().firstOrNull { it.ghostCloakId == id }
+    fun deviceByRoutingId(id: String): DeviceRow? = devices.all().firstOrNull { it.routingId == id }
+    fun mailboxForRecipient(id: String): List<MailboxRow> = mailbox.all().filter { it.recipientRoutingId == id }
+    fun submissionByServerId(id: String): List<SubmissionRow> = submissions.all().filter { it.serverId == id }
+    fun countSubmissionsForSender(id: String): Int = submissions.all().count { it.sender == id }
+    fun mailboxUsageForRecipient(id: String): MailboxUsage {
+        val rows = mailboxForRecipient(id)
+        return MailboxUsage(rows.size, rows.sumOf { it.encryptedEnvelope.size.toLong() })
+    }
+    fun expiredChallengeIds(now: Long): List<String> = challenges.all().filter { it.challenge.expiresAt <= now }.map { it.challenge.id }
+    fun expiredSessionHashes(now: Long): List<String> = sessions.all().filter { it.expiresAt <= now }.map { it.hash }
+    fun expiredBlobs(now: Long, limit: Int = 128): List<BlobRow> = blobs.all().filter { it.expires <= now && !it.uploading }.take(limit)
     fun expireMailbox(now:Long, limit:Int=128) {
         mailbox.all().filter { it.expiresAt<=now }.sortedBy {it.expiresAt}.take(limit).forEach { mailbox.remove(it.id) }
     }
@@ -29,6 +41,7 @@ interface BackendDatabase : AccountRepository, DeviceRepository, PreKeyRepositor
     }
     fun <T> transaction(block: () -> T): T
 }
+data class MailboxUsage(val count: Int, val bytes: Long)
 @Serializable class BlobRow(val id: String, val owner: String, val device: String, val length: Long,
     val digest: ByteArray, val capabilityHash: ByteArray, val created: Long, val expires: Long,
     val complete: Boolean = false, val uploading: Boolean = false) {

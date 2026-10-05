@@ -128,6 +128,30 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
     override val sessions=rows("access_sessions","token_hash",read={SessionRow(it.getString("token_hash"),it.getString("device_id"),it.getLong("expires_at"))}) { _,r -> execute("INSERT INTO access_sessions VALUES (?,?,?)",r.hash,r.deviceId,r.expiresAt) }
     override val mailbox=rows("mailbox_messages",read={MailboxRow(it.getString("id"),it.getString("recipient_routing_id"),it.getBytes("encrypted_envelope"),it.getLong("received_at"),it.getLong("expires_at"))}) { _,r -> execute("INSERT INTO mailbox_messages VALUES (?,?,?,?,?)",r.id,r.recipientRoutingId,r.encryptedEnvelope,r.receivedAt,r.expiresAt) }
     override val submissions=rows("message_deduplication",read={SubmissionRow(it.getString("id"),it.getString("sender_device_id"),it.getBytes("payload_hash"),it.getString("server_message_id"),it.getLong("expires_at"),it.getBoolean("acknowledged"),it.getLong("mailbox_expires_at"))}) { _,r -> execute("INSERT INTO message_deduplication (id,sender_device_id,payload_hash,server_message_id,expires_at,acknowledged,mailbox_expires_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET acknowledged=excluded.acknowledged",r.id,r.sender,r.digest,r.serverId,r.expiresAt,r.acknowledged,r.mailboxExpiresAt) }
+    override fun accountByGhostCloakId(id:String):AccountRow? = query("SELECT id,ghostcloak_id,device_id FROM accounts WHERE ghostcloak_id=?",id) {
+        AccountRow(it.getString(1),it.getString(2),it.getString(3))
+    }.singleOrNull()
+    override fun deviceByRoutingId(id:String):DeviceRow? = query("SELECT id,account_id,routing_id,auth_public_key,identity_public_key FROM devices WHERE routing_id=?",id) {
+        DeviceRow(it.getString(1),it.getString(2),it.getString(3),it.getBytes(4),it.getBytes(5))
+    }.singleOrNull()
+    override fun mailboxForRecipient(id:String):List<MailboxRow> = query("SELECT id,recipient_routing_id,encrypted_envelope,received_at,expires_at FROM mailbox_messages WHERE recipient_routing_id=?",id) {
+        MailboxRow(it.getString(1),it.getString(2),it.getBytes(3),it.getLong(4),it.getLong(5))
+    }
+    override fun mailboxUsageForRecipient(id:String):MailboxUsage = query("SELECT count(*),coalesce(sum(octet_length(encrypted_envelope)),0) FROM mailbox_messages WHERE recipient_routing_id=?",id) {
+        MailboxUsage(it.getInt(1),it.getLong(2))
+    }.single()
+    override fun countSubmissionsForSender(id:String):Int = query("SELECT count(*) FROM message_deduplication WHERE sender_device_id=?",id) { it.getInt(1) }.single()
+    override fun submissionByServerId(id:String):List<SubmissionRow> = query("SELECT id,sender_device_id,payload_hash,server_message_id,expires_at,acknowledged,mailbox_expires_at FROM message_deduplication WHERE server_message_id=?",id) {
+        SubmissionRow(it.getString(1),it.getString(2),it.getBytes(3),it.getString(4),it.getLong(5),it.getBoolean(6),it.getLong(7))
+    }
+    override fun expiredChallengeIds(now:Long):List<String> = query("SELECT id FROM auth_challenges WHERE expires_at<=?",now) { it.getString(1) }
+    override fun expiredSessionHashes(now:Long):List<String> = query("SELECT token_hash FROM access_sessions WHERE expires_at<=?",now) { it.getString(1) }
+    override fun expiredBlobs(now:Long,limit:Int):List<BlobRow> {
+        require(limit in 1..128)
+        return query("SELECT id,owner_account,owner_device,encrypted_length,ciphertext_digest,capability_hash,created_at,expires_at,complete,uploading FROM attachment_blobs WHERE expires_at<=? AND NOT uploading ORDER BY expires_at,id LIMIT ?",now,limit) {
+            BlobRow(it.getString(1),it.getString(2),it.getString(3),it.getLong(4),it.getBytes(5),it.getBytes(6),it.getLong(7),it.getLong(8),it.getBoolean(9),it.getBoolean(10))
+        }
+    }
     override val allocations=rows("prekey_allocations",read={AllocationRow(it.getString("id"),it.getString("requester_device"),it.getString("target_device"),it.getBytes("bundle")?.let { bytes -> NetworkCodec.decode<PublicBundle>(bytes,4096) },it.getLong("response_expires_at"),it.getLong("expires_at"))}) { _,r ->
         execute("INSERT INTO prekey_allocations VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET bundle=excluded.bundle",r.id,r.requester,r.target,r.bundle?.let { NetworkCodec.encode(it) },r.responseExpiresAt,r.expiresAt)
     }

@@ -112,8 +112,8 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
     }
     fun cleanup() = db.transaction {
         val time = now()
-        db.challenges.all().filter { it.challenge.expiresAt <= time }.forEach { db.challenges.remove(it.challenge.id) }
-        db.sessions.all().filter { it.expiresAt <= time }.forEach { db.sessions.remove(it.hash) }
+        db.expiredChallengeIds(time).forEach { db.challenges.remove(it) }
+        db.expiredSessionHashes(time).forEach { db.sessions.remove(it) }
         db.expireMailbox(time)
         // Small bounded receipt/idempotency tombstones survive payload deletion and sender downtime.
     }
@@ -141,13 +141,13 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         requireApi(MessageDigest.isEqual(c.registrationHash, DeviceAuth.digest(NetworkCodec.encode(v))), "invalid_proof", 401)
         proof(c, v.accountId, v.deviceId, "register", v.authPublicKey, r.signature)
         requireApi(db.accounts.size() < 1000, "capacity", 429)
-        requireApi(db.accounts.get(v.accountId) == null && db.devices.get(v.deviceId) == null && db.devices.all().none { it.routingId == v.routingId || it.authPublicKey.contentEquals(v.authPublicKey) }, "conflict", 409)
+        requireApi(db.accounts.get(v.accountId) == null && db.devices.get(v.deviceId) == null && db.deviceByRoutingId(v.routingId) == null && db.devices.all().none { it.authPublicKey.contentEquals(v.authPublicKey) }, "conflict", 409)
         validateBundles(v.deviceId, v.bundles, null)
         var assigned: String? = null
         for (attempt in 1..5) {
             val candidate = newGhostCloakId()
             requireApi(GhostCloakIds.valid(candidate), "invalid_ghostcloak_id")
-            if (db.accounts.all().none { it.ghostCloakId == candidate }) { assigned = candidate; break }
+            if (db.accountByGhostCloakId(candidate) == null) { assigned = candidate; break }
         }
         requireApi(assigned != null, "capacity", 503)
         db.accounts.put(v.accountId, AccountRow(v.accountId, assigned!!, v.deviceId))
@@ -228,7 +228,7 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
             is ApiRequest.Lookup -> {
                 val id = GhostCloakIds.normalize(r.ghostCloakId)
                 requireApi(id == r.ghostCloakId, "invalid_ghostcloak_id")
-                val account = db.accounts.all().firstOrNull { it.ghostCloakId == id } ?: throw ApiFailure(404, "contact_unavailable")
+                val account = db.accountByGhostCloakId(id) ?: throw ApiFailure(404, "contact_unavailable")
                 val target = db.devices.get(account.deviceId)!!
                 requireApi(db.prekeys.get(target.id)?.pool?.isNotEmpty()==true,"contact_unavailable",404)
                 // Old clients require directory.bundle and therefore fail explicitly; no key is allocated by search.
@@ -285,7 +285,7 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
                     DeliveryStatus(id, row.acknowledged, r.retention && !row.acknowledged && row.mailboxExpiresAt <= now())
                 }
                 requireApi(r.skipMessageIds.size <= 128 && r.skipMessageIds.all(RandomIdentifiers::valid))
-                val owned = db.mailbox.all().filter { it.recipientRoutingId == device.routingId && it.expiresAt > now() }
+                val owned = db.mailboxForRecipient(device.routingId).filter { it.expiresAt > now() }
                     .sortedWith(compareBy<MailboxRow> { it.receivedAt }.thenBy { it.id })
                 val deliveries = owned.filter { it.id !in r.skipMessageIds }.take(NetworkLimits.BATCH).map {
                         val sender = if (r.includeSenders) {
@@ -302,7 +302,7 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
                 r.serverMessageIds.forEach { id ->
                     // Only a still-owned mailbox row can produce an ACK receipt. Expiry is not delivery.
                     if (db.mailbox.get(id)?.expiresAt?.let {it>now()} == true) {
-                        db.submissions.all().filter { it.serverId == id }.forEach { row ->
+                        db.submissionByServerId(id).forEach { row ->
                             db.submissions.put(row.id, SubmissionRow(row.id, row.sender, row.digest, row.serverId, row.expiresAt, true,row.mailboxExpiresAt))
                         }
                         db.mailbox.remove(id)
@@ -333,7 +333,7 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
             return AllocationOutcome(failure=ApiFailure(429,"rate_limited")).also {abuseLog(AbuseEvent.PREKEY_ALLOCATION_RATE_LIMITED)}
         if(db.allocations.size()>=10000 || db.countAllocations(requester.id)>=64)
             return AllocationOutcome(failure=ApiFailure(429,"rate_limited")).also {abuseLog(AbuseEvent.PREKEY_ALLOCATION_RATE_LIMITED)}
-        val account=db.accounts.all().firstOrNull {it.ghostCloakId==id} ?: return AllocationOutcome(failure=ApiFailure(404,"contact_unavailable"))
+        val account=db.accountByGhostCloakId(id) ?: return AllocationOutcome(failure=ApiFailure(404,"contact_unavailable"))
         val target=db.devices.get(account.deviceId) ?: return AllocationOutcome(failure=ApiFailure(404,"contact_unavailable"))
         if(db.countAllocations(requester.id,target.id)>=4)
             return AllocationOutcome(failure=ApiFailure(429,"rate_limited")).also {abuseLog(AbuseEvent.PREKEY_ALLOCATION_RATE_LIMITED)}
@@ -345,7 +345,7 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
     }
     private fun send(sender: DeviceRow, r: ApiRequest.Send): ApiResponse {
         requireApi(RandomIdentifiers.valid(r.submissionId) && RandomIdentifiers.valid(r.recipientRoutingId))
-        val target = db.devices.all().firstOrNull { it.routingId == r.recipientRoutingId } ?: throw ApiFailure(404, "not_found")
+        val target = db.deviceByRoutingId(r.recipientRoutingId) ?: throw ApiFailure(404, "not_found")
         val envelope = try { EnvelopeCodec.decode(r.encryptedEnvelope) } catch (e: IllegalArgumentException) { throw ApiFailure(400, "invalid_envelope") }
         requireApi(envelope.senderDeviceId == sender.id && envelope.recipientDeviceId == target.id, "wrong_route")
         val id = sender.id + "/" + r.submissionId
@@ -354,9 +354,9 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
             requireApi(MessageDigest.isEqual(digest, old.digest), "idempotency_conflict", 409)
             return ApiResponse(serverMessageId = old.serverId)
         }
-        val records = db.mailbox.all().filter { it.recipientRoutingId == target.routingId }
-        requireApi(records.size < 128 && records.sumOf { it.encryptedEnvelope.size.toLong() } + r.encryptedEnvelope.size <= 8L * 1024 * 1024 && db.mailbox.size() < 2048, "mailbox_full", 429)
-        requireApi(db.submissions.all().count { it.sender == sender.id } < 1024 && db.submissions.size() < 10000, "submission_capacity", 429)
+        val usage = db.mailboxUsageForRecipient(target.routingId)
+        requireApi(usage.count < 128 && usage.bytes + r.encryptedEnvelope.size <= 8L * 1024 * 1024 && db.mailbox.size() < 2048, "mailbox_full", 429)
+        requireApi(db.countSubmissionsForSender(sender.id) < 1024 && db.submissions.size() < 10000, "submission_capacity", 429)
         val serverId = RandomIdentifiers.create()
         // One authoritative millisecond sample/deadline for payload and sender receipt.
         val receivedAt = now()

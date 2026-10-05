@@ -13,9 +13,67 @@ import org.junit.Test
 import java.sql.DriverManager
 import java.net.ServerSocket
 import java.util.concurrent.Executors
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.time.*
 
 class PostgresTest {
+    @Test fun targetedRepositoryReadsMatchRowsAndRespectRecipientIsolation()=runBlocking {
+        Fixture().use { f ->
+            val service=f.service()
+            val a=register(service,"alice")
+            val b=register(service,"bob")
+            val now=System.currentTimeMillis()
+            val messageId=RandomIdentifiers.create()
+            val submissionId=a.registration.deviceId+"/"+RandomIdentifiers.create()
+            val expiredChallenge=RandomIdentifiers.create()
+            val expiredSession="a".repeat(64)
+            val expiredBlob="b".repeat(64)
+            f.db.transaction {
+                f.db.mailbox.put(messageId,MailboxRow(messageId,b.registration.routingId,byteArrayOf(1,2,3),now,now+60000))
+                f.db.submissions.put(submissionId,SubmissionRow(submissionId,a.registration.deviceId,ByteArray(32),messageId,now+60000))
+                f.db.challenges.put(expiredChallenge,ChallengeRow(Challenge(expiredChallenge,ByteArray(32),now-1,"ghostcloak.local",a.registration.accountId,a.registration.deviceId,"login",byteArrayOf())))
+                f.db.sessions.all().first {it.deviceId==a.registration.deviceId}.let { f.db.sessions.remove(it.hash) }
+                f.db.sessions.put(expiredSession,SessionRow(expiredSession,a.registration.deviceId,now-1))
+                f.db.blobs.put(expiredBlob,BlobRow(expiredBlob,a.registration.accountId,a.registration.deviceId,1,ByteArray(32),ByteArray(32),now-1000,now-1))
+                assertEquals(a.registration.accountId,f.db.accountByGhostCloakId(a.state.ghostCloakId())?.id)
+                assertEquals(b.registration.deviceId,f.db.deviceByRoutingId(b.registration.routingId)?.id)
+                assertNull(f.db.accountByGhostCloakId("222222222222"))
+                assertNull(f.db.deviceByRoutingId(RandomIdentifiers.create()))
+                assertEquals(listOf(messageId),f.db.mailboxForRecipient(b.registration.routingId).map {it.id})
+                assertTrue(f.db.mailboxForRecipient(a.registration.routingId).isEmpty())
+                assertEquals(MailboxUsage(1,3),f.db.mailboxUsageForRecipient(b.registration.routingId))
+                assertEquals(MailboxUsage(0,0),f.db.mailboxUsageForRecipient(a.registration.routingId))
+                assertEquals(1,f.db.countSubmissionsForSender(a.registration.deviceId))
+                assertEquals(0,f.db.countSubmissionsForSender(b.registration.deviceId))
+                assertEquals(listOf(submissionId),f.db.submissionByServerId(messageId).map {it.id})
+                assertTrue(f.db.submissionByServerId(RandomIdentifiers.create()).isEmpty())
+                assertTrue(expiredChallenge in f.db.expiredChallengeIds(now))
+                assertTrue(expiredSession in f.db.expiredSessionHashes(now))
+                assertEquals(listOf(expiredBlob),f.db.expiredBlobs(now).map {it.id})
+            }
+        }
+    }
+    @Test fun independentTransactionsStillSerializeUnderAdvisoryLock() {
+        Fixture().use { f ->
+            val pool=Executors.newFixedThreadPool(2)
+            val entered=CountDownLatch(1)
+            val release=CountDownLatch(1)
+            val secondStarted=CountDownLatch(1)
+            val secondEntered=CountDownLatch(1)
+            try {
+                val first=pool.submit { f.db.transaction { entered.countDown(); check(release.await(4,TimeUnit.SECONDS)) } }
+                assertTrue(entered.await(4,TimeUnit.SECONDS))
+                val second=pool.submit { secondStarted.countDown(); f.db.transaction { secondEntered.countDown() } }
+                assertTrue(secondStarted.await(4,TimeUnit.SECONDS))
+                assertFalse("independent transaction bypassed the shared lock",secondEntered.await(200,TimeUnit.MILLISECONDS))
+                release.countDown()
+                first.get(6,TimeUnit.SECONDS)
+                second.get(6,TimeUnit.SECONDS)
+                assertEquals(0L,secondEntered.count)
+            } finally { release.countDown();pool.shutdownNow() }
+        }
+    }
     @Test fun v007DiscardsDisposableIdentityRowsAndEnforcesAnonymousIdSchema() = runBlocking {
         Fixture().use { f ->
             val a = register(f.service(), "Alex")
@@ -193,6 +251,9 @@ class PostgresTest {
     @Test fun persistentLimitsAndScheduledCleanupSurviveServiceReplacement()=runBlocking {
         Fixture().use {f->
             val now=System.currentTimeMillis()
+            assertTrue(PostgresRateLimiter(f.db,1).allow(ServerOperation.LOOKUP,"fixture-device",now))
+            // LOOKUP permits three requests at limit=1; the fourth must remain blocked after reopening.
+            assertTrue(PostgresRateLimiter(PostgresDatabase(f.source),1).allow(ServerOperation.LOOKUP,"fixture-device",now))
             assertTrue(PostgresRateLimiter(f.db,1).allow(ServerOperation.LOOKUP,"fixture-device",now))
             assertFalse(PostgresRateLimiter(PostgresDatabase(f.source),1).allow(ServerOperation.LOOKUP,"fixture-device",now))
             assertTrue(PostgresRateLimiter(f.db,1).allow(ServerOperation.LOOKUP,"fixture-device",now+60000))

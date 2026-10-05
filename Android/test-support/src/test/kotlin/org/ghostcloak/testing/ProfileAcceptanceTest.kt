@@ -115,7 +115,8 @@ class ProfileAcceptanceTest {
         assertEquals("Alex",p.a.contacts().single().contact.displayName)
         p.a.acceptNetwork(p.be.encrypt(p.aid,ConversationPayload.encodeProfile("Robert")))
         assertEquals("Alex - Work",p.a.contacts().single().contact.visibleName)
-        assertEquals("Robert",p.a.contacts().single().contact.displayName)
+        // Once a revisioned profile is authenticated, a delayed legacy update cannot roll it back.
+        assertEquals("Alex",p.a.contacts().single().contact.displayName)
         assertEquals(before.ghostCloakId,p.a.contacts().single().contact.ghostCloakId)
         val q=Pairing(); q.prepare(); q.b.acceptRequest(q.aid,q.outbox);q.b.retryNetwork(q.outbox)
         q.a.block(q.bid,true)

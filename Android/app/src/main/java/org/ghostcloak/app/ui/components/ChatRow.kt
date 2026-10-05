@@ -23,7 +23,7 @@ import java.time.format.DateTimeFormatter
         color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(vertical = GhostDimensions.previewInset, horizontal = GhostDimensions.fieldCorner), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(GhostDimensions.regular)) {
-            Avatar(contact.visibleName)
+            Avatar(contact.visibleName,photo=if(contact.request || contact.blocked) null else status.sharedPhoto)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(GhostDimensions.tiny)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(contact.visibleName, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,

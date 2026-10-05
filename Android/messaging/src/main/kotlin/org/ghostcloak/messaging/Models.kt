@@ -16,7 +16,8 @@ data class Contact(val contactId: String, val publicUserId: String, val displayN
         else localAlias ?: displayName
     override fun toString() = "Contact(redacted)"
 }
-data class ContactStatus(val contact: Contact, val identity: RemoteIdentityStatus?, val session: SessionLifecycle?)
+data class ContactStatus(val contact: Contact, val identity: RemoteIdentityStatus?, val session: SessionLifecycle?,
+    val sharedAbout:String?=null, val sharedPhoto:ByteArray?=null)
 @Serializable enum class Direction { INCOMING, OUTGOING }
 @Serializable enum class MessageState { PENDING, ENCRYPTED, SENT_TO_TRANSPORT, DELIVERED_LOCAL_SIMULATION, FAILED, SERVER_ACCEPTED, RECEIVED, DELIVERED, EXPIRED_UNDELIVERED }
 @Serializable enum class ViewOnceKind { TEXT, PHOTO }

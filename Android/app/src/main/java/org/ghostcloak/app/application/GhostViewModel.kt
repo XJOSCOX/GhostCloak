@@ -16,6 +16,7 @@ import org.ghostcloak.transport.TransportFailure
 
 data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? = null,
     val ghostCloakId:String?=null,
+    val ownProfile:LocalProfile=LocalProfile(),
     val requireRequestConfirmation:Boolean=true,
     val blockedContacts:List<Contact> = emptyList(),
     val reactionsAvailable:Boolean=false,
@@ -79,6 +80,7 @@ class GhostViewModel internal constructor(application: Application, private val 
                     val reactionsAvailable=selected?.takeIf {id -> contacts.any {it.contact.remoteDeviceId==id && !it.contact.request && !it.contact.blocked}}
                         ?.let {id -> runCatching {active.reactionPeer(id)}.getOrDefault(false)} ?: false
                     mutable.value = mutable.value.copy(identity = identity, ghostCloakId=if(identity!=null) runtime.ownGhostCloakId() else null, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
+                        ownProfile=if(identity!=null) active.localProfile() else LocalProfile(),
                         reactionsAvailable=reactionsAvailable,
                         requireRequestConfirmation=active.requireRequestConfirmation(),
                         blockedContacts=if(identity!=null) active.blockedContacts() else emptyList(),
@@ -158,7 +160,25 @@ class GhostViewModel internal constructor(application: Application, private val 
         runtime.addNetwork(ghostCloakId, it); withContext(Dispatchers.Main) { success() }; null
     }
     fun create(displayName: String) = run(activity = NetworkStatus.CONNECTING) { runtime.create(it, displayName); null }
-    fun rename(displayName: String) = run { it.rename(displayName); null }
+    fun rename(displayName: String) = run { it.rename(displayName); pollingWake.trySend(Unit); null }
+    fun setAbout(value:String)=run {it.setAbout(value);pollingWake.trySend(Unit);null}
+    fun setProfileSharing(value:Boolean)=run {it.setProfileSharing(value);pollingWake.trySend(Unit);null}
+    fun removeProfilePhoto()=run {it.setProfilePhoto(null);pollingWake.trySend(Unit);null}
+    fun setProfilePhoto(uri:android.net.Uri)=run {
+        val context=getApplication<Application>()
+        val target=org.ghostcloak.app.attachments.ProfilePhotoPreparation.newScratch(context.noBackupFilesDir)
+        try {
+            withContext(Dispatchers.IO) {
+                context.contentResolver.openInputStream(uri)?.use { input -> target.outputStream().use { output ->
+                    org.ghostcloak.app.attachments.PhotoPreparation.boundedCopy(input,output,
+                        org.ghostcloak.app.attachments.PhotoPreparation.SOURCE_CAP)
+                } } ?: throw IllegalArgumentException("Unable to read photo")
+                val bytes=org.ghostcloak.app.attachments.ProfilePhotoPreparation.prepare(target)
+                try {it.setProfilePhoto(bytes)} finally {bytes.fill(0)}
+            }
+            pollingWake.trySend(Unit);null
+        } finally {target.delete()}
+    }
     fun select(id: String) { selected = id; safetyNumberSelection.clear(); mutable.value = mutable.value.copy(messages = emptyList(), safetyNumber = null); refresh() }
     fun leaveConversation(id: String) { if (selected == id) selected = null }
     fun exportCard() = run { mutable.value = mutable.value.copy(card = it.exportCard(fresh = true)); null }

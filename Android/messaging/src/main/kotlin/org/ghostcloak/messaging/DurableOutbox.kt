@@ -32,6 +32,12 @@ class DurableOutbox(private val records: EndpointRecords, private val engine: Se
     fun pendingIds(): List<String> = records.transaction { records.keys("outbox/").map { it.removePrefix("outbox/") } }
     /** Caller must hold authenticated terminal expiry evidence for this exact submission. */
     fun removeExpired(id:String)=records.transaction {records.remove(key(id))}
+    /** A superseded profile control must not be retried after a newer local revision or opt-out. */
+    fun cancelSupersededProfile(id:String) = records.transaction {
+        val entry=get(id)
+        require(entry.state!=OutboxState.SERVER_ACCEPTED)
+        records.remove(key(id))
+    }
     suspend fun enqueue(deviceId: String, plaintext: ByteArray, committed: (String) -> Unit = {}): String = withContext(Dispatchers.IO) { mutex.withLock {
         requireApi(RandomIdentifiers.valid(deviceId) && plaintext.size in 1..EnvelopeCodec.MAX_BODY)
         val id = RandomIdentifiers.create()

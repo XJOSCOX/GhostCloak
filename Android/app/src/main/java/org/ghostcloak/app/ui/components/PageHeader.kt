@@ -24,13 +24,13 @@ import org.ghostcloak.app.ui.theme.GhostLayout
 
 /** Shared by root and detail pages; accessible targets remain larger than the visible icons. */
 @Composable fun PageHeader(title: String, subtitle: String? = null, back: (() -> Unit)? = null,
-    avatarName: String? = null, center: String? = null, leading: (@Composable () -> Unit)? = null, actions: @Composable RowScope.() -> Unit = {}) {
+    avatarName: String? = null, avatarPhoto:ByteArray?=null, center: String? = null, leading: (@Composable () -> Unit)? = null, actions: @Composable RowScope.() -> Unit = {}) {
     Column(Modifier.fillMaxWidth().testTag("page-header")) {
         Row(Modifier.fillMaxWidth().heightIn(min = GhostLayout.headerHeight).padding(horizontal = GhostLayout.headerOuterInset),
             verticalAlignment = Alignment.CenterVertically) {
             if (back != null) HeaderAction(Glyph.BACK, "Back", back)
             if (avatarName != null) {
-                Avatar(avatarName, Modifier.size(GhostLayout.headerAvatar))
+                Avatar(avatarName, Modifier.size(GhostLayout.headerAvatar),avatarPhoto)
                 Spacer(Modifier.width(GhostLayout.headerAvatarGap))
             }
             if (leading != null) Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { leading() }

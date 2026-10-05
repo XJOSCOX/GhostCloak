@@ -83,7 +83,8 @@ import org.ghostcloak.protocol.EnvelopeCodec
             status.contact.request -> "Message request - Unverified"
             !active -> "Session unavailable"
             else -> null
-        }, back = back, avatarName = status.contact.visibleName) {
+        }, back = back, avatarName = status.contact.visibleName,
+            avatarPhoto=if(status.contact.request || status.contact.blocked) null else status.sharedPhoto) {
             if(!status.contact.request && !status.contact.blocked)
                 HeaderAction(Glyph.SEARCH,"Search conversation") { searching=!searching;query="";resultPosition=0 }
             val verified = status.identity?.trustState == IdentityTrustState.VERIFIED

@@ -125,6 +125,8 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
     }
     override fun onCreate() {
         super.onCreate()
+        if (getSystemService(android.os.UserManager::class.java).isUserUnlocked)
+            org.ghostcloak.app.attachments.ProfilePhotoPreparation.cleanupAbandoned(noBackupFilesDir)
         if (!localOperationGate.blocked && getSystemService(android.os.UserManager::class.java).isUserUnlocked) inactivity.check()
         if (!localOperationGate.blocked && !inactivity.normalAccessAllowed) {
             recoveryScope.launch { try { BackgroundSyncSchedule.cancelForLocalOperation(this@GhostApplication) } catch (_: Exception) { } }

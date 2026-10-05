@@ -8,6 +8,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.luminance
 import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.identity.IdentityTrustState
@@ -22,10 +25,25 @@ import org.ghostcloak.app.ui.theme.GhostPalette
     }
 }
 @Composable fun SectionLabel(text: String) { Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-@Composable fun Avatar(name: String, modifier: Modifier = Modifier) {
+@Composable fun Avatar(name: String, modifier: Modifier = Modifier, photo:ByteArray?=null) {
     val (background, foreground) = avatarColors()
+    val digest=photo?.let {java.security.MessageDigest.getInstance("SHA-256").digest(it).joinToString("") { b -> "%02x".format(b) }}
+    val bitmap=remember(digest) {
+        photo?.let { bytes ->
+            try {
+                org.ghostcloak.messaging.ProfileRules.photo(bytes)
+                android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,
+                    android.graphics.BitmapFactory.Options().apply {inSampleSize=2})?.takeIf {
+                    it.width<=128 && it.height<=128
+                }?.asImageBitmap()
+            } catch (_:Exception) {null} catch (_:OutOfMemoryError) {null}
+        }
+    }
     Surface(modifier.size(GhostDimensions.avatar), shape = CircleShape, color = background) {
-        Box(contentAlignment = Alignment.Center) { Text(name.take(1).uppercase(), color = foreground, style = MaterialTheme.typography.titleLarge) }
+        Box(contentAlignment = Alignment.Center) {
+            if(bitmap!=null) Image(bitmap,null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
+            else Text(name.take(1).uppercase(), color = foreground, style = MaterialTheme.typography.titleLarge)
+        }
     }
 }
 @Composable fun TrustBadge(state: IdentityTrustState?) {

@@ -10,7 +10,8 @@ import org.ghostcloak.protocol.*
 import org.ghostcloak.transport.*
 
 /** Serialized application boundary. UI never receives the engine, records, or transport. */
-class ConversationService(private val engine: SecureSessionEngine, private val repository: LocalRepository) {
+class ConversationService(private val engine: SecureSessionEngine, private val repository: LocalRepository,
+    private val photoValidator:(ByteArray)->Boolean={true}) {
     init { repository.finalizeInterruptedViews() }
     private val mutex = Mutex()
     private var identity: DeviceIdentity? = null
@@ -26,7 +27,24 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     }
     suspend fun rename(displayName: String): DeviceIdentity = action {
         TextRules.displayName(displayName)
-        engine.renameLocalUser(displayName).also { identity = it; exported = null }
+        engine.renameLocalUser(displayName).also { identity = it; exported = null; repository.updateLocalProfile(nameChanged=true) }
+    }
+    suspend fun localProfile():LocalProfile=action {repository.localProfile()}
+    suspend fun setAbout(value:String):LocalProfile=action {repository.updateLocalProfile(about=value)}
+    suspend fun setProfilePhoto(bytes:ByteArray?):LocalProfile=action {
+        bytes?.let {ProfileRules.photo(it);require(photoValidator(it))}
+        repository.updateLocalProfile(photo=bytes,changePhoto=true)
+    }
+    suspend fun setProfileSharing(value:Boolean):LocalProfile=action {repository.updateLocalProfile(sharing=value)}
+    private fun profilePayload(id:String):ByteArray {
+        val me=identity ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        val local=repository.localProfile()
+        return if(repository.profilePeer(id)) ConversationPayload.encodeProfile(ProfileUpdate(local.revision,
+            me.displayName,local.about,local.photo,local.sharing))
+        else {
+            require(local.sharing) {"legacy_profile_sharing_disabled"}
+            ConversationPayload.encodeProfile(me.displayName)
+        }
     }
     suspend fun attach(value: EncryptedMessageTransport) = action { transport = value }
     suspend fun exportCard(fresh: Boolean = false): String = action {
@@ -79,7 +97,11 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             repository.isActiveContact(it.remoteDeviceId) ||
                 repository.relationshipState(it.remoteDeviceId)==RelationshipState.REQUEST_PENDING
         ) }
-            .map { ContactStatus(it, engine.getRemoteIdentityStatus(it.remoteDeviceId), engine.getSessionLifecycle(it.remoteDeviceId)) }
+            .map { contact ->
+                val profile=repository.remoteProfile(contact.remoteDeviceId)
+                ContactStatus(contact, engine.getRemoteIdentityStatus(contact.remoteDeviceId),
+                    engine.getSessionLifecycle(contact.remoteDeviceId),profile?.about?.takeIf(String::isNotEmpty),profile?.photo)
+            }
     }
     suspend fun blockedContacts():List<Contact> = action {repository.listBlocked()}
     suspend fun unblock(id:String) = action {repository.unblock(id)}
@@ -158,7 +180,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             require(repository.mediaPeer(id)) { "media_capability_required" }
         networkAllowed(id); repository.capacity(); descriptor.validate()
         val normalized=ConversationPayload.validateCaption(caption)
-        val bytes=ConversationPayload.encodeAttachment(descriptor,identity?.displayName,viewOnce,normalized)
+        val bytes=ConversationPayload.encodeAttachment(descriptor,identity?.displayName?.takeIf {repository.localProfile().sharing},viewOnce,normalized)
         lateinit var message:Message
         val submission=try { outbox.enqueue(id,bytes) { localId ->
             message=Message(localId,id,Direction.OUTGOING,normalized,repository.clock.now().wall,MessageState.PENDING,
@@ -205,7 +227,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             }
             require(kind==replyTo.kind)
         }
-        val bytes = ConversationPayload.encode(body, seconds, control,identity?.displayName,viewOnce,replyTo)
+        val bytes = ConversationPayload.encode(body, seconds, control,identity?.displayName?.takeIf {repository.localProfile().sharing},viewOnce,replyTo)
         lateinit var message: Message
         val submission = try { outbox.enqueue(id, bytes) { submission ->
             message = Message(submission, id, Direction.OUTGOING, if (control) ConversationPayload.policyText(seconds) else body,
@@ -226,6 +248,15 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         if(engine.getSessionLifecycle(id)!=SessionLifecycle.ACTIVE) throw CryptoFailure(CryptoError.UnknownSession)
     }
     suspend fun retryNetwork(outbox:DurableOutbox)=action {
+        val existing=outbox.pendingIds().toSet()
+        for(id in repository.profileCancellations()) {
+            val entry=if(id in existing) outbox.get(id) else null
+            if(entry!=null) {
+                if(entry.state==OutboxState.SERVER_ACCEPTED || entry.state==OutboxState.FAILED) outbox.removeFinished(id)
+                else outbox.cancelSupersededProfile(id)
+            }
+            repository.profileCancellationDone(id)
+        }
         for(id in outbox.pendingIds()) {
             val entry=outbox.get(id)
             if(repository.messages(entry.deviceId).any {it.localId==id && it.state==MessageState.EXPIRED_UNDELIVERED}) {
@@ -256,9 +287,12 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 if(e.error in setOf(CryptoError.IdentityChanged,CryptoError.UnknownSession,CryptoError.ReauthenticationRequired)) continue
                 throw e
             }
-            val me=identity ?: if(repository.hasIdentity()) engine.createIdentity("Local").also { identity=it }
+            identity ?: if(repository.hasIdentity()) engine.createIdentity("Local").also { identity=it }
                 else throw AppFailure(AppError.CONTACT_UNAVAILABLE)
-            val bytes=ConversationPayload.encodeProfile(me.displayName)
+            if(!repository.profileReady(peer) || (!repository.localProfile().sharing && !repository.profilePeer(peer))) {
+                repository.profileSynced(peer,submission);continue
+            }
+            val bytes=profilePayload(peer)
             try { outbox.enqueue(peer,bytes) { repository.profileIntent(peer,it) } }
             finally { bytes.fill(0) }
         }
@@ -292,8 +326,17 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             if(content.profileUpdate) {
                 // Unknown and still-pending relationships do not learn a profile or
                 // create a conversation. The authenticated receipt permits ACK.
-                if(contacts.any {it.remoteDeviceId==contact.remoteDeviceId} && !contact.request)
-                    repository.save(contact.copy(displayName=requireNotNull(content.displayName)))
+                if(contacts.any {it.remoteDeviceId==contact.remoteDeviceId} && !contact.request) {
+                    repository.peerAcceptedProfile(contact.remoteDeviceId)
+                    if(content.profile!=null) {
+                        content.profile.photo?.let {require(photoValidator(it))}
+                        val first=!repository.profilePeer(contact.remoteDeviceId)
+                        repository.profilePeer(contact.remoteDeviceId,true)
+                        repository.acceptRemoteProfile(contact.remoteDeviceId,content.profile)
+                        if(first) repository.profileIntent(contact.remoteDeviceId,RandomIdentifiers.create())
+                    } else if(repository.remoteProfile(contact.remoteDeviceId)==null)
+                        repository.save(contact.copy(displayName=requireNotNull(content.displayName)))
+                }
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
@@ -308,12 +351,17 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 throw AppFailure(AppError.BLOCKED)
             repository.capacity()
             repository.expireRequests()
-            repository.save(if(content.displayName!=null) contact.copy(displayName=content.displayName) else contact)
+            repository.save(if(content.displayName!=null && repository.remoteProfile(contact.remoteDeviceId)==null)
+                contact.copy(displayName=content.displayName) else contact)
             // A later legacy message withdraws the claim (for example after a downgrade).
             if (content.attachment == null) {
                 repository.attachmentPeer(contact.remoteDeviceId,content.supportsAttachments)
                 repository.mediaPeer(contact.remoteDeviceId,content.supportsMedia)
                 repository.reactionPeer(contact.remoteDeviceId,content.supportsReactions)
+                val firstProfile=content.supportsProfiles && !repository.profilePeer(contact.remoteDeviceId)
+                repository.profilePeer(contact.remoteDeviceId,content.supportsProfiles)
+                if(firstProfile && !contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId})
+                    repository.profileIntent(contact.remoteDeviceId,RandomIdentifiers.create())
             }
             val now = repository.clock.now()
             repository.saveAccepted(Message(envelope.envelopeId,contact.remoteDeviceId,Direction.INCOMING,
@@ -343,11 +391,11 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         val contact = repository.contact(id)
         if (contact.blocked) throw AppFailure(AppError.BLOCKED)
         if(contact.request) {
-            if(outbox==null) repository.acceptRequest(id)
+            if(outbox==null || (!repository.localProfile().sharing && !repository.profilePeer(id))) repository.acceptRequest(id)
             else {
-                val me=identity ?: if(repository.hasIdentity()) engine.createIdentity("Local").also { identity=it }
+                identity ?: if(repository.hasIdentity()) engine.createIdentity("Local").also { identity=it }
                     else throw AppFailure(AppError.CONTACT_UNAVAILABLE)
-                val bytes=ConversationPayload.encodeProfile(me.displayName)
+                val bytes=profilePayload(id)
                 try { outbox.enqueue(id,bytes) { submission ->
                     repository.acceptRequest(id) { repository.profileIntent(id,submission) }
                 } } finally { bytes.fill(0) }

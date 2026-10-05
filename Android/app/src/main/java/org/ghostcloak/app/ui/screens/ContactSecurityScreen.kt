@@ -32,7 +32,7 @@ import org.ghostcloak.protocol.GhostCloakIds
     LaunchedEffect(contact.contact.remoteDeviceId, contact.contact.contactId, changed) { load(changed) }
     PageContent("Contact details", "Verify the person behind the name.", back) {
         Row(Modifier.fillMaxWidth(),horizontalArrangement = Arrangement.spacedBy(GhostDimensions.regular),verticalAlignment=Alignment.CenterVertically) {
-            Avatar(contact.contact.visibleName)
+            Avatar(contact.contact.visibleName,photo=if(contact.contact.request || contact.contact.blocked) null else contact.sharedPhoto)
             Column(verticalArrangement = Arrangement.spacedBy(GhostDimensions.small)) {
                 Text(contact.contact.visibleName, style = MaterialTheme.typography.titleLarge)
                 TrustBadge(contact.identity?.trustState)
@@ -56,6 +56,11 @@ import org.ghostcloak.protocol.GhostCloakIds
             }
         }
         if(!contact.contact.request && !contact.contact.blocked) {
+            SectionLabel("SHARED PROFILE NAME")
+            Text(contact.contact.displayName.ifBlank {"Not shared"},style=MaterialTheme.typography.bodyMedium)
+            contact.sharedAbout?.let {SectionLabel("ABOUT");Text(it,style=MaterialTheme.typography.bodyMedium)}
+            Text("Profile details do not verify this person's identity.",style=MaterialTheme.typography.bodySmall,
+                color=MaterialTheme.colorScheme.onSurfaceVariant)
             TextButton(onClick={aliasDraft=contact.contact.localAlias.orEmpty();editingAlias=true}) {
                 Text(if(contact.contact.localAlias==null) "Set local alias" else "Edit local alias")
             }

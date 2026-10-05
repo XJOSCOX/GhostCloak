@@ -21,6 +21,7 @@ object ConversationPayload {
     private val attachmentSupport = "GhostCloak/padding/attachments/v1!".toByteArray(Charsets.US_ASCII)
     private val mediaSupport = "GhostCloak/padding/media/v1!".toByteArray(Charsets.US_ASCII)
     private val reactionSupport = "GhostCloak/padding/reactions/v1!".toByteArray(Charsets.US_ASCII)
+    private val profileSupport = "GhostCloak/padding/profile/v2!".toByteArray(Charsets.US_ASCII)
     val reactionEmoji = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
     private val profileMarker = "GhostCloak/profile/v1!".toByteArray(Charsets.US_ASCII)
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
@@ -30,7 +31,8 @@ object ConversationPayload {
         val supportsAttachments: Boolean = false, val displayName: String? = null,
         val profileUpdate: Boolean = false, val viewOnceKind: ViewOnceKind? = null,
         val replyTo: ReplyReference? = null, val supportsMedia:Boolean=false,
-        val supportsReactions:Boolean=false,val reaction:ReactionUpdate?=null) {
+        val supportsReactions:Boolean=false,val reaction:ReactionUpdate?=null,
+        val supportsProfiles:Boolean=false,val profile:ProfileUpdate?=null) {
         override fun toString() = "Content(redacted)"
     }
     private fun profileBytes(displayName:String?):ByteArray = displayName?.let {
@@ -45,6 +47,28 @@ object ConversationPayload {
         ByteBuffer.wrap(bytes).put(magic).put(1).put(4).putShort(0).putInt(0).putInt(0)
         profile.copyInto(bytes,16)
         return bytes
+    }
+    /** Type 10 is sent only after an authenticated peer advertisement. */
+    fun encodeProfile(update:ProfileUpdate):ByteArray {
+        require(update.revision>0)
+        val name=if(update.sharing) update.displayName else ""
+        if(update.sharing) TextRules.displayName(name)
+        val about=if(update.sharing) ProfileRules.about(update.about) else ""
+        require(about==update.about || !update.sharing)
+        val photo=if(update.sharing) update.photo else null
+        photo?.let(ProfileRules::photo)
+        val nameBytes=name.encodeToByteArray(); val aboutBytes=about.encodeToByteArray()
+        val length=8+1+1+2+2+nameBytes.size+aboutBytes.size+(photo?.size ?: 0)
+        val size=((16+length+255)/256)*256
+        require(size<=ProfileRules.MAX_PADDED_UPDATE)
+        return ByteArray(size).also { bytes ->
+            SecureRandom().nextBytes(bytes)
+            ByteBuffer.wrap(bytes).put(magic).put(1).put(10).putShort(0).putInt(0).putInt(length)
+                .putLong(update.revision).put(if(update.sharing) 1.toByte() else 0.toByte())
+                .put(nameBytes.size.toByte()).putShort(aboutBytes.size.toShort()).putShort((photo?.size ?: 0).toShort())
+                .put(nameBytes).put(aboutBytes)
+            if(photo!=null) ByteBuffer.wrap(bytes,16+length-photo.size,photo.size).put(photo)
+        }
     }
     fun validateCaption(value:String):String {
         val trimmed=value.trim()
@@ -111,6 +135,9 @@ object ConversationPayload {
             val reactionOffset=16+text.size+replyBytes.size+extension.size+profile.size+(if(media) mediaSupport.size else 0)
             if(extension.isNotEmpty() && reactionOffset+reactionSupport.size<=size)
                 reactionSupport.copyInto(bytes,reactionOffset)
+            val profileOffset=reactionOffset+(if(extension.isNotEmpty() && reactionOffset+reactionSupport.size<=size) reactionSupport.size else 0)
+            if(extension.isNotEmpty() && profileOffset+profileSupport.size<=size)
+                profileSupport.copyInto(bytes,profileOffset)
             return bytes
         } finally { text.fill(0) }
     }
@@ -128,12 +155,33 @@ object ConversationPayload {
         if (!ByteArray(4).also { input.get(it) }.contentEquals(magic) || input.get().toInt() != 1)
             throw AppFailure(AppError.INVALID_TEXT)
         val type = input.get().toInt()
-        if (type !in 1..9 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
+        if (type !in 1..10 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
         val seconds = input.int; DisappearingTimer.from(seconds)
         val length = input.int
         if (length !in 0..MAX_TEXT || length > input.remaining() || (type in setOf(2,4) && length != 0) ||
             (type == 4 && (seconds != 0 || bytes.size != 256))) throw AppFailure(AppError.INVALID_TEXT)
         val text = ByteArray(length).also { input.get(it) }
+        if(type==10) {
+            try {
+                if(seconds!=0 || bytes.size>ProfileRules.MAX_PADDED_UPDATE || length<14 ||
+                    ((16+length+255)/256)*256!=bytes.size) throw AppFailure(AppError.INVALID_TEXT)
+                val value=ByteBuffer.wrap(text)
+                val revision=value.long;val sharing=value.get().toInt();val nameLength=value.get().toInt() and 255
+                val aboutLength=value.short.toInt() and 65535;val photoLength=value.short.toInt() and 65535
+                if(revision<=0 || sharing !in 0..1 || nameLength+aboutLength+photoLength!=value.remaining())
+                    throw AppFailure(AppError.INVALID_TEXT)
+                val name=ByteArray(nameLength).also(value::get).decodeToString(throwOnInvalidSequence=true)
+                val about=ByteArray(aboutLength).also(value::get).decodeToString(throwOnInvalidSequence=true)
+                val photo=if(photoLength>0) ByteArray(photoLength).also(value::get) else null
+                if(sharing==1) TextRules.displayName(name)
+                else if(name.isNotEmpty() || about.isNotEmpty() || photo!=null) throw AppFailure(AppError.INVALID_TEXT)
+                if(ProfileRules.about(about)!=about) throw AppFailure(AppError.INVALID_TEXT)
+                photo?.let(ProfileRules::photo)
+                return Content("",0,false,profileUpdate=true,profile=ProfileUpdate(revision,name,about,photo,sharing==1),
+                    supportsProfiles=true)
+            } catch (_:IllegalArgumentException) {throw AppFailure(AppError.INVALID_TEXT)}
+            finally {text.fill(0)}
+        }
         if(type==9) {
             if(length!=46 || seconds!=0 || bytes.size!=256) throw AppFailure(AppError.INVALID_TEXT)
             val value=ByteBuffer.wrap(text)
@@ -183,6 +231,9 @@ object ConversationPayload {
         val reactions=supports && bytes.size-offset>=reactionSupport.size &&
             bytes.copyOfRange(offset,offset+reactionSupport.size).contentEquals(reactionSupport)
         if(reactions) offset+=reactionSupport.size
+        val profiles=supports && bytes.size-offset>=profileSupport.size &&
+            bytes.copyOfRange(offset,offset+profileSupport.size).contentEquals(profileSupport)
+        if(profiles) offset+=profileSupport.size
         val minimum=offset
         if(((minimum+255)/256)*256!=bytes.size)
             throw AppFailure(AppError.INVALID_TEXT)
@@ -204,7 +255,7 @@ object ConversationPayload {
         if (type == 1 || type == 5 || type == 7) TextRules.encode(body).fill(0)
         return Content(body, seconds, type == 2, supportsAttachments = supports,displayName=name,
             viewOnceKind=if(type==5) ViewOnceKind.TEXT else null,replyTo=reply,supportsMedia=media,
-            supportsReactions=reactions)
+            supportsReactions=reactions,supportsProfiles=profiles)
     }
     fun policyText(seconds: Int) = if (seconds == 0) "Disappearing messages turned off"
         else "Disappearing messages set to ${DisappearingTimer.from(seconds).label}"

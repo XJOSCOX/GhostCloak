@@ -168,7 +168,8 @@ class AppRuntime internal constructor(
                             android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0))
                             else org.ghostcloak.transport.FetchCooldown()
                         network=NetworkController(records,engine,apiOrigin,connection,cooldown, ::requireNormal, operationGate)
-                        local = ConversationService(engine, LocalRepository(records, expiryClock))
+                        local = ConversationService(engine, LocalRepository(records, expiryClock),
+                            org.ghostcloak.app.attachments.ProfilePhotoPreparation::valid)
                         notificationLedger = NotificationLedger(records, expiryClock)
                         store = records
                         attachments = org.ghostcloak.attachments.AttachmentStore(records,java.io.File(context.noBackupFilesDir,"$endpointName-attachments"),

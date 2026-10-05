@@ -110,7 +110,10 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         save(c.copy(request=true,blocked=blocked))
         put("app/request/$id",RequestRecord(state=state,grace=requestDeadline(),clockVersion=1))
         put("app/force-hidden-request/$id",true)
-        records.remove("app/profile-sync/$id")
+        cancelProfileIntent(id)
+        records.remove("app/profile/remote/$id")
+        records.remove("app/profile-peer/$id")
+        records.remove("app/profile/ready/$id")
         records.remove("app/media-peer/$id")
         records.remove("app/reaction-peer/$id")
     }
@@ -144,7 +147,10 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 put("app/force-hidden-request/$id",true)
                 if(!c.request) retainHistory(id)
                 save(c.copy(request=true,blocked=true))
-                records.remove("app/profile-sync/$id")
+                cancelProfileIntent(id)
+                records.remove("app/profile/remote/$id")
+                records.remove("app/profile-peer/$id")
+                records.remove("app/profile/ready/$id")
                 if(c.request) finishRequest(id,RequestState.BLOCKED)
                 else put("app/request/$id",RequestRecord(state=RequestState.BLOCKED,grace=requestDeadline(),clockVersion=1))
             }
@@ -185,7 +191,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
             when {
                 r.state!=RequestState.PENDING || requestExpired(id) -> "request_expired"
                 r.grace.boot!=clock.now().boot && serverNow()==null -> "request_time_unavailable"
-                else -> {save(contact(id).copy(request=false));finishRequest(id,RequestState.ACCEPTED);onAccepted();null}
+                else -> {save(contact(id).copy(request=false));finishRequest(id,RequestState.ACCEPTED)
+                    records.write("app/profile/ready/$id",byteArrayOf(1));onAccepted();null}
             }
         }
         // Throw outside the transaction so rejecting Accept cannot roll back expiry cleanup.
@@ -193,7 +200,26 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     }
     // Profile intent and acceptance are committed together in the encrypted endpoint store.
     fun profileIntent(id:String,submission:String)=records.transaction {
+        val old=records.read("app/profile-sync/$id")?.decodeToString()
+        if(old!=null && old!=submission && RandomIdentifiers.valid(old))
+            records.write("app/profile-cancel/$old",byteArrayOf(1))
         records.write("app/profile-sync/$id",submission.encodeToByteArray())
+    }
+    private fun cancelProfileIntent(id:String) {
+        records.read("app/profile-sync/$id")?.decodeToString()?.takeIf(RandomIdentifiers::valid)?.let {
+            records.write("app/profile-cancel/$it",byteArrayOf(1))
+        }
+        records.remove("app/profile-sync/$id")
+    }
+    fun profileCancellations():Set<String> = records.transaction {
+        records.keys("app/profile-cancel/").map {it.removePrefix("app/profile-cancel/")}.toSet()
+    }
+    fun profileCancellationDone(submission:String)=records.transaction {records.remove("app/profile-cancel/$submission")}
+    fun profileReady(id:String):Boolean=records.transaction {
+        isActiveContact(id) && records.read("app/profile/ready/$id")?.contentEquals(byteArrayOf(1))==true
+    }
+    fun peerAcceptedProfile(id:String)=records.transaction {
+        if(isActiveContact(id)) records.write("app/profile/ready/$id",byteArrayOf(1))
     }
     fun profileIntents():Map<String,String> = records.transaction {
         records.keys("app/profile-sync/").associate { key ->
@@ -206,6 +232,42 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun profileSynced(id:String,submission:String)=records.transaction {
         val key="app/profile-sync/$id"
         if(records.read(key)?.decodeToString()==submission) records.remove(key)
+    }
+    fun localProfile():LocalProfile=records.transaction {read<LocalProfile>("app/profile/local") ?: LocalProfile()}
+    fun updateLocalProfile(about:String?=null,photo:ByteArray?=null,changePhoto:Boolean=false,
+        sharing:Boolean?=null,nameChanged:Boolean=false):LocalProfile=records.transaction {
+        val old=localProfile()
+        val next=old.copy(revision=Math.addExact(old.revision,1),
+            about=about?.let(ProfileRules::about) ?: old.about,
+            photo=if(changePhoto) photo?.copyOf()?.also(ProfileRules::photo) else old.photo,
+            sharing=sharing ?: old.sharing)
+        if(!nameChanged && old.about==next.about && old.photo.contentEqualsNullable(next.photo) && old.sharing==next.sharing) return@transaction old
+        put("app/profile/local",next)
+        contacts().filter {profileReady(it.remoteDeviceId)}.forEach {
+            if(next.sharing || profilePeer(it.remoteDeviceId)) profileIntent(it.remoteDeviceId,RandomIdentifiers.create())
+            else cancelProfileIntent(it.remoteDeviceId)
+        }
+        next
+    }
+    private fun ByteArray?.contentEqualsNullable(other:ByteArray?):Boolean = when {
+        this==null -> other==null
+        other==null -> false
+        else -> contentEquals(other)
+    }
+    fun remoteProfile(id:String):RemoteProfile?=records.transaction {
+        if(!isActiveContact(id)) null else read<RemoteProfile>("app/profile/remote/$id")
+    }
+    fun acceptRemoteProfile(id:String,update:ProfileUpdate):Boolean=records.transaction {
+        if(!isActiveContact(id) || update.revision <= (read<RemoteProfile>("app/profile/remote/$id")?.revision ?: 0L)) return@transaction false
+        val current=contact(id)
+        save(current.copy(displayName=if(update.sharing) update.displayName else ""))
+        put("app/profile/remote/$id",RemoteProfile(update.revision,if(update.sharing) update.about else "",
+            if(update.sharing) update.photo?.copyOf() else null))
+        true
+    }
+    fun profilePeer(id:String):Boolean=records.transaction {records.read("app/profile-peer/$id")?.contentEquals(byteArrayOf(1))==true}
+    fun profilePeer(id:String,supported:Boolean)=records.transaction {
+        if(supported) records.write("app/profile-peer/$id",byteArrayOf(1)) else records.remove("app/profile-peer/$id")
     }
     fun attachmentPeer(id: String): Boolean = records.transaction {
         records.read("app/attachment-peer/$id")?.contentEquals(byteArrayOf(1)) == true ||
@@ -232,6 +294,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         records.remove("app/capability-deadline/$id")
         records.remove("app/media-peer/$id")
         records.remove("app/reaction-peer/$id")
+        records.remove("app/profile-peer/$id")
     }
     fun attachmentPeer(id: String, supported: Boolean) = records.transaction {
         if (supported) records.write("app/attachment-peer/$id", byteArrayOf(1)) else records.remove("app/attachment-peer/$id")

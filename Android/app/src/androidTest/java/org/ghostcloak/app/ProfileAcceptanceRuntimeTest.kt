@@ -37,4 +37,34 @@ class ProfileAcceptanceRuntimeTest {
             } finally {resumed.close()}
         } finally {a.close();b.close()}
     }
+    @Test fun acceptedProfilePhotoAndAboutSyncEncryptedAndRemove()=runBlocking {
+        val wire=SyntheticNetwork()
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val a=AppRuntime(context,"https://fixture.invalid",RandomIdentifiers.create(),wire)
+        val b=AppRuntime(context,"https://fixture.invalid",RandomIdentifiers.create(),wire)
+        val source=java.io.File.createTempFile("profile-runtime-",".jpg",context.noBackupFilesDir)
+        try {
+            val image=android.graphics.Bitmap.createBitmap(128,128,android.graphics.Bitmap.Config.ARGB_8888)
+            image.eraseColor(android.graphics.Color.GREEN)
+            source.outputStream().use {assertTrue(image.compress(android.graphics.Bitmap.CompressFormat.JPEG,75,it))}
+            image.recycle()
+            val photo=org.ghostcloak.app.attachments.ProfilePhotoPreparation.prepare(source)
+            a.use {a.create(it,"Alice")};b.use {b.create(it,"Bob");it.setAbout("Private status");it.setProfilePhoto(photo)}
+            val aid=a.use {it.open()!!.deviceId};val bid=b.use {it.open()!!.deviceId}
+            a.use {a.addNetwork(b.ownGhostCloakId()!!,it);a.send(it,bid,"Introduction")}
+            b.use {b.syncNetwork(it)}
+            assertTrue(b.use {it.contacts().single().contact.request})
+            assertNull(b.use {it.contacts().single().sharedAbout})
+            b.use {b.acceptRequest(it,aid);b.syncNetwork(it);b.syncNetwork(it)}
+            a.use {a.syncNetwork(it)}
+            val received=a.use {it.contacts().single()}
+            assertEquals("Private status",received.sharedAbout)
+            assertArrayEquals(photo,received.sharedPhoto)
+            assertTrue(wire.sent.all {bytes -> !bytes.toString(Charsets.ISO_8859_1).contains("Private status")})
+            b.use {it.setAbout("");it.setProfilePhoto(null);b.syncNetwork(it);b.syncNetwork(it)}
+            a.use {a.syncNetwork(it)}
+            assertNull(a.use {it.contacts().single().sharedAbout})
+            assertNull(a.use {it.contacts().single().sharedPhoto})
+        } finally {source.delete();a.close();b.close()}
+    }
 }

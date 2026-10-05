@@ -103,6 +103,20 @@ class LocalDestructionAndroidTest {
         try {
             f.own+=setOf("ghost-cloak.db.$bEndpoint","ghost-cloak.db.$cEndpoint")
             a.use {a.create(it,"alice")}; b.use {b.create(it,"bob")}; c.use {c.create(it,"charlie")}
+            val avatar=android.graphics.Bitmap.createBitmap(128,128,android.graphics.Bitmap.Config.ARGB_8888)
+            avatar.eraseColor(android.graphics.Color.BLUE)
+            val avatarBytes=java.io.ByteArrayOutputStream().use {output ->
+                assertTrue(avatar.compress(android.graphics.Bitmap.CompressFormat.JPEG,70,output));output.toByteArray()
+            }
+            avatar.recycle()
+            val avatarInput=File(f.noBackupFilesDir,"profile-fixture.jpg")
+            val normalizedAvatar=try {
+                avatarInput.writeBytes(avatarBytes)
+                org.ghostcloak.app.attachments.ProfilePhotoPreparation.prepare(avatarInput)
+            } finally {avatarInput.delete()}
+            a.use {it.setAbout("synthetic profile");it.setProfilePhoto(normalizedAvatar)}
+            assertEquals("synthetic profile",a.use {it.localProfile()}.about)
+            assertArrayEquals(normalizedAvatar,a.use {it.localProfile()}.photo)
             assertNotNull(a.ownGhostCloakId())
             val aid=a.use {it.open()!!.deviceId}; val bid=b.use {it.open()!!.deviceId}
             a.use {a.addNetwork(b.ownGhostCloakId()!!,it); a.send(it,bid,"synthetic")}; b.use {b.syncNetwork(it)}
@@ -138,6 +152,8 @@ class LocalDestructionAndroidTest {
                 compose.waitUntil(20000) {model.state.value.ready && !model.state.value.loading}
                 compose.onNodeWithText("Create identity").assertExists()
                 assertNull(model.state.value.identity); assertTrue(model.state.value.contacts.isEmpty())
+                assertEquals("",model.state.value.ownProfile.about)
+                assertNull(model.state.value.ownProfile.photo)
                 assertEquals(requestCount,api.requests)
             } finally {withContext(Dispatchers.Main) {owner.clear()}; fresh.close()}
         } finally {scope.cancel(); a.close(); b.close(); c.close(); f.retireKeys()}

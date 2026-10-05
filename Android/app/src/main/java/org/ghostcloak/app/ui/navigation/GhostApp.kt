@@ -81,7 +81,8 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                         {name->model.addNetwork(name) {nav.popBackStack()}},model::unblock,{nav.navigate("blocked")},
                         { text -> model.importCard(text) { nav.popBackStack() } },
                         { id -> nav.navigate("conversation/$id") }) }
-                    composable("profiles") { ProfilesScreen(state, model::rename) { nav.navigate("contact-qr") } }
+                    composable("profiles") { ProfilesScreen(state,model::rename,{nav.navigate("contact-qr")},
+                        model::setAbout,model::setProfilePhoto,model::removeProfilePhoto,model::setProfileSharing) }
                     composable("contact-qr") { state.ghostCloakId?.let { ContactQrScreen(it) { nav.popBackStack() } } }
                     composable("settings") { protectSettings { SettingsScreen(state, model.developerAvailable, model::startDemo, model::leaveDemo,model::connectNetwork,model::syncNetwork,model::publishNetwork,model::logoutNetwork, { nav.navigate("app-lock") },model::requestPrivacy,{nav.navigate("blocked")}, {nav.navigate("emergency-wipe")}, {nav.navigate("inactive-protection")}) } }
                     composable("inactive-protection") { protectSettings {

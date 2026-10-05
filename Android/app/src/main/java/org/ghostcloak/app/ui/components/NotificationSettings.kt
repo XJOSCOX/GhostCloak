@@ -15,6 +15,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import org.ghostcloak.app.application.AndroidLocalNotifications
+import org.ghostcloak.app.application.NotificationPrivacy
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.ui.Modifier
+import androidx.compose.material3.RadioButton
 
 /** User-initiated only. After one request, further changes use Android's settings. */
 @Composable fun NotificationSettings() {
@@ -23,6 +28,7 @@ import org.ghostcloak.app.application.AndroidLocalNotifications
     val preferences = remember { context.getSharedPreferences("notification-permission", android.content.Context.MODE_PRIVATE) }
     val publisher = remember { AndroidLocalNotifications(context) }
     var revision by remember { mutableIntStateOf(0) }
+    var privacy by remember { mutableStateOf(NotificationPrivacy.read(context)) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { revision++ }
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) revision++ }
@@ -31,8 +37,24 @@ import org.ghostcloak.app.application.AndroidLocalNotifications
     }
     val enabled = remember(revision) { publisher.allowed() }
     SettingsGroup("Notifications") {
-        Text("Optional alerts show only Ghost Cloak and New message. Messaging still works without notification permission.",
+        Text("Choose what appears in notifications. The device lock screen always hides their content. Messaging works without notification permission.",
             style = MaterialTheme.typography.bodyMedium)
+        NotificationPrivacy.entries.forEach { option ->
+            Row(Modifier.fillMaxWidth().clickable {
+                NotificationPrivacy.save(context, option); privacy = option
+            }) {
+                RadioButton(selected = privacy == option, onClick = {
+                    NotificationPrivacy.save(context, option); privacy = option
+                })
+                Column(Modifier.weight(1f)) {
+                    Text(option.label)
+                    Text(option.explanation, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        Text("App Lock protects previews while locked. View Once and message requests never show content. Android may retain prior notifications in system history.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(if (enabled) "Notifications are on" else "Notifications are off", style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
         val canRequest = !enabled && Build.VERSION.SDK_INT >= 33 && !preferences.getBoolean("requested", false)

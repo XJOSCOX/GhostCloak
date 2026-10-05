@@ -86,12 +86,14 @@ class AppRuntime internal constructor(
             if (visible) { ledger.suppressAll(); cancelNotificationSafely(); return }
             if (entries.isEmpty()) { cancelNotificationSafely(); return }
             val waiting = entries.filter { it.state != NotificationLedger.ANNOUNCED }
-            if (waiting.isEmpty() || !notifications.allowed()) return
+            val candidate = (waiting.ifEmpty { entries }).maxByOrNull { it.presentation.timestamp }?.presentation
+            if (waiting.isEmpty()) { notifications.refresh(candidate); return }
+            if (!notifications.allowed()) return
             val quiet = waiting.any { it.state == NotificationLedger.POSTING } || notifications.active()
             // Durable reservation precedes OS publication. Recovery posts silently, never another sound.
             ledger.posting(waiting)
             val posted = synchronized(notificationGate) {
-                if (foreground || activityVisible) false else notifications.post(quiet)
+                if (foreground || activityVisible) false else notifications.post(quiet, candidate)
             }
             if (posted) ledger.announced(waiting)
         } catch (_: Exception) {

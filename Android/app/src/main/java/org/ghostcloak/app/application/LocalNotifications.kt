@@ -10,11 +10,14 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import org.ghostcloak.app.MainActivity
 import org.ghostcloak.app.R
+import org.ghostcloak.messaging.NotificationLedger
 
 interface LocalNotifications {
     fun allowed(): Boolean
     fun active(): Boolean
     fun post(quiet: Boolean): Boolean
+    fun post(quiet: Boolean, candidate: NotificationLedger.Presentation?): Boolean = post(quiet)
+    fun refresh(candidate: NotificationLedger.Presentation?) = Unit
     fun cancel()
 }
 
@@ -26,7 +29,8 @@ object NoLocalNotifications : LocalNotifications {
     override fun cancel() = Unit
 }
 
-class AndroidLocalNotifications(private val context: Context) : LocalNotifications {
+class AndroidLocalNotifications(private val context: Context,
+    private val previewAllowed: () -> Boolean = { false }) : LocalNotifications {
     companion object {
         const val CHANNEL = "ghostcloak-messages"
         const val ID = 1
@@ -49,9 +53,11 @@ class AndroidLocalNotifications(private val context: Context) : LocalNotificatio
         return manager.areNotificationsEnabled() && manager.getNotificationChannel(CHANNEL).importance != NotificationManager.IMPORTANCE_NONE
     }
     override fun active() = manager.activeNotifications.any { it.id == ID && it.tag == null }
-    fun build(quiet: Boolean): Notification = NotificationCompat.Builder(context, CHANNEL)
+    fun build(quiet: Boolean, candidate: NotificationLedger.Presentation? = null): Notification {
+        val (title, body) = notificationWords(NotificationPrivacy.read(context), previewAllowed(), candidate)
+        return NotificationCompat.Builder(context, CHANNEL)
         .setSmallIcon(R.drawable.ic_notification_message)
-        .setContentTitle("Ghost Cloak").setContentText("New message")
+        .setContentTitle(title).setContentText(body)
         .setVisibility(NotificationCompat.VISIBILITY_SECRET)
         .setLocalOnly(true).setShowWhen(false).setWhen(0)
         .setOnlyAlertOnce(true).setSilent(quiet).setAutoCancel(true)
@@ -59,14 +65,27 @@ class AndroidLocalNotifications(private val context: Context) : LocalNotificatio
         .setDeleteIntent(PendingIntent.getBroadcast(context, 0, Intent(context, NotificationDismissReceiver::class.java).setAction(DISMISS),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
         .build()
-    override fun post(quiet: Boolean): Boolean {
+    }
+    override fun post(quiet: Boolean): Boolean = post(quiet, null)
+    override fun post(quiet: Boolean, candidate: NotificationLedger.Presentation?): Boolean {
         val gate=(context.applicationContext as? GhostApplication)?.localOperationGate
         if (gate?.blocked == true) return false
-        return if(gate != null) gate.access { postUnlocked(quiet) } else postUnlocked(quiet)
+        return if(gate != null) gate.access { postUnlocked(quiet, candidate) } else postUnlocked(quiet, candidate)
     }
-    private fun postUnlocked(quiet: Boolean): Boolean {
+    private fun postUnlocked(quiet: Boolean, candidate: NotificationLedger.Presentation?): Boolean {
         if (!allowed()) return false
-        return try { manager.notify(ID, build(quiet)); true } catch (_: SecurityException) { false }
+        return try { manager.notify(ID, build(quiet, candidate)); true } catch (_: SecurityException) { false }
+    }
+    override fun refresh(candidate: NotificationLedger.Presentation?) {
+        if (!active()) return
+        val wanted = build(true, candidate)
+        val current = manager.activeNotifications.firstOrNull { it.id == ID && it.tag == null }?.notification
+        if (current?.extras?.getCharSequence(Notification.EXTRA_TITLE) != wanted.extras.getCharSequence(Notification.EXTRA_TITLE) ||
+            current?.extras?.getCharSequence(Notification.EXTRA_TEXT) != wanted.extras.getCharSequence(Notification.EXTRA_TEXT))
+            post(true, candidate)
+    }
+    fun redactActive() {
+        try { if (active()) post(true, null) } catch (_: Exception) { }
     }
     override fun cancel() { manager.cancel(ID) }
 }

@@ -22,7 +22,7 @@ Status means **COMPLETE** for the current one-device product contract, **PARTIAL
 | Photos | PARTIAL | Encrypted photo send, inline preview, private cache and in-app viewer exist. There is no caption or multi-photo composition; size/compression controls are limited. |
 | Documents | PARTIAL | Encrypted single-document send/download and a temporary external-viewer grant exist. There is no in-app preview/gallery; the external viewer may retain a copy. |
 | Attachment capabilities | COMPLETE | Authenticated attachment support negotiation and bounded encrypted upload/download exist for current kinds. New media kinds require explicit peer capability and compatibility work. |
-| Notifications | PARTIAL | Optional generic “New message” alerts and an OS settings link exist. There are no per-conversation mute controls. Notification permission is optional. |
+| Notifications | COMPLETE (P8) | Local maximum-privacy, contact-only and content-preview modes; maximum privacy is the upgrade default. App Lock protects previews, requests and View Once remain generic, and local mute suppresses chat alerts. Notification permission is optional. |
 | App Lock / biometric / PIN | COMPLETE | Device-local lock, normal PIN and supported biometric flow protect the UI. This is not a substitute for endpoint integrity. |
 | Safe Exit | COMPLETE | Armed local cryptographic destruction, durable recovery journal and fresh onboarding after successful completion exist; this does not remotely delete a server account. Hardware-specific validation remains a separate assurance concern. |
 | Inactive Device Protection | COMPLETE | Same-boot, locally proven expiry can initiate Safe Exit; uncertain cross-boot time stays locked until normal authentication establishes a fresh interval. No network time is used. |
@@ -154,3 +154,11 @@ The transformer decodes bounded mono 16 kHz AAC into PCM, applies pitch-changing
 Voice masking changes vocal characteristics to reduce recognizability. It does not guarantee anonymity. Accent, speech patterns, background voices, room acoustics, music and other sounds may still identify someone or their surroundings. View Once voice, transcription and noise removal are deferred.
 
 **Recommended P8 scope:** richer privacy-preserving notification controls with generic content as the default. Delete-for-everyone needs a separate authenticated protocol and retention design; groups and live calling remain larger architecture projects.
+
+## P8 — PRIVACY-PRESERVING NOTIFICATION CONTROLS (ANDROID IMPLEMENTATION)
+
+The local Notifications setting offers Maximum privacy (default), Contact only and Content preview. Contact names use the local alias before the accepted display name. Content previews are bounded to 100 characters and contain no filename, profile photo, reaction or reply target. Attachments without captions use generic media labels. View Once never enters a notification body; message requests never expose an unauthenticated name or content. Disappearing messages remain generic so plaintext does not linger in Android's notification history. Muted and blocked chats do not produce normal alerts. The existing identity-change warning remains in the app's security UI and is not controlled by chat mute; P8 does not introduce an OS security-alert channel.
+
+App Lock forces generic alerts whenever content is protected. All notification objects use `VISIBILITY_SECRET` for the device lock screen, have no Person/conversation shortcuts, and open only the root Activity through an immutable intent. No inline actions are available. Notification preferences stay in app-local storage and are cleared by Safe Exit. Android may retain notifications in system history after Ghost Cloak updates or cancels them; users should choose Maximum privacy if that retention matters. P8 needs an Android update only, with no backend deployment or database migration.
+
+**Recommended P9 scope:** design delete-for-everyone as an authenticated protocol and retention change before implementation. Groups and calling remain separate architecture decisions.

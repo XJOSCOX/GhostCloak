@@ -41,7 +41,7 @@ import org.ghostcloak.app.ui.components.*
         if(!state.demo) SettingsGroup("Connection") {
             if(state.networkConfigured) {
                 NetworkActions(state,connect,sync)
-                Text("Background checks are best-effort and may be delayed by Android. Optional notifications never show sender names or message previews.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Background checks are best-effort and may be delayed by Android. Notification detail follows your local privacy setting and App Lock.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 if(state.networkConnected) TextButton(onClick=logout,enabled=!state.loading) {Text("Disconnect and revoke session")}
                 TextButton(onClick={advanced=!advanced}) {Text(if(advanced) "Hide connection details" else "Connection details")}
                 if(advanced) {

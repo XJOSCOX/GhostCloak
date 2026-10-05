@@ -433,10 +433,11 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         val seen = read<List<String>>("app/read/$id").orEmpty().toSet()
         messages(id).count { it.direction == Direction.INCOMING && !it.policyEvent && it.localId !in seen }
     }
-    fun unreadMessageIds(id: String): Set<String> = records.transaction {
+    fun unreadMessages(id: String): List<Message> = records.transaction {
         val seen = read<List<String>>("app/read/$id").orEmpty().toSet()
-        messages(id).filter { it.direction == Direction.INCOMING && !it.policyEvent && it.localId !in seen }.map { it.localId }.toSet()
+        messages(id).filter { it.direction == Direction.INCOMING && !it.policyEvent && it.localId !in seen }
     }
+    fun unreadMessageIds(id: String): Set<String> = unreadMessages(id).map { it.localId }.toSet()
     fun markRead(id: String) = records.transaction {
         val seen = messages(id).filter { it.direction == Direction.INCOMING && !it.policyEvent }.map { it.localId }
         if (read<List<String>>("app/read/$id") != seen) put("app/read/$id", seen)

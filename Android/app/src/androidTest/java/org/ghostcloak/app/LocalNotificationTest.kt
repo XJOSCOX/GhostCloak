@@ -6,6 +6,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.ghostcloak.app.application.*
 import org.ghostcloak.identity.RandomIdentifiers
+import org.ghostcloak.messaging.NotificationLedger
+import org.ghostcloak.attachments.AttachmentKind
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -141,5 +143,59 @@ class LocalNotificationTest {
         assertEquals(MainActivity::class.java.name, intent.component!!.className)
         assertEquals(AndroidLocalNotifications.OPEN_CHATS, intent.action)
         assertNull(intent.extras); assertNull(intent.data); assertNull(intent.clipData)
+    }
+
+    @Test fun privacyLevelsDoNotPutProhibitedDetailsIntoNotificationMetadata() {
+        val previous = NotificationPrivacy.read(context)
+        val secret = "SENSITIVE_BODY_916"
+        val candidate = NotificationLedger.Presentation("Private alias", secret, null, false, false, false, 1L)
+        val request = candidate.copy(request = true, name = "untrusted name")
+        val once = candidate.copy(viewOnce = true)
+        val expiring = candidate.copy(disappearing = true)
+        val publisher = AndroidLocalNotifications(context) { true }
+        var unlocked = false
+        val lockAware = AndroidLocalNotifications(context) { unlocked }
+        fun assertAbsent(notification: Notification, vararg forbidden: String) {
+            val metadata = notification.extras.keySet().joinToString(" ") { key ->
+                "$key=${notification.extras.get(key)}"
+            } + " ${notification.shortcutId} ${notification.locusId}"
+            forbidden.forEach { assertFalse("Unexpected notification metadata", metadata.contains(it)) }
+            assertNull(notification.largeIcon)
+            assertNull(notification.publicVersion)
+            assertNull(notification.extras.get("android.people.list"))
+            assertEquals(0, notification.actions?.size ?: 0)
+            assertEquals(Notification.VISIBILITY_SECRET, notification.visibility)
+        }
+        try {
+            NotificationPrivacy.save(context, NotificationPrivacy.MAXIMUM)
+            val maximum = publisher.build(false, candidate)
+            assertEquals("Ghost Cloak", maximum.extras.getCharSequence(Notification.EXTRA_TITLE))
+            assertEquals("New message", maximum.extras.getCharSequence(Notification.EXTRA_TEXT))
+            assertAbsent(maximum, "Private alias", secret)
+            NotificationPrivacy.save(context, NotificationPrivacy.CONTACT)
+            val contact = publisher.build(false, candidate)
+            assertEquals("Private alias", contact.extras.getCharSequence(Notification.EXTRA_TITLE))
+            assertEquals("New message", contact.extras.getCharSequence(Notification.EXTRA_TEXT))
+            assertAbsent(contact, secret)
+            NotificationPrivacy.save(context, NotificationPrivacy.CONTENT)
+            assertEquals(secret, publisher.build(false, candidate).extras.getCharSequence(Notification.EXTRA_TEXT))
+            assertEquals("Photo", publisher.build(false, candidate.copy(body = null, attachmentKind = AttachmentKind.IMAGE))
+                .extras.getCharSequence(Notification.EXTRA_TEXT))
+            assertEquals("Voice note", publisher.build(false, candidate.copy(body = null, attachmentKind = AttachmentKind.VOICE_NOTE))
+                .extras.getCharSequence(Notification.EXTRA_TEXT))
+            assertEquals(secret, publisher.build(false, candidate.copy(attachmentKind = AttachmentKind.IMAGE))
+                .extras.getCharSequence(Notification.EXTRA_TEXT))
+            val protected = lockAware.build(false, candidate)
+            assertAbsent(protected, "Private alias", secret)
+            assertEquals("Ghost Cloak", protected.extras.getCharSequence(Notification.EXTRA_TITLE))
+            unlocked = true
+            assertEquals(secret, lockAware.build(false, candidate).extras.getCharSequence(Notification.EXTRA_TEXT))
+            unlocked = false
+            assertAbsent(lockAware.build(false, candidate), "Private alias", secret)
+            assertAbsent(publisher.build(false, request), "untrusted name", secret)
+            assertAbsent(publisher.build(false, once), secret)
+            assertEquals("View Once message", publisher.build(false, once).extras.getCharSequence(Notification.EXTRA_TEXT))
+            assertAbsent(publisher.build(false, expiring), secret)
+        } finally { NotificationPrivacy.save(context, previous) }
     }
 }

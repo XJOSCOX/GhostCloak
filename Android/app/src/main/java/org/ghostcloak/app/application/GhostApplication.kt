@@ -103,7 +103,10 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
     private var lockOwner = newLockOwner()
     val appLock: org.ghostcloak.app.access.AppLockController get() = localOperationGate.access { lockOwner.value }
     private fun newRuntimeOwner(): Lazy<AppRuntime> = lazy { AppRuntime(this, backgroundEligibility = { BackgroundSyncSchedule.reconcile(this, it) },
-        notifications = AndroidLocalNotifications(this), attachmentAccess = { appLock.state.value.canShowContent }) }
+        notifications = AndroidLocalNotifications(this) {
+            val state = appLock.state.value
+            state.ready && !state.unavailable && (state.mode == org.ghostcloak.app.access.LockMode.OFF || state.canShowContent)
+        }, attachmentAccess = { appLock.state.value.canShowContent }) }
     private var runtimeOwner = newRuntimeOwner()
     internal val sensitiveOwnersInitialized get() = runtimeOwner.isInitialized() || lockOwner.isInitialized() || mediaOwner.isInitialized()
     val runtime: AppRuntime get() = localOperationGate.access { runtimeOwner.value }
@@ -148,6 +151,8 @@ class GhostApplication : Application(), androidx.work.Configuration.Provider, or
             appLock.state.collect { if (!it.canShowContent) {
                 if (!localOperationGate.blocked) runtime.revokeAttachmentAccess()
                 if (!localOperationGate.blocked && mediaOwner.isInitialized()) media.locked()
+                if (!localOperationGate.blocked && it.mode != org.ghostcloak.app.access.LockMode.OFF)
+                    AndroidLocalNotifications(this@GhostApplication).redactActive()
             } }
         }
         // No Direct Boot access; WorkManager itself handles OS-approved persistence/reboot.

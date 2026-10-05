@@ -5,8 +5,13 @@ import org.ghostcloak.crypto.EndpointStorageFailure
 
 /** References stay in encrypted records, never in Android notification or intent metadata. */
 class NotificationLedger(private val records: EndpointRecords, private val clock: ExpiryClock = ExpiryClock()) {
+    /** In-memory presentation only. Never serialize this into a notification intent or ledger key. */
+    data class Presentation(val name: String?, val body: String?, val attachmentKind: org.ghostcloak.attachments.AttachmentKind?,
+        val request: Boolean, val viewOnce: Boolean, val disappearing: Boolean, val timestamp: Long) {
+        override fun toString() = "NotificationPresentation(redacted)"
+    }
     @ConsistentCopyVisibility
-    data class Entry internal constructor(internal val key: String, val state: Int) {
+    data class Entry internal constructor(internal val key: String, val state: Int, val presentation: Presentation) {
         override fun toString() = "NotificationEntry(redacted)"
     }
     companion object {
@@ -33,13 +38,22 @@ class NotificationLedger(private val records: EndpointRecords, private val clock
     /** Prune before publication so read, deleted and blocked messages cannot cause an alert. */
     fun eligible(): List<Entry> = records.transaction {
         val repository = LocalRepository(records, clock)
-        val unread = repository.contacts().filter { !it.blocked && !it.muted }
-            .associate { it.remoteDeviceId to repository.unreadMessageIds(it.remoteDeviceId) }
+        val contacts = repository.contacts().filter { !it.blocked && !it.muted }.associateBy { it.remoteDeviceId }
+        val unread = contacts.mapValues { (id, _) -> repository.unreadMessages(id).associateBy { it.localId } }
         records.keys(PREFIX).mapNotNull { key ->
             val parts = key.removePrefix(PREFIX).split('/')
             if (parts.size != 2) throw EndpointStorageFailure()
-            if (parts[1] !in unread[parts[0]].orEmpty()) { records.remove(key); null }
-            else Entry(key, state(key))
+            val message = unread[parts[0]]?.get(parts[1])
+            val contact = contacts[parts[0]]
+            if (message == null || contact == null) { records.remove(key); null }
+            else Entry(key, state(key), Presentation(
+                name = if (contact.request) null else (contact.localAlias?.takeIf { it.isNotBlank() }
+                    ?: contact.displayName.takeIf { it.isNotBlank() }),
+                body = if (contact.request || message.viewOnceKind != null || message.disappearingSeconds > 0 || message.expiry != null) null else message.body,
+                attachmentKind = if (contact.request || message.viewOnceKind != null) null
+                    else repository.attachment(parts[0], parts[1])?.kind,
+                request = contact.request, viewOnce = message.viewOnceKind != null,
+                disappearing = message.disappearingSeconds > 0 || message.expiry != null, timestamp = message.timestamp))
         }
     }
     fun posting(entries: List<Entry>) = records.transaction {

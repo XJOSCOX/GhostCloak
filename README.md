@@ -39,6 +39,6 @@ The backend distribution is built with `:backend:distTar` or `:backend:installDi
 
 ## Deployment and historical documents
 
-Use the [current deployment runbook](infrastructure/DEPLOYMENT.md) for v2/V007–V008. V007 was a **destructive pre-release identity cutover**. The operator reports that the approved cutover completed with backups and schema checks, but **backup restore has not been rehearsed**. Future target databases require their own review; do not reapply V007 to a populated environment by assumption. No VPS action is performed by this repository change.
+Use the [current deployment runbook](infrastructure/DEPLOYMENT.md) for v2/V007–V008. V007 was a **destructive pre-release identity cutover**. The operator reports that the approved cutover completed with backups and schema checks, and that the matching pre-V007 database and attachment backups passed an isolated restore rehearsal. This verifies those historical backups only; future target databases and backup sets require their own review. Do not reapply V007 to a populated environment by assumption. No VPS action is performed by this repository change.
 
 [`protocol/API_V1.md`](protocol/API_V1.md) and older phase reviews are historical, not current endpoint instructions. Current authentication and metadata boundaries are summarized in [the audit](SECURITY_AUDIT_CURRENT.md). The backend cannot decrypt message contents, but SQLCipher and end-to-end encryption cannot protect a compromised unlocked device or prevent an external viewer/recipient from retaining content.

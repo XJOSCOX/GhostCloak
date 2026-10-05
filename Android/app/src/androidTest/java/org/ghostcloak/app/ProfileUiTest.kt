@@ -15,15 +15,28 @@ import org.junit.Test
 
 class ProfileUiTest {
     @get:Rule val compose=createComposeRule()
-    @Test fun ownProfileControlsShowAboutSharingAndRemoval() {
+    @Test fun ownProfileShowsAvatarAddAndInlineAboutEdit() {
+        compose.setContent {GhostCloakTheme {
+            ProfilesScreen(AppState(loading=false,ownProfile=LocalProfile(about="Encrypted About")),{},{},{},{},{},{})
+        }}
+        compose.onNodeWithContentDescription("Add profile photo").assertExists()
+        compose.onNodeWithText("Encrypted About").assertExists()
+        val about=compose.onNodeWithText("About").getUnclippedBoundsInRoot()
+        val edit=compose.onNodeWithContentDescription("Edit About").getUnclippedBoundsInRoot()
+        assertTrue(edit.left>about.right)
+        compose.onNodeWithContentDescription("Edit About").performClick()
+        compose.onNodeWithText("Save").assertExists()
+    }
+    @Test fun photoEditOpensChangeAndRemoveActions() {
         var removed=false
         var shared:Boolean?=null
         compose.setContent {GhostCloakTheme {
             ProfilesScreen(AppState(loading=false,ownProfile=LocalProfile(about="Encrypted About",photo=byteArrayOf(1),sharing=true)),
                 {},{}, {},{}, {removed=true},{shared=it})
         }}
-        compose.onNodeWithText("Encrypted About").assertExists()
-        compose.onNodeWithText("Remove profile photo").performClick()
+        compose.onNodeWithContentDescription("Edit profile photo").performClick()
+        compose.onNodeWithText("Change photo").assertExists()
+        compose.onNodeWithText("Remove photo").performClick()
         assertTrue(removed)
         compose.onNodeWithText("Share with accepted contacts").assertExists()
         compose.onNode(isToggleable()).performClick()

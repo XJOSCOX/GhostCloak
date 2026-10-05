@@ -8,6 +8,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
@@ -24,12 +27,28 @@ import org.ghostcloak.protocol.GhostCloakIds
     var displayName by remember(state.identity?.displayName) { mutableStateOf(state.identity?.displayName.orEmpty()) }
     var editing by remember { mutableStateOf(false) }
     var editingAbout by remember {mutableStateOf(false)}
+    var photoActions by remember {mutableStateOf(false)}
     var aboutDraft by remember(state.ownProfile.about) {mutableStateOf(state.ownProfile.about)}
     val picker=rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) {uri -> if(uri!=null) setPhoto(uri)}
     val context=LocalContext.current
     PageContent("Profiles") {
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(GhostDimensions.regular),verticalAlignment=Alignment.CenterVertically) {
-            Avatar(state.identity?.displayName.orEmpty(),Modifier.size(GhostDimensions.profileAvatar),state.ownProfile.photo)
+            Box(Modifier.size(GhostDimensions.profileAvatar+14.dp)) {
+                Avatar(state.identity?.displayName.orEmpty(),Modifier.size(GhostDimensions.profileAvatar).align(Alignment.TopCenter),state.ownProfile.photo)
+                Surface(onClick={if(state.ownProfile.photo==null) picker.launch("image/*") else photoActions=true},
+                    enabled=!state.loading,shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primary,
+                    contentColor=MaterialTheme.colorScheme.onPrimary,shadowElevation=2.dp,
+                    modifier=Modifier.align(Alignment.BottomCenter).semantics {
+                        contentDescription=if(state.ownProfile.photo==null) "Add profile photo" else "Edit profile photo"
+                    }) {
+                    Text(if(state.ownProfile.photo==null) "Add" else "Edit",Modifier.padding(horizontal=10.dp,vertical=4.dp),
+                        style=MaterialTheme.typography.labelSmall)
+                }
+                DropdownMenu(expanded=photoActions,onDismissRequest={photoActions=false}) {
+                    DropdownMenuItem(text={Text("Change photo")},onClick={photoActions=false;picker.launch("image/*")})
+                    DropdownMenuItem(text={Text("Remove photo")},onClick={photoActions=false;removePhoto()})
+                }
+            }
             Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
                 Text(state.identity?.displayName.orEmpty(),style=MaterialTheme.typography.titleLarge)
                 Text("Your Ghost Cloak identity",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
@@ -39,10 +58,17 @@ import org.ghostcloak.protocol.GhostCloakIds
         ErrorNotice(state.error, important = state.errorImportant)
         SettingsGroup("Your profile") {
             DetailRow(Glyph.PERSON,"Display name",state.identity?.displayName.orEmpty())
-            DetailRow(Glyph.PERSON,"About",state.ownProfile.about.ifBlank {"Not set"})
-            TextButton(onClick={aboutDraft=state.ownProfile.about;editingAbout=true}) {Text("Edit About")}
-            TextButton(onClick={picker.launch("image/*")},enabled=!state.loading) {Text(if(state.ownProfile.photo==null) "Add profile photo" else "Change profile photo")}
-            if(state.ownProfile.photo!=null) TextButton(onClick=removePhoto,enabled=!state.loading) {Text("Remove profile photo")}
+            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(GhostDimensions.fieldCorner),
+                verticalAlignment=Alignment.CenterVertically) {
+                AppIcon(Glyph.PERSON,tint=MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
+                    Text("About",style=MaterialTheme.typography.titleMedium)
+                    Text(state.ownProfile.about.ifBlank {"Not set"},style=MaterialTheme.typography.bodyMedium,
+                        color=MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                TextButton(onClick={aboutDraft=state.ownProfile.about;editingAbout=true},enabled=!state.loading,
+                    modifier=Modifier.semantics {contentDescription="Edit About"}) {Text("Edit")}
+            }
             Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Share with accepted contacts",style=MaterialTheme.typography.titleMedium)

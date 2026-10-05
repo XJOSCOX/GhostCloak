@@ -4,8 +4,17 @@ dependencies { testImplementation(project(":crypto")); testImplementation(projec
 tasks.test {
     exclude("**/PostgresTest*")
     exclude("**/StagingTest*")
+    exclude("**/LiveAdversarialA1Test*")
     systemProperty("ghostcloak.root", rootProject.projectDir.parentFile.absolutePath)
     testLogging { events("passed", "failed"); showStandardStreams = true }
+}
+tasks.register<Test>("a1LiveTest") {
+    testClassesDirs=sourceSets.test.get().output.classesDirs
+    classpath=sourceSets.test.get().runtimeClasspath
+    include("**/LiveAdversarialA1Test*")
+    doFirst { require(System.getenv("GHOSTCLOAK_ADVERSARIAL_LIVE")=="true") {"Explicit live A1 confirmation required"} }
+    testLogging { events("passed","failed") }
+    outputs.upToDateWhen {false}
 }
 tasks.register<Test>("postgresTest") {
     testClassesDirs=sourceSets.test.get().output.classesDirs

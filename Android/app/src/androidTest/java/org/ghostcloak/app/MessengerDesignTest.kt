@@ -90,7 +90,7 @@ class MessengerDesignTest {
         compose.onNodeWithText("Write a message…").assertIsEnabled()
         assertTrue(accepted)
         compose.onNodeWithText("Encrypted · Unverified").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Security").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Unverified contact · Security").assertIsDisplayed()
         screenshot("organized-conversation-light.png")
         compose.runOnIdle { dark.value=true }
         screenshot("organized-conversation-dark.png")

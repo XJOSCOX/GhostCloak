@@ -226,3 +226,47 @@ The NotificationLedger copy-visibility compiler warning is handled by @Consisten
 Final strict, offline debug and release lint: **0 errors, 37 warnings each**. Debug and release APK assemblies passed. Debug Android test APK compiled and was installed only on disposable emulator-5554; the focused biometric lifecycle and Contact QR suite passed (11 tests). The QR tests cover QR payload decoding, the scan-result contract and camera-denied manual fallback; they do not establish optical camera decoding through the emulator's virtual camera. Final merged debug and release manifests retain a non-exported AndroidX Startup provider, JobScheduler service and RescheduleReceiver; WorkManager auto-initializer, foreground service and diagnostics receiver remain removed. The camera remains optional. No genuine exposed-component, backup, cleartext, or authentication bypass defect was found in this triage. The two Safe Exit UseKtx suggestions are deferred to R4 because changing synchronous deletion calls merits dedicated failure/recovery review. No medium/high-risk architecture refactor was performed.
 
 The strict, offline JVM matrix passed: app debug 114, app release 107, test-support 170 (one opt-in A1 test skipped), and attachments 4: **395 passed, 0 failed, 1 skipped**. Backend build was not rerun because no shared or backend build logic changed. All emulator ADB commands explicitly targeted emulator-5554; no physical phone or VPS was accessed.
+
+## Phase R3 — measured simplification and test isolation (2026-10-05)
+
+The worktree began at reviewed main `328b5d9f55e2565d79ed05a2857ffbac8d49d67d` with pre-existing launcher, icon, version catalog, verification metadata, wrapper, Android Studio and dependency-document edits. None were staged or changed by R3. This phase did not alter crypto, protocol, SQL, backend API, deployment configuration or saved-state semantics.
+
+### Refresh read audit and measurement
+
+`GhostViewModel.run()` is used by manual refresh, foreground sync/polling and actions. After the action it loads contacts, optionally marks the selected conversation read, loads unread counts, policies and unread expiries, then called `ConversationService.messagesForUi()` for every visible contact's preview **and again** for the selected conversation. Each `messagesForUi()` call independently checks the contact/request presentation policy, calls `LocalRepository.messages()` (which performs expiry and sorted record reads), and decorates attachment/view-once content. The extra selected call therefore repeated repository work. `AppRuntime.use()` also refreshes attachment UI access and background/notification eligibility under its mutex; that work and the semantically distinct unread/expiry passes were not combined.
+
+`ConversationRefreshSnapshotTest` uses three accepted contacts, one selected contact, and three synthetic messages. It compares the exact previous preview/selected-message expression with the replacement using a counting `EndpointRecords` fixture. It verifies identical preview keys, selected message ordering and content. Results for that refresh slice:
+
+| Measure | Before | After | Reduction |
+|---|---:|---:|---:|
+| `messagesForUi()` calls | 4 | 3 | 25% |
+| Message-key scans (`app/message/…`) | 8 | 6 | 25% |
+| Message-record reads | 10 | 6 | 40% |
+
+The selected conversation's UI list is now reused from its preview read, with no persistent cache or new invalidation rule. An absent/non-contact selection still yields an empty message list and does not load that ID. If selection changes while service reads suspend, the old snapshot publishes no selected messages; the new selection's own refresh supplies its list. The regression test covers that mismatch. One selected list allocation/read is avoided; allocation bytes and elapsed time were not benchmarked because this small deterministic JVM fixture would make wall-time numbers misleading. The table is scoped to the preview/selected-message slice, not the entire `AppRuntime.use()` refresh. Unread counts, unread expiry and attachment access still perform their own reads for different purposes.
+
+### R3 candidate disposition
+
+| Candidate | Status | Evidence / boundary |
+|---|---|---|
+| C04, repeated message loading | COMPLETED (scoped) | Removed the selected contact's second `messagesForUi()` read per refresh; counter-backed regression test confirms output and reductions. No cross-refresh cache. |
+| H01, `AppRuntime.use()` scope | DEFERRED | It couples transaction/lifecycle, expiry, attachment access and notification state. Splitting it needs process-death and security-boundary design review. |
+| H02, `AppState` size | KEEP | All named fields have production readers; none was proved dead or safe to move to screen-local state without lock/navigation review. No field removed. |
+| H03, navigation graph | DEFERRED | Route extraction could alter protected navigation and process recreation; no exact duplicate with independent tests was established. |
+| H04, rate-limit cleanup duplication | DEFERRED | On-request expiry and retention-worker cleanup differ in timing and transaction context. Backend behavior is out of R3 scope. |
+| D03, `OpaqueMailbox` | KEEP | The acceptance test asserts an opaque, bounded, no-decryption relay between ciphertext transport and recipient decrypt. The production mailbox has auth, persistence and network behavior, so substituting it would change what this local security fixture proves. |
+| S01, ContactsScreen dual mode | DEFERRED | Chat/directory click and unread behavior differ; no isolated identical helper with two-path coverage was established. |
+| S02, ConversationScreen callbacks | DEFERRED | Security-action defaults and UI tests depend on current wiring; a typed action migration needs route and authorization regression tests. |
+| S03, PostgreSQL row adapters | DEFERRED | Database/query architecture is explicitly outside this phase. |
+| R01–R03, icon/launcher resources | BLOCKED BY USER WORK | Launcher and design-source work is uncommitted; static unused results do not establish design ownership. No resource removed. |
+| Remaining 37 lint warnings | KEEP / DEFERRED | Version suggestions overlap user catalog edits; icon/obsolete resources overlap user assets; modifier/KTX/style suggestions require no product change now. `UseTomlInstead` overlaps user dependency edits. Safe Exit KTX and Gradle toolchain warnings remain R4 review. |
+| Test-support suite separation | COMPLETED | Normal `test` explicitly excludes PostgreSQL, staging and A1 live classes. New `a1LiveTest` is opt-in and retains the test's own environment guard. Android connected tests remain a separate emulator-only workflow. |
+| T02, A1 test isolation | COMPLETED | The ordinary test XML contains no `LiveAdversarialA1Test`; the explicit task cannot start without its environment confirmation, and the test retains its own guard. No A1 test was executed. |
+| T03, destructive/reboot Android tests | DEFERRED | They remain in the separate Android instrumentation source set, with stage-argument guards on reboot/live probes. App test-task configuration overlaps user-edited build logic; no connected suite was run on a physical device. Dedicated emulator-only orchestration needs later review. |
+| T04, backend local fixtures | KEEP | `LocalServer`, `LocalEncryptedRouter` and `DevelopmentRateLimiter` retain test/debug-demo callers and were not repackaged. |
+
+During emulator validation, `MessengerDesignTest.requestRequiresAcceptanceButNotVerificationToReply` failed reproducibly because it searched for the old exact accessibility description `Security`. Production `ConversationScreen` already names the unverified control `Unverified contact · Security`; the test now asserts that precise existing label. This was a test expectation correction only, with no UI or verification-state change.
+
+Final validation on the unchanged user dependency checkout used strict, offline dependency verification. App debug and release lint each reported **0 errors, 37 warnings**; both APK assemblies and the Android test APK passed. JVM tests: app debug 116, app release 109, test-support 169, attachments 4 = **398 passed, 0 failed, 0 skipped**. The ordinary test run produced no live A1 result file. On disposable `emulator-5554`, the focused MessengerDesign, UnreadMessages, RequestPrivacyScreen and ViewOnceScreen suite passed **11/11** after the stale accessibility assertion was corrected. All ADB commands explicitly targeted the emulator. No VPS, physical phone, live adversarial endpoint or production data was accessed.
+
+No near-exact duplicate helper was consolidated: the apparently similar mark-read, unread-count and unread-expiry paths have different request/expiry side effects, and the two delivery-status passes have different terminal-state filters. Further merging would exceed the measured selected-read fix. No candidate was newly escalated to HIGH. R4 should review the broad runtime mutex, background/expiry query architecture, protected navigation and the remaining Gradle toolchain issue with dedicated security and process-death tests before any change.

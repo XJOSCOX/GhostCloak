@@ -74,14 +74,15 @@ class GhostViewModel internal constructor(application: Application, private val 
                     val contacts = if (identity != null) active.contacts() else emptyList()
                     selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.markRead(it) }
                     val unread = if (identity != null) active.unreadCounts() else emptyMap()
+                    val conversation = loadConversationRefreshSnapshot(contacts, selected, active::messagesForUi)
                     mutable.value = mutable.value.copy(identity = identity, ghostCloakId=if(identity!=null) runtime.ownGhostCloakId() else null, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
                         requireRequestConfirmation=active.requireRequestConfirmation(),
                         blockedContacts=if(identity!=null) active.blockedContacts() else emptyList(),
                         cachedAttachments = runtime.cachedAttachments(selected),
                         disappearingPolicies = if (identity != null) active.policies() else emptyMap(),
                         unreadExpiries = if (identity != null) active.unreadExpiries() else emptyMap(),
-                        previews = contacts.mapNotNull { c -> active.messagesForUi(c.contact.remoteDeviceId).lastOrNull()?.let { c.contact.remoteDeviceId to it } }.toMap(),
-                        messages = selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.messagesForUi(it) } ?: emptyList(),
+                        previews = conversation.previews,
+                        messages = conversation.messagesForSelection(selected),
                         demo = runtime.inDemo, protection = runtime.protection, ready = true,
                         networkRequiresConnect=runtime.networkRequiresConnect,networkConfigured=runtime.networkConfigured,networkStatus=runtime.networkStatus)
                 }

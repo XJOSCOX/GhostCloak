@@ -59,7 +59,7 @@ import org.ghostcloak.app.ui.components.*
         SettingsGroup("Build information") {
             Text("Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             Text("Source ${BuildProvenance.shortSha(BuildConfig.GIT_SHA)}")
-            Text(BuildProvenance.status(BuildConfig.GIT_DIRTY), color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Source status: ${BuildProvenance.status(BuildConfig.GIT_DIRTY)}", color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Text("Ghost Cloak · Phase 1E.1\nExperimental. Not independently audited. Not anonymous.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
     }

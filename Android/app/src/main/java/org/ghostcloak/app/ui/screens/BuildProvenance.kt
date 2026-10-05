@@ -8,5 +8,5 @@ internal object BuildProvenance {
     }
 
     fun status(dirty: Boolean): String =
-        if (dirty) "Modified source build" else "Clean reviewed build"
+        if (dirty) "Modified development build" else "Clean source build"
 }

@@ -13,8 +13,8 @@ class BuildProvenanceTest {
     }
 
     @Test fun statusDoesNotExposeMachineOrAccountDetails() {
-        assertEquals("Clean reviewed build", BuildProvenance.status(false))
-        assertEquals("Modified source build", BuildProvenance.status(true))
+        assertEquals("Clean source build", BuildProvenance.status(false))
+        assertEquals("Modified development build", BuildProvenance.status(true))
         assertFalse(BuildProvenance.status(true).contains('\\'))
         assertFalse(BuildProvenance.status(true).contains('/'))
     }

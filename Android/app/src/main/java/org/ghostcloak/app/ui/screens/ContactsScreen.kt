@@ -22,6 +22,7 @@ import org.ghostcloak.messaging.ChatOrganization
     archived:Boolean=false,showArchived:()->Unit={},unarchive:(String)->Unit={},back:()->Unit={}) {
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
+    var chatOptions by remember { mutableStateOf(false) }
     val source=when {
         directory -> state.contacts.filter { !it.contact.request && !it.contact.blocked }.sortedBy {it.contact.visibleName.lowercase()}
         archived -> ChatOrganization.archived(state.contacts,state.previews)
@@ -38,9 +39,14 @@ import org.ghostcloak.messaging.ChatOrganization
                 leading = if (hasUnread) {{ HeaderAction(Glyph.SEARCH, "Search conversations") { searching = !searching; query = "" } }} else null) {
                 if (!directory && !hasUnread) HeaderAction(Glyph.SEARCH, "Search conversations") { searching = !searching; query = "" }
                 if(!archived) HeaderAction(if(directory) Glyph.ADD_CONTACT else Glyph.COMPOSE, if (directory) "Add contact" else "New chat", add)
+                if(!directory && !archived) Box {
+                    HeaderAction(Glyph.MORE,"Chat options") { chatOptions=true }
+                    DropdownMenu(expanded=chatOptions,onDismissRequest={chatOptions=false}) {
+                        DropdownMenuItem(text={Text("Archived chats")},onClick={chatOptions=false;showArchived()})
+                    }
+                }
             }
             Column(Modifier.weight(1f).padding(horizontal = GhostLayout.pageInset)) {
-            if(!directory && !archived) TextButton(onClick=showArchived) { Text("Archived chats") }
             if(directory || searching) OutlinedTextField(query,{if(it.length<=64) query=it},singleLine=true,placeholder={Text(if(directory) "Search contacts" else "Search conversations")},
                 leadingIcon={AppIcon(Glyph.SEARCH)},trailingIcon=if(query.isEmpty()) null else {{IconButton(onClick={query=""}) {AppIcon(Glyph.CLOSE,"Clear search")}}},
                 shape=RoundedCornerShape(GhostDimensions.fieldCorner),modifier=Modifier.fillMaxWidth().noSensitiveCopyCut(),

@@ -72,6 +72,8 @@ class ChatOrganizationScreenTest {
                 }},back={archived.value=false})
         } }
         compose.onNodeWithText("Remote name").assertDoesNotExist()
+        compose.onNodeWithText("Archived chats").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Chat options").performClick()
         compose.onNodeWithText("Archived chats").performClick()
         compose.onNodeWithText("Remote name").assertIsDisplayed()
         compose.onNodeWithText("Unarchive Remote name").performClick()

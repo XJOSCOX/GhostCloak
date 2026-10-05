@@ -10,7 +10,8 @@ object ConversationSearch {
         val needle = fold(query)
         return messages.indices.filter { index ->
             val message = messages[index]
-            !message.policyEvent && message.viewOnceKind == null && message.attachment == null &&
+            !message.policyEvent && message.viewOnceKind == null &&
+                (message.attachment==null || message.attachment.caption!=null) &&
                 fold(message.body).contains(needle)
         }
     }
@@ -36,7 +37,8 @@ object ReplyPresentation {
             it.conversationId == conversationId && it.envelopeId == reference.envelopeId && !it.policyEvent
         } ?: return if (reference.kind == ReplyKind.DISAPPEARING) "Original message expired" else "Original message unavailable"
         if (original.viewOnceKind != null) return "View Once message"
-        if (original.attachment != null || reference.kind == ReplyKind.ATTACHMENT) return "Attachment"
+        if (original.attachment != null || reference.kind == ReplyKind.ATTACHMENT)
+            return original.attachment?.caption?.take(100)?.replace('\n',' ') ?: "Attachment"
         return original.body.take(100).replace('\n', ' ')
     }
 }

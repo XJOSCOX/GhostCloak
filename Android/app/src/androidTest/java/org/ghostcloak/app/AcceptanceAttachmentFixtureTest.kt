@@ -10,14 +10,14 @@ import org.junit.Test
 import java.io.File
 
 class AcceptanceAttachmentFixtureTest {
-    @Test fun photoAndDocumentUseRealUploadBindAndVerifiedPresentation() = runBlocking {
+    @Test fun photoDocumentAndVoiceUseRealUploadBindAndVerifiedPresentation() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val name = RandomIdentifiers.create()
         val root = File(context.noBackupFilesDir, "$name-attachments")
         EncryptedEndpointStore.open(context, name).use { records ->
             try {
                 val store = AttachmentStore(records, root)
-                for (kind in listOf(AttachmentKind.IMAGE, AttachmentKind.DOCUMENT)) {
+                for (kind in listOf(AttachmentKind.IMAGE, AttachmentKind.DOCUMENT,AttachmentKind.VOICE_NOTE)) {
                     val bytes = byteArrayOf(1, 2, 3)
                     val descriptor = prepareAcceptanceAttachment(store, bytes, kind, "synthetic/$kind")
                     assertEquals(TransferState.READY, store.entry(descriptor.id)!!.state)

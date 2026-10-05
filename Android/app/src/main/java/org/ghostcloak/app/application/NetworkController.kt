@@ -300,8 +300,8 @@ class NetworkController(
         org.ghostcloak.attachments.StreamingBlobClient(origin,client,{ canAutoSync && allowed() },checkpoint)
     internal suspend fun supportsAttachments(service:ConversationService,id:String)=capabilities.refresh(id,service)
     internal suspend fun sendAttachment(service:ConversationService,id:String,descriptor:org.ghostcloak.attachments.AttachmentDescriptor,
-        supported:Boolean,viewOnce:Boolean=false,onEnqueued:(Message)->Unit):Message {
+        supported:Boolean,viewOnce:Boolean=false,caption:String="",onEnqueued:(Message)->Unit):Message {
         requireApi(canAutoSync,"connect_required",401)
-        return service.sendAttachment(id,descriptor,outbox,supported,viewOnce,onEnqueued)
+        return service.sendAttachment(id,descriptor,outbox,supported,viewOnce,caption,onEnqueued)
     }
 }

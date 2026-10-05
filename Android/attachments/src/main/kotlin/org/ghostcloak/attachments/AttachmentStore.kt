@@ -91,7 +91,7 @@ class AttachmentStore(private val records: EndpointRecords, root: File,
         check(generation.get()==expected && allowed()) { "attachment_unavailable" }
     }
     suspend fun prepare(source:InputStream,length:Long,kind:AttachmentKind,seconds:Int,
-        filename: String? = null, allowed:()->Boolean):AttachmentDescriptor=transfer {
+        filename: String? = null, durationMillis:Long?=null, allowed:()->Boolean):AttachmentDescriptor=transfer {
         val epoch=generation.get(); checkpoint(epoch,allowed)
         require(entries().count { it.upload && it.references.isEmpty() }<128)
         val temporary=file(uploads,AttachmentFormat.newId())
@@ -102,7 +102,7 @@ class AttachmentStore(private val records: EndpointRecords, root: File,
             val descriptor=AttachmentDescriptor(id=raw.id,capability=raw.capability,key=raw.key,digest=raw.digest,
                 plaintextLength=raw.plaintextLength,paddedLength=raw.paddedLength,ciphertextLength=raw.ciphertextLength,
                 kind=raw.kind,disappearingSeconds=raw.disappearingSeconds,
-                filename=filename?.let(AttachmentFormat::sanitizeFilename)).also { it.validate() }
+                filename=filename?.let(AttachmentFormat::sanitizeFilename),durationMillis=durationMillis).also { it.validate() }
             checkpoint(epoch,allowed)
             if(kind==AttachmentKind.IMAGE) admitPhoto(descriptor.ciphertextLength)
             Files.move(temporary.toPath(),file(uploads,descriptor.id).toPath(),StandardCopyOption.ATOMIC_MOVE)

@@ -91,9 +91,14 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             repository.attachment(id,message.localId)?.let { descriptor ->
                 val summary = if (contact.request) AttachmentSummary(false,"Attachment",0)
                     else AttachmentSummary(descriptor.kind == org.ghostcloak.attachments.AttachmentKind.IMAGE,
-                        descriptor.filename ?: if (descriptor.kind == org.ghostcloak.attachments.AttachmentKind.IMAGE) "Photo" else "Attachment",
-                        descriptor.plaintextLength, descriptor.kind in setOf(org.ghostcloak.attachments.AttachmentKind.IMAGE,org.ghostcloak.attachments.AttachmentKind.DOCUMENT))
-                message.copy(body = if (contact.request) "Attachment" else if (summary.photo) "Photo" else summary.filename, attachment = summary)
+                        descriptor.filename ?: when(descriptor.kind) {
+                            org.ghostcloak.attachments.AttachmentKind.IMAGE -> "Photo"
+                            org.ghostcloak.attachments.AttachmentKind.VOICE_NOTE -> "Voice note"
+                            else -> "Attachment" },
+                        descriptor.plaintextLength, descriptor.kind in setOf(org.ghostcloak.attachments.AttachmentKind.IMAGE,
+                            org.ghostcloak.attachments.AttachmentKind.DOCUMENT,org.ghostcloak.attachments.AttachmentKind.VOICE_NOTE),
+                        descriptor.kind,descriptor.durationMillis,message.body.takeIf {it.isNotBlank()})
+                message.copy(body = if (contact.request) "Attachment" else message.body.ifBlank {summary.filename}, attachment = summary)
             } ?: message
         }.map { message ->
             if(message.viewOnceKind!=null) message.copy(body=if(message.viewOnceState==ViewOnceState.CONSUMED ||
@@ -103,6 +108,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         }.map { if(contact.request) it.copy(disappearingSeconds=0,expiry=null) else it }
     }
     suspend fun attachmentPeer(id: String) = action { networkAllowed(id); repository.attachmentPeer(id) }
+    suspend fun mediaPeer(id:String)=action { networkAllowed(id);repository.mediaPeer(id) }
     suspend fun directoryCapability(entry: DirectoryEntry, time: Long, valid: Boolean) = action {
         val contact=repository.contact(entry.deviceId)
         requireApi(contact.publicUserId == entry.accountId,"capability_binding")
@@ -117,14 +123,18 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     }
     /** Internal foundation API: caller must have confirmed upload and compatible peer support. */
     suspend fun sendAttachment(id:String,descriptor:org.ghostcloak.attachments.AttachmentDescriptor,
-        outbox:DurableOutbox,peerSupportsAttachments:Boolean,viewOnce:Boolean=false,onEnqueued:(Message)->Unit = {}):Message=action {
+        outbox:DurableOutbox,peerSupportsAttachments:Boolean,viewOnce:Boolean=false,
+        caption:String="",onEnqueued:(Message)->Unit = {}):Message=action {
         require(peerSupportsAttachments)
         if(viewOnce) require(descriptor.kind==org.ghostcloak.attachments.AttachmentKind.IMAGE)
+        if(descriptor.kind==org.ghostcloak.attachments.AttachmentKind.VOICE_NOTE || caption.isNotBlank())
+            require(repository.mediaPeer(id)) { "media_capability_required" }
         networkAllowed(id); repository.capacity(); descriptor.validate()
-        val bytes=ConversationPayload.encodeAttachment(descriptor,identity?.displayName,viewOnce)
+        val normalized=ConversationPayload.validateCaption(caption)
+        val bytes=ConversationPayload.encodeAttachment(descriptor,identity?.displayName,viewOnce,normalized)
         lateinit var message:Message
         val submission=try { outbox.enqueue(id,bytes) { localId ->
-            message=Message(localId,id,Direction.OUTGOING,"",repository.clock.now().wall,MessageState.PENDING,
+            message=Message(localId,id,Direction.OUTGOING,normalized,repository.clock.now().wall,MessageState.PENDING,
                 disappearingSeconds=descriptor.disappearingSeconds,
                 viewOnceKind=if(viewOnce) ViewOnceKind.PHOTO else null)
             repository.save(message)
@@ -267,7 +277,10 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             repository.expireRequests()
             repository.save(if(content.displayName!=null) contact.copy(displayName=content.displayName) else contact)
             // A later legacy message withdraws the claim (for example after a downgrade).
-            if (content.attachment == null) repository.attachmentPeer(contact.remoteDeviceId,content.supportsAttachments)
+            if (content.attachment == null) {
+                repository.attachmentPeer(contact.remoteDeviceId,content.supportsAttachments)
+                repository.mediaPeer(contact.remoteDeviceId,content.supportsMedia)
+            }
             val now = repository.clock.now()
             repository.saveAccepted(Message(envelope.envelopeId,contact.remoteDeviceId,Direction.INCOMING,
                 if (content.control) ConversationPayload.policyText(content.seconds) else content.body,

@@ -25,9 +25,12 @@ import org.ghostcloak.messaging.Message
         owner.photos.request(key.first,key.second,true,enabled)
         onDispose { owner.photos.release(key.first,key.second) }
     }
-    InlinePhotoContent(value,enabled,
-        retry={owner.photos.request(key.first,key.second,true,enabled,retry=true)},
-        open={owner.download(key.first,key.second,true,"Photo")})
+    Column {
+        InlinePhotoContent(value,enabled,
+            retry={owner.photos.request(key.first,key.second,true,enabled,retry=true)},
+            open={owner.download(key.first,key.second,true,"Photo")})
+        if(enabled) message.attachment?.caption?.let { Text(it,style=MaterialTheme.typography.bodyMedium) }
+    }
 }
 
 @Composable internal fun InlinePhotoContent(value: InlinePhoto?, enabled: Boolean, retry: ()->Unit, open: ()->Unit) {

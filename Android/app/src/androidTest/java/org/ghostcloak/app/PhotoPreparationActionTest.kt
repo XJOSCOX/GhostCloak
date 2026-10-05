@@ -1,6 +1,7 @@
 package org.ghostcloak.app
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import org.ghostcloak.app.attachments.MediaUi
@@ -34,6 +35,19 @@ class PhotoPreparationActionTest {
     }
     @Test fun preparingCannotSendBeforeNormalizationCompletes() {
         compose.setContent { MaterialTheme { PreparationAction(MediaUi(photo=true,busy=true),true,{fail()},{fail()}) } }
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+    }
+    @Test fun validPhotoAndDocumentCaptionsCanSend() {
+        val photo=mutableStateOf(true)
+        var sends=0
+        compose.setContent { MaterialTheme { PreparationAction(MediaUi(photo=photo.value,ready=true,caption="A private caption"),true,{fail()},{sends++}) } }
+        compose.onNodeWithText("Send").performClick()
+        compose.runOnIdle {photo.value=false}
+        compose.onNodeWithText("Send").performClick()
+        assertEquals(2,sends)
+    }
+    @Test fun invalidCaptionCannotSend() {
+        compose.setContent { MaterialTheme { PreparationAction(MediaUi(photo=true,ready=true,caption="bad\u0000caption"),true,{fail()},{fail()}) } }
         compose.onNodeWithText("Send").assertIsNotEnabled()
     }
 }

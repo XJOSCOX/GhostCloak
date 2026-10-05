@@ -111,6 +111,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         put("app/request/$id",RequestRecord(state=state,grace=requestDeadline(),clockVersion=1))
         put("app/force-hidden-request/$id",true)
         records.remove("app/profile-sync/$id")
+        records.remove("app/media-peer/$id")
     }
     fun removeContact(id:String)=records.transaction {
         endAcceptedRelationship(id,RequestState.REJECTED,false)
@@ -228,9 +229,14 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun resetCapabilities(id:String)=records.transaction {
         attachmentPeer(id,false); clearDirectoryCapability(id); records.remove("app/capability-floor/$id")
         records.remove("app/capability-deadline/$id")
+        records.remove("app/media-peer/$id")
     }
     fun attachmentPeer(id: String, supported: Boolean) = records.transaction {
         if (supported) records.write("app/attachment-peer/$id", byteArrayOf(1)) else records.remove("app/attachment-peer/$id")
+    }
+    fun mediaPeer(id:String):Boolean=records.transaction { records.read("app/media-peer/$id")?.contentEquals(byteArrayOf(1))==true }
+    fun mediaPeer(id:String,supported:Boolean)=records.transaction {
+        if(supported) records.write("app/media-peer/$id",byteArrayOf(1)) else records.remove("app/media-peer/$id")
     }
     fun contacts(): List<Contact> = records.transaction { records.keys("app/contact/").map { read<Contact>(it) ?: throw EndpointStorageFailure() } }
     fun contact(id: String) = contacts().firstOrNull { it.remoteDeviceId == id } ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)

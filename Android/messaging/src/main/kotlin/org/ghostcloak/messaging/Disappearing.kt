@@ -17,13 +17,15 @@ object ConversationPayload {
     // Authenticated padding extension. Older decoders already ignore padding.
     // Not user text: a quoted/copied advertisement can never establish support.
     private val attachmentSupport = "GhostCloak/padding/attachments/v1!".toByteArray(Charsets.US_ASCII)
+    private val mediaSupport = "GhostCloak/padding/media/v1!".toByteArray(Charsets.US_ASCII)
     private val profileMarker = "GhostCloak/profile/v1!".toByteArray(Charsets.US_ASCII)
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
+    const val MAX_CAPTION_BYTES = 512
     private val magic = byteArrayOf(-1, 71, 67, 80)
     class Content(val body: String, val seconds: Int, val control: Boolean, val attachment: ByteArray? = null,
         val supportsAttachments: Boolean = false, val displayName: String? = null,
         val profileUpdate: Boolean = false, val viewOnceKind: ViewOnceKind? = null,
-        val replyTo: ReplyReference? = null) {
+        val replyTo: ReplyReference? = null, val supportsMedia:Boolean=false) {
         override fun toString() = "Content(redacted)"
     }
     private fun profileBytes(displayName:String?):ByteArray = displayName?.let {
@@ -39,20 +41,34 @@ object ConversationPayload {
         profile.copyInto(bytes,16)
         return bytes
     }
+    fun validateCaption(value:String):String {
+        val trimmed=value.trim()
+        if(trimmed.isNotEmpty()) {
+            val bytes=trimmed.encodeToByteArray()
+            if(bytes.size>MAX_CAPTION_BYTES || bytes.decodeToString()!=trimmed ||
+                trimmed.any { Character.isISOControl(it) }) throw AppFailure(AppError.INVALID_TEXT)
+        }
+        return trimmed
+    }
     fun encodeAttachment(descriptor: org.ghostcloak.attachments.AttachmentDescriptor, displayName:String?=null,
-        viewOnce:Boolean=false): ByteArray {
-        if(viewOnce) require(descriptor.kind==org.ghostcloak.attachments.AttachmentKind.IMAGE)
+        viewOnce:Boolean=false, caption:String=""): ByteArray {
+        if(viewOnce) require(descriptor.kind==org.ghostcloak.attachments.AttachmentKind.IMAGE && caption.isBlank())
+        val normalized=validateCaption(caption)
+        val captionBytes=normalized.encodeToByteArray()
+        val modern=descriptor.kind==org.ghostcloak.attachments.AttachmentKind.VOICE_NOTE || captionBytes.isNotEmpty()
         val encoded = org.ghostcloak.attachments.AttachmentFormat.encode(descriptor)
         try {
             val profile=profileBytes(displayName)
-            val size=((16+encoded.size+profile.size+255)/256)*256
+            val size=((16+encoded.size+(if(modern) 2+captionBytes.size else 0)+profile.size+255)/256)*256
             if(size>16384) throw AppFailure(AppError.MESSAGE_TOO_LARGE)
             val bytes=ByteArray(size).also { SecureRandom().nextBytes(it) }
-            ByteBuffer.wrap(bytes).put(magic).put(1).put(if(viewOnce) 6 else 3).putShort(0)
+            ByteBuffer.wrap(bytes).put(magic).put(1).put(if(viewOnce) 6 else if(modern) 8 else 3).putShort(0)
                 .putInt(descriptor.disappearingSeconds).putInt(encoded.size).put(encoded)
-            if(profile.isNotEmpty()) profile.copyInto(bytes,16+encoded.size)
+            if(modern) ByteBuffer.wrap(bytes,16+encoded.size,2+captionBytes.size)
+                .putShort(captionBytes.size.toShort()).put(captionBytes)
+            if(profile.isNotEmpty()) profile.copyInto(bytes,16+encoded.size+(if(modern) 2+captionBytes.size else 0))
             return bytes
-        } finally { encoded.fill(0) }
+        } finally { encoded.fill(0);captionBytes.fill(0) }
     }
     fun encode(body: String, seconds: Int, control: Boolean = false, displayName:String?=null,
         viewOnce:Boolean=false, replyTo:ReplyReference?=null): ByteArray {
@@ -64,14 +80,18 @@ object ConversationPayload {
             if (text.size > MAX_TEXT) throw AppFailure(AppError.MESSAGE_TOO_LARGE)
             val profile=profileBytes(displayName)
             val replyBytes=replyTo?.let { byteArrayOf(it.kind.ordinal.toByte()) + it.envelopeId.toByteArray(Charsets.US_ASCII) } ?: byteArrayOf()
-            val extension=if(16+text.size+replyBytes.size+attachmentSupport.size+profile.size<=16384) attachmentSupport else byteArrayOf()
+            val extension=if(16+text.size+replyBytes.size+attachmentSupport.size+profile.size<=16384)
+                attachmentSupport else byteArrayOf()
             val size = ((16 + text.size + replyBytes.size + extension.size + profile.size + 255) / 256) * 256
             if(size>16384) throw AppFailure(AppError.MESSAGE_TOO_LARGE)
+            // Keep the exact legacy padded size. Older clients ignore this marker inside padding.
+            val media=extension.isNotEmpty() && 16+text.size+replyBytes.size+extension.size+profile.size+mediaSupport.size<=size
             val bytes = ByteArray(size).also { SecureRandom().nextBytes(it) }
             ByteBuffer.wrap(bytes).put(magic).put(1).put(if (control) 2 else if(viewOnce) 5 else if(replyTo!=null) 7 else 1).putShort(0)
                 .putInt(seconds).putInt(text.size).put(text).put(replyBytes)
             if (extension.isNotEmpty()) extension.copyInto(bytes, 16 + text.size+replyBytes.size)
             if(profile.isNotEmpty()) profile.copyInto(bytes,16+text.size+replyBytes.size+extension.size)
+            if(media) mediaSupport.copyInto(bytes,16+text.size+replyBytes.size+extension.size+profile.size)
             return bytes
         } finally { text.fill(0) }
     }
@@ -89,7 +109,7 @@ object ConversationPayload {
         if (!ByteArray(4).also { input.get(it) }.contentEquals(magic) || input.get().toInt() != 1)
             throw AppFailure(AppError.INVALID_TEXT)
         val type = input.get().toInt()
-        if (type !in 1..7 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
+        if (type !in 1..8 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
         val seconds = input.int; DisappearingTimer.from(seconds)
         val length = input.int
         if (length !in 0..MAX_TEXT || length > input.remaining() || (type in setOf(2,4) && length != 0) ||
@@ -104,6 +124,15 @@ object ConversationPayload {
             ReplyReference(id,kind)
         } else null
         var offset=16+length+(if(reply!=null) 37 else 0)
+        val caption=if(type==8) {
+            if(bytes.size-offset<2) throw AppFailure(AppError.INVALID_TEXT)
+            val count=ByteBuffer.wrap(bytes,offset,2).short.toInt() and 0xffff
+            if(count>MAX_CAPTION_BYTES || bytes.size-offset-2<count) throw AppFailure(AppError.INVALID_TEXT)
+            val value=bytes.copyOfRange(offset+2,offset+2+count).decodeToString(throwOnInvalidSequence=true)
+            if(value!=validateCaption(value)) throw AppFailure(AppError.INVALID_TEXT)
+            offset+=2+count
+            value
+        } else ""
         val supports = bytes.size-offset>=attachmentSupport.size &&
             bytes.copyOfRange(offset,offset+attachmentSupport.size).contentEquals(attachmentSupport)
         if(supports) offset+=attachmentSupport.size
@@ -116,27 +145,31 @@ object ConversationPayload {
             TextRules.displayName(decoded)
             decoded
         } else null
-        val minimum=16+length+(if(reply!=null) 37 else 0)+(if(supports) attachmentSupport.size else 0)+
-            (if(name!=null) profileMarker.size+1+name.encodeToByteArray().size else 0)
+        if(name!=null) offset+=profileMarker.size+1+name.encodeToByteArray().size
+        val media = supports && bytes.size-offset>=mediaSupport.size &&
+            bytes.copyOfRange(offset,offset+mediaSupport.size).contentEquals(mediaSupport)
+        if(media) offset+=mediaSupport.size
+        val minimum=offset
         if(((minimum+255)/256)*256!=bytes.size)
             throw AppFailure(AppError.INVALID_TEXT)
         if(type==4) {
             if(name==null || supports) throw AppFailure(AppError.INVALID_TEXT)
             return Content("",0,false,displayName=name,profileUpdate=true)
         }
-        if (type == 3 || type == 6) {
+        if (type == 3 || type == 6 || type==8) {
             try {
                 val descriptor=org.ghostcloak.attachments.AttachmentFormat.decode(text)
                 require(descriptor.disappearingSeconds==seconds)
                 if(type==6) require(descriptor.kind==org.ghostcloak.attachments.AttachmentKind.IMAGE)
-                return Content("",seconds,false,text,displayName=name,
+                if(type==8) require(descriptor.kind==org.ghostcloak.attachments.AttachmentKind.VOICE_NOTE || caption.isNotEmpty())
+                return Content(caption,seconds,false,text,displayName=name,
                     viewOnceKind=if(type==6) ViewOnceKind.PHOTO else null)
             } catch (_: Exception) { text.fill(0); throw AppFailure(AppError.INVALID_TEXT) }
         }
         val body = try { text.decodeToString(throwOnInvalidSequence = true) } finally { text.fill(0) }
         if (type == 1 || type == 5 || type == 7) TextRules.encode(body).fill(0)
         return Content(body, seconds, type == 2, supportsAttachments = supports,displayName=name,
-            viewOnceKind=if(type==5) ViewOnceKind.TEXT else null,replyTo=reply)
+            viewOnceKind=if(type==5) ViewOnceKind.TEXT else null,replyTo=reply,supportsMedia=media)
     }
     fun policyText(seconds: Int) = if (seconds == 0) "Disappearing messages turned off"
         else "Disappearing messages set to ${DisappearingTimer.from(seconds).label}"

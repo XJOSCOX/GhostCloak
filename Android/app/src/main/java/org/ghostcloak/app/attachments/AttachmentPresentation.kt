@@ -4,6 +4,8 @@ import android.content.*
 import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.media.MediaPlayer
+import android.os.SystemClock
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,9 +17,13 @@ data class MediaUi(val conversation: String = "", val message: String? = null,
     val filename: String = "", val photo: Boolean = false, val bytes: Long = 0,
     val busy: Boolean = false, val error: String? = null, val ready: Boolean = false,
     val preview: Bitmap? = null, val sending: Boolean = false, val uploadPrepared: Boolean = false,
-    val viewOnce:Boolean=false) {
+    val viewOnce:Boolean=false,val voice:Boolean=false,val recording:Boolean=false,
+    val durationMillis:Long=0,val caption:String="") {
     override fun toString() = "MediaUi(redacted)"
 }
+
+data class VoicePlaybackUi(val conversation:String="",val message:String="",val playing:Boolean=false,
+    val busy:Boolean=false,val progressMillis:Long=0,val durationMillis:Long=0,val error:Boolean=false)
 
 /** One foreground presentation owner; no credential or descriptor enters Compose state. */
 class AttachmentPresentation(private val app: GhostApplication) {
@@ -25,13 +31,21 @@ class AttachmentPresentation(private val app: GhostApplication) {
     private val scope = CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
     private val mutable = MutableStateFlow(MediaUi())
     val state = mutable.asStateFlow()
+    private val voiceMutable=MutableStateFlow(VoicePlaybackUi())
+    val voicePlayback=voiceMutable.asStateFlow()
     private val session = MutableStateFlow(0L)
     val presentationSession = session.asStateFlow()
     private var transferEligible = false
     private val scratch = PlaintextScratch(File(app.noBackupFilesDir,"media-presentation"))
+    private val voiceCapture=VoiceCapture(app,scratch)
     private var file: File? = null
     private var blob: String? = null
     private var job: Job? = null
+    private var recorderTicker:Job?=null
+    private var player:MediaPlayer?=null
+    private var playbackFile:File?=null
+    private var playbackJob:Job?=null
+    private var playbackTicker:Job?=null
     private val inputGate=Any()
     @Volatile private var sourceSignal: android.os.CancellationSignal? = null
     @Volatile private var activeInput: java.io.InputStream? = null
@@ -72,6 +86,8 @@ class AttachmentPresentation(private val app: GhostApplication) {
     fun locked() { if(app.localOperationGate.blocked) return; visible = false; photos.clear(); clear(); scratch.sweep() }
     fun clear() {
         if(app.localOperationGate.blocked) return
+        recorderTicker?.cancel();recorderTicker=null;voiceCapture.cancel()
+        stopVoicePlayback()
         val consumed=mutable.value.takeIf {it.viewOnce && it.message!=null}
         val revoked=synchronized(inputGate) {
             epoch++
@@ -89,9 +105,108 @@ class AttachmentPresentation(private val app: GhostApplication) {
             catch (_: Exception) { /* Durable REVEALING remains fail-closed on restart. */ }
         } }
     }
+    fun startVoiceRecording(conversation:String) {
+        app.localOperationGate.requireNormal()
+        clear()
+        mutable.value=MediaUi(conversation=conversation,voice=true,busy=true)
+        launch { expected ->
+            if(!app.runtime.supportsAttachments(conversation) || !app.runtime.supportsMedia(conversation)) {
+                mutable.value=mutable.value.copy(busy=false,error="This contact needs an updated Ghost Cloak app for voice notes.")
+                return@launch
+            }
+            check(expected)
+            try {
+                file=voiceCapture.start(::stopVoiceRecording,::cancel)
+                check(expected)
+                mutable.value=mutable.value.copy(busy=false,recording=true)
+                recorderTicker=scope.launch { while(isActive && voiceCapture.recording) {
+                    delay(250)
+                    mutable.value=mutable.value.copy(durationMillis=voiceCapture.elapsedMillis)
+                } }
+            } catch (failure:Exception) {
+                voiceCapture.cancel();file?.let(scratch::delete);file=null
+                if(expected==epoch) mutable.value=mutable.value.copy(busy=false,recording=false,error="Could not start recording. Check microphone access and try again.")
+            }
+        }
+    }
+    fun stopVoiceRecording() {
+        recorderTicker?.cancel();recorderTicker=null
+        val result=voiceCapture.stop()
+        if(result==null) {
+            file=null
+            mutable.value=mutable.value.copy(recording=false,ready=false,error="Recording was too short or too large. Try again.")
+        } else {
+            file=result.file
+            mutable.value=mutable.value.copy(recording=false,ready=true,bytes=result.bytes,durationMillis=result.durationMillis)
+        }
+    }
+    fun setCaption(value:String) {
+        if(value.length<=512 && mutable.value.message==null && !mutable.value.recording && !mutable.value.viewOnce)
+            mutable.value=mutable.value.copy(caption=value)
+    }
+    private fun stopVoicePlayback() {
+        playbackJob?.cancel();playbackJob=null
+        playbackTicker?.cancel();playbackTicker=null
+        try {player?.stop()} catch (_:Exception) {}
+        try {player?.release()} catch (_:Exception) {}
+        player=null
+        playbackFile?.let(scratch::delete);playbackFile=null
+        voiceMutable.value=VoicePlaybackUi()
+    }
+    fun toggleVoicePlayback(conversation:String,message:String) {
+        val current=voiceMutable.value
+        if(current.conversation==conversation && current.message==message && player!=null) {
+            if(current.playing) {
+                player?.pause();voiceMutable.value=current.copy(playing=false)
+            } else {
+                player?.start();voiceMutable.value=current.copy(playing=true)
+            }
+            return
+        }
+        stopVoicePlayback()
+        voiceMutable.value=VoicePlaybackUi(conversation,message,busy=true)
+        playbackJob=scope.launch {
+            val target=temporary()
+            var pending:MediaPlayer?=null
+            try {
+                check(allowed() && app.runtime.attachmentAvailableNow(conversation,message))
+                app.runtime.downloadAttachment(conversation,message).use { verified ->
+                    withContext(Dispatchers.IO) {target.outputStream().use(verified::copyTo)}
+                }
+                check(allowed() && app.runtime.attachmentAvailableNow(conversation,message))
+                val media=MediaPlayer()
+                pending=media
+                media.setDataSource(target.absolutePath)
+                withContext(Dispatchers.IO) {media.prepare()}
+                check(allowed() && app.runtime.attachmentAvailableNow(conversation,message))
+                playbackFile=target;player=media
+                pending=null
+                media.setOnCompletionListener {stopVoicePlayback()}
+                media.start()
+                voiceMutable.value=VoicePlaybackUi(conversation,message,playing=true,durationMillis=media.duration.toLong())
+                playbackTicker=scope.launch {while(isActive && player===media) {
+                    delay(250)
+                    if(!allowed() || !app.runtime.attachmentAvailableNow(conversation,message)) {stopVoicePlayback();break}
+                    voiceMutable.value=voiceMutable.value.copy(progressMillis=media.currentPosition.toLong(),playing=media.isPlaying)
+                }}
+            } catch (_:Exception) {
+                try {pending?.release()} catch (_:Exception) {}
+                scratch.delete(target)
+                stopVoicePlayback()
+                voiceMutable.value=VoicePlaybackUi(conversation,message,error=true)
+            }
+        }
+    }
+    fun seekVoice(conversation:String,message:String,millis:Long) {
+        val current=voiceMutable.value
+        if(current.conversation==conversation && current.message==message && player!=null) {
+            player?.seekTo(millis.coerceIn(0,current.durationMillis).toInt())
+            voiceMutable.value=current.copy(progressMillis=millis.coerceIn(0,current.durationMillis))
+        }
+    }
     fun toggleViewOnce() {
         val current=mutable.value
-        if(current.message==null && current.photo && !current.busy && !current.sending)
+        if(current.message==null && current.photo && current.caption.isBlank() && !current.busy && !current.sending)
             mutable.value=current.copy(viewOnce=!current.viewOnce)
     }
     fun cancel() {
@@ -129,6 +244,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
                         failure is org.ghostcloak.protocol.ApiFailure && failure.status==404 -> "Attachment unavailable or expired."
                         mutable.value.message!=null -> "Download failed · Retry"
                         blob!=null -> "Upload failed · Retry"
+                        mutable.value.voice -> "Voice note could not be prepared. Record it again."
                         failure is PhotoFailure -> failure.reason.userMessage
                         mutable.value.photo && failure.message=="attachment_size" -> PhotoFailureReason.SOURCE_LIMIT.userMessage
                         mutable.value.photo && (failure is java.io.IOException || failure is SecurityException) -> PhotoFailureReason.READ.userMessage
@@ -212,25 +328,33 @@ class AttachmentPresentation(private val app: GhostApplication) {
     fun send(refresh: ()->Unit) {
         val before=mutable.value
         if (before.conversation.isEmpty() || before.message != null || before.busy || (!before.ready && !before.uploadPrepared)) return
+        val caption=try { org.ghostcloak.messaging.ConversationPayload.validateCaption(before.caption) }
+            catch (_:Exception) { mutable.value=before.copy(error="Caption is too long or contains unsupported characters.");return }
+        if(before.viewOnce && caption.isNotEmpty()) return
         mutable.value=before.copy(busy=true,error=null,sending=before.photo)
         launch { expected ->
             if(!app.runtime.supportsAttachments(before.conversation)) {
                 mutable.value=mutable.value.copy(busy=false,error=supportNotConfirmed)
                 return@launch
             }
+            if((before.voice || caption.isNotEmpty()) && !app.runtime.supportsMedia(before.conversation)) {
+                mutable.value=mutable.value.copy(busy=false,error="This contact needs an updated Ghost Cloak app for this media message.")
+                return@launch
+            }
             if(blob==null) {
                 val source=file ?: error("attachment_missing")
                 val duration=app.runtime.attachmentDuration(before.conversation)
                 val descriptor=app.runtime.prepareAttachment(source.inputStream(),source.length(),
-                    if(before.photo) AttachmentKind.IMAGE else AttachmentKind.DOCUMENT,duration,
-                    if(before.photo) null else before.filename)
+                    if(before.photo) AttachmentKind.IMAGE else if(before.voice) AttachmentKind.VOICE_NOTE else AttachmentKind.DOCUMENT,
+                    duration,if(before.voice || before.photo) null else before.filename,
+                    if(before.voice) before.durationMillis else null)
                 check(expected); blob=descriptor.id;file?.let(scratch::delete);file=null
                 mutable.value=mutable.value.copy(uploadPrepared=true)
             }
             val id=blob!!
             app.runtime.uploadAttachment(id); check(expected)
             app.runtime.sendPreparedAttachment(before.conversation,id,true,requireNegotiatedSupport=true,
-                viewOnce=before.viewOnce)
+                viewOnce=before.viewOnce,caption=caption)
             check(expected); clear(); refresh()
         }
     }
@@ -324,6 +448,8 @@ class AttachmentPresentation(private val app: GhostApplication) {
      * Existing operation rollback may clean its own incomplete scratch as before; durable data stays. */
     internal suspend fun quiesce() {
         visible=false; epoch++
+        recorderTicker?.cancel();recorderTicker=null;voiceCapture.cancel()
+        stopVoicePlayback()
         mutable.value=MediaUi(); photos.clear()
         val revoked=synchronized(inputGate) { sourceSignal to activeInput }
         revoked.first?.cancel()

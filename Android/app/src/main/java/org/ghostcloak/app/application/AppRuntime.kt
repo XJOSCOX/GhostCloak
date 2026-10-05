@@ -263,11 +263,13 @@ class AppRuntime internal constructor(
         }
     }
     /** Internal synthetic-file foundation only; no picker/recorder/UI entry point. */
-    internal suspend fun prepareAttachment(source:java.io.InputStream,length:Long,kind:org.ghostcloak.attachments.AttachmentKind,seconds:Int,filename:String?=null):org.ghostcloak.attachments.AttachmentDescriptor = guarded {
+    internal suspend fun prepareAttachment(source:java.io.InputStream,length:Long,kind:org.ghostcloak.attachments.AttachmentKind,seconds:Int,
+        filename:String?=null,durationMillis:Long?=null):org.ghostcloak.attachments.AttachmentDescriptor = guarded {
         use { check(attachmentAllowed()) }
-        attachments!!.prepare(source,length,kind,seconds,filename,::attachmentAllowed)
+        attachments!!.prepare(source,length,kind,seconds,filename,durationMillis,::attachmentAllowed)
     }
     internal suspend fun supportsAttachments(conversation:String):Boolean=use { network?.supportsAttachments(it,conversation) ?: it.attachmentPeer(conversation) }
+    internal suspend fun supportsMedia(conversation:String):Boolean=use { it.mediaPeer(conversation) }
     internal fun cachedAttachments(conversation:String?) = if(conversation==null) emptySet() else
         attachments?.cachedReferences().orEmpty().filter { it.substringBefore('/')==conversation }.map { it.substringAfter('/') }.toSet()
     internal fun attachmentAvailableNow(conversation:String,message:String):Boolean {
@@ -299,7 +301,7 @@ class AppRuntime internal constructor(
         attachments!!.upload(id,network!!.blobClient(::attachmentAllowed,{check(attachmentAllowed())}),::attachmentAllowed)
     }
     internal suspend fun sendPreparedAttachment(conversation:String,blob:String,peerSupportsAttachments:Boolean,requireNegotiatedSupport:Boolean=false,
-        viewOnce:Boolean=false):Message=use { service ->
+        viewOnce:Boolean=false,caption:String=""):Message=use { service ->
         check(attachmentAllowed())
         val entry=attachments!!.entry(blob) ?: error("attachment_missing")
         if (entry.references.isNotEmpty()) {
@@ -310,7 +312,7 @@ class AppRuntime internal constructor(
         }
         check(entry.state==org.ghostcloak.attachments.TransferState.UPLOADED && entry.upload)
         network!!.sendAttachment(service,conversation,entry.descriptor,
-            if(requireNegotiatedSupport) service.attachmentPeer(conversation) else peerSupportsAttachments,viewOnce) {
+            if(requireNegotiatedSupport) service.attachmentPeer(conversation) else peerSupportsAttachments,viewOnce,caption) {
             attachments!!.bind(blob,"$conversation/${it.localId}")
         }
     }

@@ -36,7 +36,9 @@ data class Message(val localId: String, val conversationId: String, val directio
 }
 
 /** Presentation only; never contains a blob capability, key, or remote identifier. */
-data class AttachmentSummary(val photo: Boolean, val filename: String, val bytes: Long, val supported: Boolean = true) {
+data class AttachmentSummary(val photo: Boolean, val filename: String, val bytes: Long, val supported: Boolean = true,
+    val kind:org.ghostcloak.attachments.AttachmentKind?=null,val durationMillis:Long?=null,
+    val caption:String?=null) {
     override fun toString() = "AttachmentSummary(redacted)"
 }
 enum class AppError { INVALID_DISPLAY_NAME, INVALID_CARD, DUPLICATE_CONTACT, AMBIGUOUS_IDENTITY, EMPTY_MESSAGE,

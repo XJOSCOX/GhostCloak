@@ -1,6 +1,6 @@
 # Ghost Cloak controlled adversarial pre-production test plan
 
-Status: **T01–T24 remain planned; the owner separately authorized and executed bounded A1 auth/recovery/session checks below.** Phase Q.4 itself executed no adversarial test. The source audit is [SECURITY_AUDIT_CURRENT.md](SECURITY_AUDIT_CURRENT.md); the current rollout boundary is [infrastructure/DEPLOYMENT.md](infrastructure/DEPLOYMENT.md). Do not use either populated physical phone or production account for destructive cases. Use disposable Android virtual devices and isolated PostgreSQL fixtures unless the owner separately authorizes another target. PostgreSQL behavior is tested **through the API only**, never by hostile direct database access.
+Status: **Adversarial testing paused after A1. A1 is complete (17 PASS, 0 FAIL, 1 BLOCKED); A2+ and T01–T24 remain NOT RUN.** Phase Q.4 itself executed no adversarial test. Q remediation and operational assurance are closed separately in [the final audit register](SECURITY_AUDIT_CURRENT.md). This plan authorizes no further live, Android, fuzzing or resource-exhaustion tests. A later phase requires new owner instruction. The rollout boundary is [infrastructure/DEPLOYMENT.md](infrastructure/DEPLOYMENT.md). Do not use either populated physical phone or production account for destructive cases. PostgreSQL behavior is tested **through the API only**, never by hostile direct database access.
 
 ## Boundaries and evidence
 
@@ -101,6 +101,6 @@ The final live run used **89 requests**, including health checks after registrat
 | A1.17 rejected-response leakage | PASS | Inspected live rejected response bytes for exception, JDBC, stack-trace and deployment-path markers; none found. | HIGH | `53d5c64` | Live; bounded marker check, not exhaustive information-flow proof |
 | A1.18 server survival | PASS | `/health` remained HTTP 200 and `{"status":"ok"}` after each major batch and at final completion. | HIGH | `53d5c64` | Live |
 
-**A1 totals:** 17 PASS, 0 FAIL, 1 BLOCKED, 0 ACCEPTED. No HIGH or CRITICAL finding was observed. The known/unknown timing sample and blocked A1.11 should not be represented as complete assurance. A2 may be planned only after its own scope is authorized; A1 provides no authorization to execute A2.
+**A1 totals:** 17 PASS, 0 FAIL, 1 BLOCKED, 0 ACCEPTED. No HIGH or CRITICAL finding was observed. The known/unknown timing sample and blocked A1.11 should not be represented as complete assurance. **A2+ are NOT RUN; stop adversarial testing here.** Their execution requires a new owner instruction and is not part of Q closure.
 
 **Disposable state:** Five guarded development runs created ten disposable server accounts (two each). The service has no public account-deletion operation, so those account/device/prekey records remain for owner-managed cleanup. Challenge records expire after 60 seconds; sessions left by interrupted harness runs expire after five minutes. The final run revoked both active D/E sessions. No existing A/B/C identity was addressed by the harness.

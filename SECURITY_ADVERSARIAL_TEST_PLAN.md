@@ -1,6 +1,6 @@
 # Ghost Cloak controlled adversarial pre-production test plan
 
-Status: **PLAN ONLY — NO TEST EXECUTED IN PHASE Q.4.** This is not authorization to attack a running service. The owner must name an isolated, owned target, approved client/build digests, test identities, change window, rate/concurrency ceilings, recovery contact and backup/restore point before a later execution phase. The source audit is [SECURITY_AUDIT_CURRENT.md](SECURITY_AUDIT_CURRENT.md); the current rollout boundary is [infrastructure/DEPLOYMENT.md](infrastructure/DEPLOYMENT.md). Do not use either populated physical phone or production account for destructive cases. Use disposable Android virtual devices and isolated PostgreSQL fixtures unless the owner separately authorizes another target. PostgreSQL behavior is tested **through the API only**, never by hostile direct database access.
+Status: **T01–T24 remain planned; the owner separately authorized and executed bounded A1 auth/recovery/session checks below.** Phase Q.4 itself executed no adversarial test. The source audit is [SECURITY_AUDIT_CURRENT.md](SECURITY_AUDIT_CURRENT.md); the current rollout boundary is [infrastructure/DEPLOYMENT.md](infrastructure/DEPLOYMENT.md). Do not use either populated physical phone or production account for destructive cases. Use disposable Android virtual devices and isolated PostgreSQL fixtures unless the owner separately authorizes another target. PostgreSQL behavior is tested **through the API only**, never by hostile direct database access.
 
 ## Boundaries and evidence
 
@@ -73,3 +73,34 @@ Allowed status values: **NOT RUN / PASS / FAIL / BLOCKED / ACCEPTED**. A pass re
 | T24 | NOT RUN | — | — | — | Q.4 planning only. |
 
 The execution report must list every deviation, discovered defect and retest separately. No production readiness conclusion follows from writing this plan.
+
+## Phase A1 execution ledger — 2026-10-04
+
+The owner authorized only `https://api.ghostcloak.org` for live A1 auth/recovery/session testing. The reviewed source checkout was `53d5c64d4771458291c68883af6ef64b87483242`; the owner-reported live backend release was `900a9cc` (the deployed jar was not independently inspected in A1). All live identities and signing keys were generated for this phase. No A/B/C identity, physical device, VPS shell, database connection, mailbox, attachment, or prekey allocation was used. The guarded harness is `Android/test-support/src/test/kotlin/org/ghostcloak/testing/LiveAdversarialA1Test.kt`: it targets a hard-coded HTTPS origin, requires `GHOSTCLOAK_ADVERSARIAL_LIVE=true`, caps each run at 90 requests, and emits only fixed test labels, statuses, response-size comparisons, and coarse timing values. Normal test runs skip its live case.
+
+The final live run used **89 requests**, including health checks after registration and each major batch; its last `/health` response was HTTP 200 with `{"status":"ok"}`. Earlier harness runs stopped on two *harness expectation errors*: exceeding D's documented 10-per-minute challenge bucket (HTTP 429), and treating safe HTTP 400 ingress rejections as if HTTP 401/404 were the only acceptable statuses. Both were corrected before the final run. Neither was recorded as a product vulnerability. Relevant synthetic `RecoveryTest`, `AbuseResistanceTest`, and `NetworkTest` checks passed under strict dependency verification. A1 does not establish production release signoff.
+
+| ID / objective | Status | Evidence summary | Severity if failed | Source commit | Mode / limitation |
+|---|---|---|---|---|---|
+| A1.1 challenge replay | PASS | First signed login proof 200; identical replay 401; no second grant. | HIGH | `53d5c64` | Live |
+| A1.2 expired challenge | PASS | Controllable-clock `NetworkTest.authenticationReplayBindingsExpiryAndRevocation` rejects signed proof after 60,001 ms with 401. | HIGH | `53d5c64` | Synthetic; production clock unchanged |
+| A1.3 wrong signing key | PASS | D login challenge signed by E's private key rejected 401. | CRITICAL | `53d5c64` | Live |
+| A1.4 modified challenge | PASS | Seven individually changed transcript fields—ID, random, account, device, audience, purpose, registration hash—rejected 401. | HIGH | `53d5c64` | Live; original server challenge consumed on each attempt |
+| A1.5 cross-account/device proof | PASS | D challenge with E account/device 401; D recovery challenge with E credential/device 401; registration possession/cross-binding rejected by `NetworkTest`. | CRITICAL | `53d5c64` | Live + synthetic registration case |
+| A1.6 challenge purpose confusion | PASS | Register↔login and recovery↔ordinary proof use rejected 401. | HIGH | `53d5c64` | Live |
+| A1.7 audience binding | PASS | Signature over another audience rejected 401; no request sent to another domain. | HIGH | `53d5c64` | Live |
+| A1.8 token format/guess | PASS | Empty, malformed, random-looking, truncated, extended, and one-character-altered bearer values rejected 401; duplicate header covered by A1.16. | HIGH | `53d5c64` | Live; no brute force or timing equivalence claim |
+| A1.9 revoke | PASS | Revoke 200, immediate reuse 401. | HIGH | `53d5c64` | Live; no client restart needed for server-side invalidation |
+| A1.10 session expiry | PASS | Controllable-clock `NetworkTest.authenticationReplayBindingsExpiryAndRevocation` rejects token after 300,001 ms with 401. | HIGH | `53d5c64` | Synthetic; production clock unchanged |
+| A1.11 bearer cross-device claim | BLOCKED | Auth/recovery/revoke requests expose no caller-device claim under a bearer session; sending D's token to a public directory endpoint would test a different phase. | HIGH | `53d5c64` | No valid in-scope device-claim operation; requires scoped endpoint/fixture design |
+| A1.12 recovery known/unknown shape | PASS | Three known/unknown issue pairs each returned 200 and equal encoded length; bad proofs both 401 with equal encoded error and code. Observed round-trip ranges were 127–137 ms and 126–140 ms. | MEDIUM/HIGH | `53d5c64` | Live; sample does not prove timing equivalence |
+| A1.13 Q-02 bucket isolation | PASS | One fresh recovery material: 10×200 then 429; another fresh material still 200. Global 600 ceiling covered by synthetic `AbuseResistanceTest`, not live traffic. | MEDIUM | `53d5c64` | Live + synthetic global ceiling |
+| A1.14 window edge | PASS | New synthetic fixed-window test checks final millisecond, next-window first millisecond, same-material cap, and other-material independence. | MEDIUM | `53d5c64` | Synthetic; fixed-window design permits bounded boundary burst, not unlimited use |
+| A1.15 malformed auth input | PASS | Live empty/one-byte/invalid/truncated/trailing CBOR, wrong content type/method/query/route/type received safe 4xx; synthetic `NetworkTest.httpRejectsOversizeSchemaVersionContentTypeAndCleartext` covers over-limit body. | HIGH | `53d5c64` | Live + synthetic; oversized *declared length without body* not probed live |
+| A1.16 conflicting headers | PASS | Conflicting Authorization, malformed prefix/spacing, and duplicate conflicting Content-Type rejected 4xx; valid bearer remained usable until explicit revoke. | HIGH | `53d5c64` | Live through public ingress; ingress and app rejection are not distinguished |
+| A1.17 rejected-response leakage | PASS | Inspected live rejected response bytes for exception, JDBC, stack-trace and deployment-path markers; none found. | HIGH | `53d5c64` | Live; bounded marker check, not exhaustive information-flow proof |
+| A1.18 server survival | PASS | `/health` remained HTTP 200 and `{"status":"ok"}` after each major batch and at final completion. | HIGH | `53d5c64` | Live |
+
+**A1 totals:** 17 PASS, 0 FAIL, 1 BLOCKED, 0 ACCEPTED. No HIGH or CRITICAL finding was observed. The known/unknown timing sample and blocked A1.11 should not be represented as complete assurance. A2 may be planned only after its own scope is authorized; A1 provides no authorization to execute A2.
+
+**Disposable state:** Five guarded development runs created ten disposable server accounts (two each). The service has no public account-deletion operation, so those account/device/prekey records remain for owner-managed cleanup. Challenge records expire after 60 seconds; sessions left by interrupted harness runs expire after five minutes. The final run revoked both active D/E sessions. No existing A/B/C identity was addressed by the harness.

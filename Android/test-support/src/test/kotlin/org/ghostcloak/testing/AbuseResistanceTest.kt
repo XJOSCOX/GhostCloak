@@ -9,6 +9,18 @@ import org.junit.Test
 import java.util.concurrent.Executors
 
 class AbuseResistanceTest {
+    @Test fun recoveryWindowBoundaryDoesNotResetWithinTheSameWindowAndOtherMaterialIsIndependent() {
+        val limiter = DevelopmentRateLimiter()
+        val last = 1_019_999L // final millisecond of one fixed minute
+        repeat(10) { assertTrue(limiter.allow(ServerOperation.RECOVER_ISSUE, "D", last)) }
+        assertFalse(limiter.allow(ServerOperation.RECOVER_ISSUE, "D", last))
+        assertTrue(limiter.allow(ServerOperation.RECOVER_ISSUE, "E", last))
+        val next = 1_020_000L
+        repeat(10) { assertTrue(limiter.allow(ServerOperation.RECOVER_ISSUE, "D", next)) }
+        assertFalse(limiter.allow(ServerOperation.RECOVER_ISSUE, "D", next))
+        assertTrue(limiter.allow(ServerOperation.RECOVER_ISSUE, "E", next))
+    }
+
     @Test fun discoveryDoesNotConsumeAndAllocationRetryReturnsTheSameBundle() = runBlocking {
         val f=PrekeyFixture(); f.start()
         val id=f.state.ghostCloakId()

@@ -1,8 +1,41 @@
 import java.net.URI
+import java.io.File
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+// Gradle's exec provider tracks Git output as a configuration input. Never infer a
+// release identity from a version label or from a parent repository's HEAD.
+val checkoutRoot = rootProject.projectDir.parentFile.canonicalFile
+fun gitOutput(vararg arguments: String): String = providers.exec {
+    workingDir = checkoutRoot
+    commandLine("git", *arguments)
+}.standardOutput.asText.get()
+val gitTopLevel = File(gitOutput("rev-parse", "--show-toplevel").trim()).canonicalFile
+require(gitTopLevel == checkoutRoot) { "Android build requires Git metadata for this checkout" }
+val sourceCommit = gitOutput("rev-parse", "--verify", "HEAD").trim()
+require(sourceCommit.matches(Regex("[0-9a-fA-F]{40}"))) { "Android build requires a full Git commit SHA" }
+val gitStatus = gitOutput("-c", "core.quotepath=false", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".")
+fun sourceAffectingUntracked(path: String): Boolean {
+    if (path.endsWith(".log") || path.endsWith(".tmp")) return false
+    return path.startsWith("Android/") || path.startsWith("backend/") ||
+        path.startsWith("protocol/") || path.startsWith("infrastructure/") ||
+        (path.substringBefore('/') == path && path.endsWith(".md"))
+}
+val sourceDirty = gitStatus.split('\u0000').any { entry ->
+    entry.length >= 4 && (entry.substring(0, 2) != "??" || sourceAffectingUntracked(entry.substring(3)))
+}
+val reviewedInvocation = gradle.startParameter.taskNames.any { it.substringAfterLast(':') == "assembleSecurityReviewed" }
+if (reviewedInvocation) {
+    require(!gradle.startParameter.isDryRun && gradle.startParameter.excludedTaskNames.isEmpty()) {
+        "Security-reviewed build cannot skip required tasks"
+    }
+    require(gradle.startParameter.dependencyVerificationMode.toString() == "STRICT") {
+        "Security-reviewed build requires strict dependency verification"
+    }
+    require(!sourceDirty) { "Security-reviewed build requires a clean source checkout" }
 }
 
 android {
@@ -18,6 +51,8 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
+        buildConfigField("String", "GIT_SHA", "\"$sourceCommit\"")
+        buildConfigField("boolean", "GIT_DIRTY", sourceDirty.toString())
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -40,6 +75,13 @@ android {
         compose = true
         buildConfig = true
     }
+}
+
+tasks.register("assembleSecurityReviewed") {
+    group = "verification"
+    description = "Build and test debug/release from a clean Git checkout with strict dependency verification."
+    dependsOn(":test-support:test", ":app:testDebugUnitTest", ":app:testReleaseUnitTest",
+        ":app:assembleDebug", ":app:assembleRelease")
 }
 
 // Android Studio's default debug variant is ready for physical-device staging.

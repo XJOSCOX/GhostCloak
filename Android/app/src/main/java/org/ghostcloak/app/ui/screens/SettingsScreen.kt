@@ -9,6 +9,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.ghostcloak.app.application.AppState
+import org.ghostcloak.app.BuildConfig
 import org.ghostcloak.app.ui.components.*
 
 @Composable fun SettingsScreen(state: AppState, developerAvailable: Boolean,
@@ -54,6 +55,11 @@ import org.ghostcloak.app.ui.components.*
             OutlinedButton(onClick=if(state.demo) leave else demo,enabled=!state.loading,modifier=Modifier.fillMaxWidth()) {
                 Text(if(state.demo) "Return to my identity" else "Open local demo")
             }
+        }
+        SettingsGroup("Build information") {
+            Text("Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            Text("Source ${BuildProvenance.shortSha(BuildConfig.GIT_SHA)}")
+            Text(BuildProvenance.status(BuildConfig.GIT_DIRTY), color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Text("Ghost Cloak · Phase 1E.1\nExperimental. Not independently audited. Not anonymous.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
     }

@@ -4,6 +4,8 @@ Source snapshot: `e14bf5b` (2026-10-04). This is a source and generated-manifest
 
 ## Q.4 current disposition (2026-10-04)
 
+**BUILD-PROVENANCE — HIGH release-assurance gate, CLEAN SOURCE BUILD VERIFIED / INSTALLED CLIENTS PENDING.** Android now embeds a full checkout Git SHA and a dirty-source flag, exposes a short SHA and source status in protected Settings, and has a strict clean-checkout JVM/build task. The task passed in a disposable clean checkout with debug/release APKs and `GIT_DIRTY=false`. The developer checkout still contains unrelated Android Studio/icon/dependency edits, so APKs built there are marked modified. This item becomes REMEDIATED only after the final committed APK digest and installed A/B/C client provenance are verified. See [Android build provenance](Android/BUILD_PROVENANCE.md). Adversarial testing remains blocked by that evidence, the live backend/ingress match, and the V007 restore rehearsal.
+
 The detailed findings below retain original evidence and phase follow-up text. This table is the current status register for the reviewed source at `c503529`; operator reports are identified as such. `REMEDIATED_IN_SOURCE` does not prove that the same artifact is running on the VPS. This review did not test live Cloudflare, nginx, PostgreSQL or physical Android behavior.
 
 | ID | Original severity | Current status | Closure or accepted limitation | Evidence / deployment boundary |

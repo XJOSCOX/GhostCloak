@@ -3,7 +3,7 @@ package org.ghostcloak.app.ui.screens
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,6 +28,7 @@ import org.ghostcloak.messaging.ChatOrganization
         else -> ChatOrganization.main(state.contacts,state.previews)
     }
     val chats=source.filter { it.contact.visibleName.contains(query,ignoreCase=true) }
+    val pinnedCount=if(!directory && !archived) chats.count {it.contact.pinned && !it.contact.request} else 0
     val hasUnread = !directory && !archived && state.unreadCount > 0
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(Modifier.fillMaxSize()) {
@@ -60,7 +61,13 @@ import org.ghostcloak.messaging.ChatOrganization
                 }
             } else LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(bottom=GhostLayout.pageInset)) {
                 if(directory) item {Text("YOUR CONTACTS",Modifier.padding(start=GhostDimensions.tiny,bottom=GhostDimensions.controlGap),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
-                items(chats,key={it.contact.contactId}) { status ->
+                itemsIndexed(chats,key={_,status->status.contact.contactId}) { index,status ->
+                    if(pinnedCount>0 && index==0) Text("Pinned",Modifier.padding(
+                        start=GhostDimensions.tiny,top=GhostDimensions.compact,bottom=GhostDimensions.controlGap),
+                        style=MaterialTheme.typography.titleSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    if(pinnedCount>0 && index==pinnedCount) Text("Other chats",Modifier.padding(
+                        start=GhostDimensions.tiny,top=GhostDimensions.compact,bottom=GhostDimensions.controlGap),
+                        style=MaterialTheme.typography.titleSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                     ChatRow(status,if(directory) null else state.previews[status.contact.remoteDeviceId],open,
                         unreadCount = if(directory) 0 else state.unreadByConversation[status.contact.remoteDeviceId] ?: 0)
                     if(archived) TextButton(onClick={unarchive(status.contact.remoteDeviceId)}) {Text("Unarchive ${status.contact.visibleName}")}

@@ -28,8 +28,6 @@ import java.time.format.DateTimeFormatter
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(contact.visibleName, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if(contact.pinned && !contact.request) Text("Pinned",style=MaterialTheme.typography.labelSmall,
-                        color=MaterialTheme.colorScheme.primary,modifier=Modifier.semantics { contentDescription="Pinned conversation" })
                     if(contact.muted && !contact.request) Text(" · Muted",style=MaterialTheme.typography.labelSmall,
                         color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.semantics { contentDescription="Muted conversation" })
                     last?.let {

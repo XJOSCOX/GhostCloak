@@ -35,7 +35,7 @@ class ChatOrganizationScreenTest {
         compose.onNodeWithText("Alias").performTextClearance()
         compose.onNodeWithText("Save").performClick()
         compose.onNodeWithText("Set local alias").assertIsDisplayed()
-        compose.onNodeWithText("Remote name").assertIsDisplayed()
+        compose.onAllNodesWithText("Remote name").assertCountEquals(2)
     }
 
     @Test fun conversationMenuPinsMutesAndArchives() {
@@ -92,8 +92,21 @@ class ChatOrganizationScreenTest {
         } }
         val pinnedTop=compose.onNodeWithText("Remote name").getUnclippedBoundsInRoot().top
         val recentTop=compose.onNodeWithText("Recent").getUnclippedBoundsInRoot().top
-        assertTrue(pinnedTop<recentTop)
-        compose.onNodeWithContentDescription("Pinned conversation").assertIsDisplayed()
+        val pinnedHeaderTop=compose.onNodeWithText("Pinned").getUnclippedBoundsInRoot().top
+        val otherHeaderTop=compose.onNodeWithText("Other chats").getUnclippedBoundsInRoot().top
+        assertTrue(pinnedHeaderTop<pinnedTop)
+        assertTrue(pinnedTop<otherHeaderTop)
+        assertTrue(otherHeaderTop<recentTop)
+        compose.onNodeWithContentDescription("Pinned conversation").assertDoesNotExist()
+    }
+
+    @Test fun noPinnedSectionWhenNothingIsPinned() {
+        compose.setContent { GhostCloakTheme {
+            ContactsScreen(AppState(loading=false,contacts=listOf(base)),{},{})
+        } }
+        compose.onNodeWithText("Pinned").assertDoesNotExist()
+        compose.onNodeWithText("Other chats").assertDoesNotExist()
+        compose.onNodeWithText("Remote name").assertIsDisplayed()
     }
 
     @Test fun mutedChatRetainsUnreadIndicator() {

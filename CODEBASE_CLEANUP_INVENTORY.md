@@ -108,3 +108,50 @@ These are **not** cleanup candidates: `backend/src/main/resources/db/V001__found
 3. **R4:** Design-review database cleanup/locking and any protocol, crypto, trust, Safe Exit, legacy-auth or deployment change. Run focused database/process-death/compatibility tests before any security-sensitive edit. Do not infer deployed state from source.
 
 No confirmed functional security defect was established by this inventory. C01–C04 are performance/availability risks needing measurement. The stale backend READMEs and broad older nginx template are an operational documentation hazard if followed as current instructions. `PostgresDatabase.expireAllocations()` already owns a transaction in this baseline; V008 is untouched. The forced compile emitted exactly W01–W05; no current `TODO`, `FIXME`, or `HACK` markers were found in production Kotlin/SQL/config searches. No normal JVM tests or connected tests were run in R1.
+
+## Phase R2 disposition (2026-10-04)
+
+The R1 rationale above is retained. **COMPLETED** means R2 changed the item and ran the relevant source/build check; it is not a claim that all later architectural work is finished. **SKIPPED** means evidence was insufficient or the item overlaps user work. Medium/high items were not cleaned up.
+
+| R1 IDs | R2 status | Reason / R2 action |
+|---|---|---|
+| C01–C04 | DEFERRED TO R4 | Full-table reads, shared lock and repeated message loading need measurement and behavioral review. |
+| H01–H03 | DEFERRED TO R3 | Runtime/state/navigation architecture is outside low-risk cleanup. |
+| H04 | DEFERRED TO R3 | Rate-limit expiry duplication may affect availability/semantics. |
+| D01–D02 | COMPLETED | Removed generated arithmetic/package-name template tests; neither covered app behavior. |
+| D03 | DEFERRED TO R3 | `OpaqueMailbox` still has an acceptance-test caller. |
+| S01–S03 | DEFERRED TO R3 | UI/backend adapter simplification needs behavior tests. |
+| W01 | DEFERRED TO R3 | Generated `copy()` visibility of a public nested type needs an API decision; no warning suppression. |
+| W02 | COMPLETED | Renamed only the test override parameter to `token` and its local variable to `currentToken`; null assertion and token transitions are unchanged. |
+| W03 | COMPLETED | Debug-only picker fixture intentionally overrides deprecated `startActivityForResult`; narrowly suppresses the override diagnostic at that method with an explanatory comment. Callback behavior unchanged. |
+| W04 | COMPLETED | Made `@DrawableRes` target explicitly `@param`, preserving the existing constructor-parameter contract. |
+| W05 | DEFERRED TO R4 | Gradle's `setVisible` deprecation originates outside identified project script call sites; toolchain/plugin review required. |
+| P01–P03 | DEFERRED TO R3 | No dependency or verification-metadata entry was proven unused; user has uncommitted catalog/metadata/wrapper edits. |
+| R01 | SKIPPED | Glyphs have no direct production Kotlin references, but resource/design ownership and merger behavior were not proven sufficiently for deletion. |
+| R02–R03 | SKIPPED | Launcher and adaptive-icon resources overlap current uncommitted user design work; no assets were changed. |
+| T01 | SKIPPED | Test-task selection is already explicit in Gradle; a fuller test matrix belongs with R3 harness isolation. |
+| T02 | DEFERRED TO R3 | A1 harness remains untouched; no live adversarial opt-in was used. |
+| T03 | SKIPPED | Safe Exit/reboot probes are security regressions, not obsolete tests. |
+| T04 | DEFERRED TO R3 | Local fixtures still have test and debug-demo callers. |
+| O01–O03 | COMPLETED | Backend API/auth/directory/storage READMEs now distinguish current source from historical fixture descriptions and link to the current runbook. |
+| O04 | COMPLETED | Old attachment statements in `Android/DEVELOPMENT.md` and `Android/DESIGN.md` are marked as the historical Phase 1I.2 baseline. |
+| O05 | DEFERRED TO R3 | Ingress templates have distinct deployment purposes; no nginx behavior or files changed. |
+| G01–G05 | DEFERRED TO R4 | Protected security/compatibility areas remain untouched. |
+
+R2 also ignored only root and `Android/` transient `*.log` files after `git ls-files '*.log'` found no tracked logs. Existing untracked logs were not deleted. No dependency versions, migrations, protocol behavior, local user assets, or backend query/transaction paths were changed.
+
+### R2 documentation classification
+
+| Classification | Paths | Basis |
+|---|---|---|
+| CURRENT | `backend/api/README.md`, `backend/auth/README.md`, `backend/key-directory/README.md`, `backend/storage/README.md`, `infrastructure/README.md`, `infrastructure/DEPLOYMENT.md` | These now describe or link to current v2/V007–V008 source and the reviewed operator runbook; live deployment is not inferred from source. |
+| HISTORICAL | `infrastructure/DEPLOYMENT_PHASE_1C2_HISTORICAL.md`, `protocol/API_V1.md`, dated Phase 1I.2 sections in `Android/DEVELOPMENT.md` and `Android/DESIGN.md`, V001–V008 migrations and Q-series evidence | Retain as dated design, migration, validation and rollback history. |
+| SUPERSEDED for current deployment | Broad `infrastructure/nginx.conf.template` and older Phase 1C2 instructions | Current source runbook points to `infrastructure/tunnel/nginx-origin.conf.template` plus the separate attachment fragment. Neither older file was removed or edited; compare deployed ingress before any later cleanup. |
+
+### R2 validation and lint observations
+
+Strict offline JVM tests passed: app debug 114, app release 107, test-support 170 (one opt-in A1 test skipped), attachments 4; zero failures. `:backend:installDist`, debug and release Android assemblies succeeded. The focused forced compiler rerun emitted only W01 plus Gradle's W05 deprecation; W02–W04 did not recur. This is validation of the dirty development worktree, not a clean reviewed build.
+
+`lintDebug` reported **8 errors and 40 warnings** and failed. Six `MissingClass` errors refer to WorkManager alarm-service removal entries in `Android/app/src/main/AndroidManifest.xml`; the WorkManager catalog is user-modified, so R2 did not edit the manifest or dependency. One `LifecycleCurrentStateInComposition` error is at `LockScreens.kt:139`, and one `PermissionImpliesUnsupportedChromeOsHardware` error is at manifest line 7. These are additional findings, not proven R2-introduced regressions. The 40 warnings include user-edited dependency-version suggestions, current icon resources, a Compose modifier-order suggestion, optional KTX conversions, exported-provider review and other manifest/resource checks. They require separate triage; no lint baseline or blanket suppression was added. No Android app was installed.
+
+Remaining original LOW-risk candidates: R01, R03, T01 and T03 (four). All were skipped for reference/ownership or security-test uncertainty. The new lint findings should be assessed before a formal reviewed-build gate; they do not authorize changes to lock behavior, WorkManager, app distribution or user icon assets in R2.

@@ -12,7 +12,7 @@ import org.ghostcloak.app.R
 import org.ghostcloak.app.ui.theme.GhostDimensions
 
 /** Resource names are centralized here; screens supply semantic labels and theme colors. */
-enum class Glyph(@DrawableRes val resource: Int) {
+enum class Glyph(@param:DrawableRes val resource: Int) {
     CHAT(R.drawable.gc_chat), SEARCH(R.drawable.gc_search), SETTINGS(R.drawable.gc_settings),
     BACK(R.drawable.gc_back), SEND(R.drawable.gc_send), SHIELD(R.drawable.gc_verify),
     UNVERIFIED(R.drawable.gc_unverified),

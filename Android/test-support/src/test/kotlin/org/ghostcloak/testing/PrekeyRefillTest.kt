@@ -96,13 +96,13 @@ class PrekeyRefillTest {
         f.eligible=true;f.refill().maintain();assertEquals(1,f.publishes)
     }
     @Test fun publish401UsesExistingOneRetryBoundaryAndLookupErrorsAreUniform()=runBlocking {
-        var token="old";var renewals=0;var attempts=0
-        val tokens=object:AccessTokenStore {override fun read()=token;override fun save(value:String?){token=value!!}}
+        var currentToken="old";var renewals=0;var attempts=0
+        val tokens=object:AccessTokenStore {override fun read()=currentToken;override fun save(token:String?){currentToken=token!!}}
         val client=HttpGhostClient("https://fixture.invalid",tokens,transport=GhostCloakTransport {request ->
             attempts++
             val status=if(request.applicationAuthorization=="Bearer old")401 else 200
             TransportResponse(status,NetworkLimits.CONTENT_TYPE,NetworkCodec.encode(ApiResponse()))
-        },renewSession={renewals++;token="new"})
+        },renewSession={renewals++;currentToken="new"})
         client.call(ApiRequest.Prekeys("synthetic",emptyList()))
         assertEquals(2,attempts);assertEquals(1,renewals)
         for(status in listOf(404,409)) {

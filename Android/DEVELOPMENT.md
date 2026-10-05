@@ -143,11 +143,11 @@ Missing token only uses ordinary explicit login. An unmarked existing account wh
 
 Recovery validation (2026-09-12): 135 JVM tests (4 attachment, 87 test-support, 22 per app variant), 12 isolated PostgreSQL tests, the full app/storage emulator regression suites, and the final three focused recovery emulator tests passed. Debug/release builds and backend distribution passed with strict dependency verification. Tests include real HTTP recovery endpoints, wrong/unknown/copied-key proof rejection, transcript bindings, replay/expiry, uniform failure shape, rate limits, V004 migration/checksums, transaction rollback, contaminated SQLCipher metadata, preserved real conversation history and continued messaging with a healthy second client. Physical Phone A recovery and live ingress deployment have not been performed.
 
-For the attachment/voice-note architecture, implemented Phase 1I.2 foundation, future view-once compatibility and later two-phone matrix, see [ATTACHMENTS_DESIGN.md](ATTACHMENTS_DESIGN.md). Internal synthetic upload/download APIs exist; media picking, recording, rendering and user controls do not.
+For the attachment architecture and historical Phase 1I.2 foundation, see [ATTACHMENTS_DESIGN.md](ATTACHMENTS_DESIGN.md). Current photo/document UI uses that foundation; the statements below describe the Phase 1I.2 baseline when media controls had not yet been added.
 
-## Phase 1I.2 foundation validation
+## Historical Phase 1I.2 foundation validation
 
-Android Studio Run remains unchanged. There is no paperclip, picker, recorder or download UI to test yet. `AttachmentTest` uses synthetic two-client E2EE/HTTP fixtures; `AttachmentFormatTest` exercises strict framing, chunk boundaries and corruption; `AttachmentStorageTest` exercises the SQLCipher journal and scratch revocation on an emulator. No public URLs or real private media are needed. Debug Logcat filter `tag:GhostCloakAttach` shows fixed operation events only; release diagnostics are off.
+At that phase, Android Studio Run was unchanged and there was no paperclip, picker, recorder or download UI to test yet. `AttachmentTest` used synthetic two-client E2EE/HTTP fixtures; `AttachmentFormatTest` exercised strict framing, chunk boundaries and corruption; `AttachmentStorageTest` exercised the SQLCipher journal and scratch revocation on an emulator. No public URLs or real private media were needed. Debug Logcat filter `tag:GhostCloakAttach` showed fixed operation events only; release diagnostics were off.
 
 Backend V003 migration and a VPS release/configuration review are required before blob API activation; neither is automatically deployed. Follow [ATTACHMENTS_DEPLOYMENT.md](../infrastructure/ATTACHMENTS_DEPLOYMENT.md). Existing staging text operation is unaffected by leaving blob routes disabled. Upgrade both peers and satisfy the explicit compatibility gate before future attachment sending; no automatic feature negotiation is claimed.
 

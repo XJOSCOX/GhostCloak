@@ -1,4 +1,7 @@
 .research/
+# Local validation output; source fixtures and reviewed evidence remain tracked separately.
+/*.log
+/Android/*.log
 **/.gradle/
 **/.kotlin/
 **/.idea/

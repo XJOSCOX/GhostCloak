@@ -46,7 +46,8 @@ class PickerRegressionActivity : FragmentActivity() {
         setContent { MaterialTheme { AttachmentComposer("picker-regression", true) {} } }
     }
 
-    @Suppress("DEPRECATION")
+    // This debug fixture intentionally intercepts the deprecated callback to test picker return.
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
         lastRequestCode = requestCode
         // Do not bypass the superclass: Fragment 1.2.5 throws here for registry request codes.

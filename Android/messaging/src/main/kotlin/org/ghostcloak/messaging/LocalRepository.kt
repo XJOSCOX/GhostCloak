@@ -7,6 +7,8 @@ import org.ghostcloak.crypto.EndpointRecords
 import org.ghostcloak.crypto.EndpointStorageFailure
 import org.ghostcloak.identity.RandomIdentifiers
 
+@Serializable private data class PendingEdit(val revision:Long,val text:String)
+
 /** Only the endpoint's encrypted store may back this repository in the application. */
 class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClock = ExpiryClock()) {
     private val format = Cbor { encodeDefaults = true; ignoreUnknownKeys = false }
@@ -117,6 +119,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         records.remove("app/media-peer/$id")
         records.remove("app/reaction-peer/$id")
         records.remove("app/delete-peer/$id")
+        records.remove("app/edit-peer/$id")
+        records.keys("app/edit/$id/").forEach(records::remove)
     }
     fun removeContact(id:String)=records.transaction {
         endAcceptedRelationship(id,RequestState.REJECTED,false)
@@ -312,6 +316,10 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun deletePeer(id:String,supported:Boolean)=records.transaction {
         if(supported) records.write("app/delete-peer/$id",byteArrayOf(1)) else records.remove("app/delete-peer/$id")
     }
+    fun editPeer(id:String):Boolean=records.transaction {records.read("app/edit-peer/$id")?.contentEquals(byteArrayOf(1))==true}
+    fun editPeer(id:String,supported:Boolean)=records.transaction {
+        if(supported) records.write("app/edit-peer/$id",byteArrayOf(1)) else records.remove("app/edit-peer/$id")
+    }
     private fun reactionKey(id:String,target:String,mine:Boolean):String {
         require(RandomIdentifiers.valid(id) && RandomIdentifiers.valid(target))
         return "app/reaction/$id/$target/${if(mine) "mine" else "peer"}"
@@ -452,6 +460,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         val existing = records.keys("app/message/")
         if (key !in existing && existing.size >= 5000) throw AppFailure(AppError.LOCAL_CAPACITY)
         put(key, message)
+        if(message.direction==Direction.OUTGOING && message.envelopeId?.let(RandomIdentifiers::valid)==true)
+            records.write("app/outgoing-envelope/${message.conversationId}/${message.envelopeId}",byteArrayOf(1))
     }
     private fun deleteKey(id:String,target:String):String {
         require(RandomIdentifiers.valid(id) && RandomIdentifiers.valid(target))
@@ -476,6 +486,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
             require(records.keys("app/delete/").size<10000) { "delete_tombstone_capacity" }
             records.write(key,byteArrayOf(1))
         }
+        records.remove("app/edit/$id/$target")
         if(existing!=null && !existing.deleted) {
             save(scrub(existing))
             removeTargetState(id,target,existing.localId)
@@ -488,6 +499,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         val message=read<Message>("app/message/$id/$localId") ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
         val target=message.envelopeId ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
         require(message.direction==Direction.OUTGOING && !message.deleted && !message.policyEvent &&
+            message.editStatus!=EditRequestStatus.PENDING &&
             message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED))
         save(scrub(message,DeleteRequestStatus.PENDING,submission))
         removeTargetState(id,target,localId)
@@ -496,6 +508,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun ownDeleteTarget(id:String,localId:String):String=records.transaction {
         val message=read<Message>("app/message/$id/$localId") ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
         require(message.direction==Direction.OUTGOING && !message.deleted && !message.policyEvent &&
+            message.editStatus!=EditRequestStatus.PENDING &&
             message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED))
         message.envelopeId ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
     }
@@ -508,9 +521,68 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 deleteSubmissionId=null))
         records.remove(key)
     }
+    private fun editableText(message:Message):Boolean = !message.deleted && !message.policyEvent &&
+        message.viewOnceKind==null && !hasAttachment(message.conversationId,message.localId) &&
+        message.activeExpiry?.reached(clock.now())!=true
+    fun ownEditUpdate(id:String,localId:String,newText:String):EditUpdate=records.transaction {
+        TextRules.encode(newText).fill(0)
+        val message=read<Message>("app/message/$id/$localId") ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        require(message.direction==Direction.OUTGOING && editableText(message) &&
+            message.editStatus!=EditRequestStatus.PENDING && message.editRevision<Long.MAX_VALUE &&
+            message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED))
+        EditUpdate(requireNotNull(message.envelopeId),message.editRevision+1,newText)
+    }
+    /** Outbox intent and replacement of the sender's old visible text share one transaction. */
+    fun requestOwnEdit(id:String,localId:String,update:EditUpdate,submission:String)=records.transaction {
+        require(RandomIdentifiers.valid(submission))
+        val current=ownEditUpdate(id,localId,update.text)
+        require(current.targetMessageId==update.targetMessageId && current.revision==update.revision)
+        val message=read<Message>("app/message/$id/$localId") ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        save(message.copy(body=update.text,editRevision=update.revision,editStatus=EditRequestStatus.PENDING,
+            editSubmissionId=submission))
+        NotificationLedger.remove(records,id,localId)
+        records.write("app/edit-submission/$submission","$id/$localId".encodeToByteArray())
+    }
+    fun finishEditSubmission(submission:String,sent:Boolean)=records.transaction {
+        val key="app/edit-submission/$submission"
+        val reference=records.read(key)?.decodeToString() ?: return@transaction
+        val message=read<Message>("app/message/$reference")
+        if(message?.editSubmissionId==submission)
+            save(message.copy(editStatus=if(sent) EditRequestStatus.SENT else EditRequestStatus.FAILED,
+                editSubmissionId=null))
+        records.remove(key)
+    }
+    /** The authenticated Signal sender is the owner of incoming messages in this conversation. */
+    fun applyRemoteEdit(id:String,update:EditUpdate):Boolean=records.transaction {
+        if(!isActiveContact(id) || isDeleted(id,update.targetMessageId) || update.revision<=0)
+            return@transaction false
+        TextRules.encode(update.text).fill(0)
+        val message=read<Message>("app/message/$id/${update.targetMessageId}")
+        if(message!=null) {
+            if(message.direction!=Direction.INCOMING || message.envelopeId!=update.targetMessageId ||
+                !editableText(message)) return@transaction false
+            if(update.revision>message.editRevision) {
+                save(message.copy(body=update.text,editRevision=update.revision))
+                NotificationLedger.remove(records,id,message.localId)
+            }
+            return@transaction true
+        }
+        // An accepted but now absent target was locally removed or expired, not delayed.
+        if(records.read("app/accepted/$id/${update.targetMessageId}")!=null) return@transaction false
+        if(records.read("app/outgoing-envelope/$id/${update.targetMessageId}")!=null) return@transaction false
+        val key="app/edit/$id/${update.targetMessageId}"
+        val previous=read<PendingEdit>(key)
+        if(update.revision>(previous?.revision ?: 0L)) {
+            if(previous==null) require(records.keys("app/edit/").size<10000) {"edit_pending_capacity"}
+            put(key,PendingEdit(update.revision,update.text))
+        }
+        true
+    }
     fun delete(id: String, localId: String) = records.transaction {
         read<Message>("app/message/$id/$localId")?.envelopeId?.let {target ->
             records.keys("app/reaction/$id/$target/").forEach(records::remove)
+            records.remove("app/edit/$id/$target")
+            records.remove("app/outgoing-envelope/$id/$target")
         }
         records.remove("app/attachment/$id/$localId")
         records.remove("app/message/$id/$localId")
@@ -526,6 +598,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         records.keys("app/reaction/$id/").forEach(records::remove)
         records.keys("app/attachment/$id/").forEach(records::remove)
         records.keys("app/message/$id/").forEach(records::remove)
+        records.keys("app/edit/$id/").forEach(records::remove)
+        records.keys("app/outgoing-envelope/$id/").forEach(records::remove)
         records.remove("app/read/$id")
         NotificationLedger.clear(records, id)
         records.remove("app/retained-history/$id")
@@ -576,13 +650,22 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         val existing=records.read("app/accepted/$sender/$id") ?: return@transaction false
         require(java.security.MessageDigest.isEqual(existing,hash)) {"Envelope receipt conflict"}; true
     }
-    fun saveAccepted(message:Message,hash:ByteArray)=records.transaction {
+    fun saveAccepted(message:Message,hash:ByteArray,hasAttachment:Boolean=false)=records.transaction {
         val envelopeId=requireNotNull(message.envelopeId)
         saveEnvelopeReceipt(message.conversationId,envelopeId,hash)
         val deleted=message.direction==Direction.INCOMING && !message.policyEvent &&
             RandomIdentifiers.valid(message.conversationId) && RandomIdentifiers.valid(envelopeId) &&
             isDeleted(message.conversationId,envelopeId)
-        val stored=if(deleted) scrub(message) else message
+        val editKey=if(RandomIdentifiers.valid(message.conversationId) && RandomIdentifiers.valid(envelopeId))
+            "app/edit/${message.conversationId}/$envelopeId" else null
+        val edit=editKey?.let {read<PendingEdit>(it)}
+        val stored=when {
+            deleted -> scrub(message)
+            !hasAttachment && message.direction==Direction.INCOMING && !message.policyEvent &&
+                message.viewOnceKind==null && edit!=null -> message.copy(body=edit.text,editRevision=edit.revision)
+            else -> message
+        }
+        if(editKey!=null) records.remove(editKey)
         save(stored)
         if(!deleted && message.direction==Direction.INCOMING && !message.policyEvent) {
             val contact=read<Contact>("app/contact/${message.conversationId}")
@@ -590,7 +673,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 save(contact.copy(archived=false))
         }
         // Same transaction as authenticated content and deduplication; never enqueue on FETCH alone.
-        if(!deleted) NotificationLedger.accepted(records, message)
+        if(!deleted) NotificationLedger.accepted(records, stored)
     }
     /** Security receipt only: no plaintext, descriptor, read state or notification ledger entry. */
     fun saveEnvelopeReceipt(sender:String,id:String,hash:ByteArray)=records.transaction {

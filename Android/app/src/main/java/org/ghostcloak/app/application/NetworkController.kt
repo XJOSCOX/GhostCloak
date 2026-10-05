@@ -218,6 +218,10 @@ class NetworkController(
         requireApi(state.registered(),"connect_required",401)
         service.deleteForEveryone(id,localId,outbox)
     }
+    suspend fun editMessage(service:ConversationService,id:String,localId:String,text:String)=operation(NetworkOperation.SEND) {
+        requireApi(state.registered(),"connect_required",401)
+        service.editMessage(id,localId,text,outbox)
+    }
     suspend fun retrySubmission(service:ConversationService,id:String,localId:String)=operation(NetworkOperation.SEND) {
         requireApi(state.registered(),"connect_required",401)
         service.retrySubmission(id,localId,outbox)

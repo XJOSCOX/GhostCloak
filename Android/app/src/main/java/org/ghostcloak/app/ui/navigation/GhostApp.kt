@@ -126,7 +126,8 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             { model.setMuted(id,it) },
                             { target,emoji -> model.react(id,target,emoji) },
                             { localId -> model.retrySubmission(id,localId) },
-                            { localId -> model.deleteForEveryone(id,localId) })
+                            { localId -> model.deleteForEveryone(id,localId) },
+                            { localId,text,done -> model.editMessage(id,localId,text,done) })
                     }
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable

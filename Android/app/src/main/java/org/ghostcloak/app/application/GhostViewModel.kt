@@ -21,6 +21,7 @@ data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? =
     val blockedContacts:List<Contact> = emptyList(),
     val reactionsAvailable:Boolean=false,
     val deleteAvailable:Boolean=false,
+    val editAvailable:Boolean=false,
     val cachedAttachments: Set<String> = emptySet(),
     val disappearingPolicies: Map<String, Int> = emptyMap(),
     val unreadExpiries: Map<String, List<ExpiryDeadline>> = emptyMap(),
@@ -82,10 +83,13 @@ class GhostViewModel internal constructor(application: Application, private val 
                         ?.let {id -> runCatching {active.reactionPeer(id)}.getOrDefault(false)} ?: false
                     val deleteAvailable=selected?.takeIf {id -> contacts.any {it.contact.remoteDeviceId==id && !it.contact.request && !it.contact.blocked}}
                         ?.let {id -> runCatching {active.deletePeer(id)}.getOrDefault(false)} ?: false
+                    val editAvailable=selected?.takeIf {id -> contacts.any {it.contact.remoteDeviceId==id && !it.contact.request && !it.contact.blocked}}
+                        ?.let {id -> runCatching {active.editPeer(id)}.getOrDefault(false)} ?: false
                     mutable.value = mutable.value.copy(identity = identity, ghostCloakId=if(identity!=null) runtime.ownGhostCloakId() else null, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
                         ownProfile=if(identity!=null) active.localProfile() else LocalProfile(),
                         reactionsAvailable=reactionsAvailable,
                         deleteAvailable=deleteAvailable,
+                        editAvailable=editAvailable,
                         requireRequestConfirmation=active.requireRequestConfirmation(),
                         blockedContacts=if(identity!=null) active.blockedContacts() else emptyList(),
                         cachedAttachments = runtime.cachedAttachments(selected),
@@ -242,6 +246,15 @@ class GhostViewModel internal constructor(application: Application, private val 
             DeleteRequestStatus.PENDING -> "Delete request pending. The recipient may still retain the message."
             DeleteRequestStatus.FAILED -> "Delete request could not be sent. The local message was deleted."
             DeleteRequestStatus.SENT -> "Delete request sent. Recipient deletion is not confirmed."
+        }
+    }
+    fun editMessage(id:String,localId:String,text:String,success:()->Unit)=run {
+        val status=runtime.editMessage(it,id,localId,text)
+        withContext(Dispatchers.Main.immediate) {success()}
+        when(status) {
+            EditRequestStatus.PENDING -> "Edit pending. The recipient may still see the previous text."
+            EditRequestStatus.FAILED -> "Edit not sent. Edit the message again to retry safely."
+            EditRequestStatus.SENT -> "Edit sent. Recipient processing is not confirmed."
         }
     }
     fun react(id:String,target:String,emoji:String?)=run {

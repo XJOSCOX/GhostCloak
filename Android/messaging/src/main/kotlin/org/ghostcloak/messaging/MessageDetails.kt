@@ -28,5 +28,10 @@ object MessageDetails {
         }) }
         add("Reply" to if(message.replyTo!=null) "Yes" else "No")
         add("Reactions" to message.reactions.size.toString())
+        if(message.editRevision>0) add("Edit" to when(message.editStatus) {
+            EditRequestStatus.PENDING -> "Pending"
+            EditRequestStatus.FAILED -> "Not sent"
+            EditRequestStatus.SENT, null -> "Edited"
+        })
     }
 }

@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import org.ghostcloak.app.ui.theme.GhostDimensions
 import androidx.compose.ui.text.style.TextOverflow
@@ -29,7 +30,8 @@ import org.ghostcloak.protocol.EnvelopeCodec
     sendViewOnce:(String,()->Unit)->Unit={_,_->},revealText:(String,(String)->Unit)->Unit={_,_->},consume:(String)->Unit={},
     sendReply:(String,ReplyReference,()->Unit)->Unit={_,_,_->},
     setPinned:(Boolean)->Unit={},setArchived:(Boolean)->Unit={},setMuted:(Boolean)->Unit={},
-    react:(String,String?)->Unit={_,_->},retryMessage:(String)->Unit={},deleteEveryone:(String)->Unit={}) {
+    react:(String,String?)->Unit={_,_->},retryMessage:(String)->Unit={},deleteEveryone:(String)->Unit={},
+    editMessage:(String,String,()->Unit)->Unit={_,_,_->}) {
     var draft by remember(status.contact.remoteDeviceId) { mutableStateOf("") }
     var viewOnceText by remember(status.contact.remoteDeviceId) { mutableStateOf(false) }
     var revealed by remember(status.contact.remoteDeviceId) { mutableStateOf<Pair<String,String>?>(null) }
@@ -59,15 +61,23 @@ import org.ghostcloak.protocol.EnvelopeCodec
     var actions by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<String?>(null) }
     var deletingEveryone by remember { mutableStateOf<String?>(null) }
+    var editingId by remember(status.contact.remoteDeviceId) { mutableStateOf<String?>(null) }
+    var editDraft by remember(status.contact.remoteDeviceId) { mutableStateOf("") }
     var clearing by remember { mutableStateOf(false) }
     var timerSelector by remember { mutableStateOf(false) }
     var replyTo by remember(status.contact.remoteDeviceId) { mutableStateOf<ReplyReference?>(null) }
     var searching by remember(status.contact.remoteDeviceId) { mutableStateOf(false) }
     var query by remember(status.contact.remoteDeviceId) { mutableStateOf("") }
     var resultPosition by remember(status.contact.remoteDeviceId) { mutableIntStateOf(0) }
-    DisposableEffect(status.contact.remoteDeviceId) { onDispose { searching=false; query=""; replyTo=null } }
+    DisposableEffect(status.contact.remoteDeviceId) { onDispose { searching=false; query=""; replyTo=null; editingId=null; editDraft="" } }
+    LaunchedEffect(state.messages,editingId) {
+        if(editingId!=null && state.messages.none {it.localId==editingId && !it.deleted}) {
+            editingId=null;editDraft=""
+        }
+    }
     val context=androidx.compose.ui.platform.LocalContext.current
-    val size = remember(draft) { val bytes = draft.encodeToByteArray(); try { bytes.size } finally { bytes.fill(0) } }
+    val input=if(editingId!=null) editDraft else draft
+    val size = remember(input) { val bytes = input.encodeToByteArray(); try { bytes.size } finally { bytes.fill(0) } }
     val changed = status.identity?.trustState == IdentityTrustState.CHANGED
     val active = status.session == SessionLifecycle.ACTIVE && !changed && !status.contact.blocked && !status.contact.request
     val searchMatches=remember(state.messages,query,status.contact.blocked,status.contact.request) {
@@ -156,6 +166,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
                         onReply=if(active && ReplyPresentation.reference(message)!=null) {{replyTo=ReplyPresentation.reference(message);viewOnceText=false}} else null,
                         replyPreview=message.replyTo?.let {ReplyPresentation.preview(it,status.contact.remoteDeviceId,state.messages)},
                         onDeleteEveryone=if(active && state.deleteAvailable && message.direction==Direction.OUTGOING &&
+                            message.editStatus!=EditRequestStatus.PENDING &&
                             message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED)) {{deletingEveryone=message.localId}} else null) {
                         Column {
                             Text(message.body,style=MaterialTheme.typography.bodyLarge)
@@ -174,6 +185,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
                     }
                     else if(message.attachment!=null) MessageBubble(message,onDelete={deleting=message.localId},
                         onDeleteEveryone=if(active && state.deleteAvailable && message.direction==Direction.OUTGOING &&
+                            message.editStatus!=EditRequestStatus.PENDING &&
                             message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED)) {{deletingEveryone=message.localId}} else null,
                         onReply=if(active && ReplyPresentation.reference(message)!=null) {{replyTo=ReplyPresentation.reference(message);viewOnceText=false}} else null,
                         replyPreview=message.replyTo?.let {ReplyPresentation.preview(it,status.contact.remoteDeviceId,state.messages)},
@@ -184,7 +196,13 @@ import org.ghostcloak.protocol.EnvelopeCodec
                         AttachmentMessage(message,active,message.localId in state.cachedAttachments,refresh)
                     } else MessageBubble(message,onDelete={deleting=message.localId},
                         onDeleteEveryone=if(active && state.deleteAvailable && message.direction==Direction.OUTGOING &&
+                            message.editStatus!=EditRequestStatus.PENDING &&
                             message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED)) {{deletingEveryone=message.localId}} else null,
+                        onEdit=if(active && state.networkConfigured && !state.demo && state.editAvailable &&
+                            message.direction==Direction.OUTGOING && !message.deleted && message.viewOnceKind==null &&
+                            message.editStatus!=EditRequestStatus.PENDING &&
+                            message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED))
+                            {{editingId=message.localId;editDraft=message.body;rejectedPaste=false;replyTo=null;viewOnceText=false}} else null,
                         onReply=if(active && ReplyPresentation.reference(message)!=null) {{replyTo=ReplyPresentation.reference(message);viewOnceText=false}} else null,
                         onCopy=if(!status.contact.request && !status.contact.blocked && message.body.isNotBlank())
                             {{copySensitive(context,message.body)}} else null,
@@ -211,20 +229,33 @@ import org.ghostcloak.protocol.EnvelopeCodec
         }
         Surface(color=MaterialTheme.colorScheme.surface) { Column(Modifier.padding(horizontal = GhostLayout.pageInset, vertical=GhostDimensions.controlGap), verticalArrangement = Arrangement.spacedBy(GhostDimensions.compact)) {
             ErrorNotice(state.error, important = state.errorImportant)
-            val textLimit=ConversationPayload.MAX_TEXT-(if(replyTo!=null) 37 else 0)
+            val textLimit=ConversationPayload.MAX_TEXT-(if(editingId!=null) 44 else if(replyTo!=null) 37 else 0)
             if (size > textLimit || rejectedPaste) Text("Too large. Maximum $textLimit UTF-8 bytes; text was not sent.", color = MaterialTheme.colorScheme.error)
+            if(editingId!=null) Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                Text("Editing message",Modifier.weight(1f),style=MaterialTheme.typography.bodySmall)
+                TextButton(onClick={editingId=null;editDraft="";rejectedPaste=false}) {Text("Cancel edit")}
+            }
             replyTo?.let { reference -> Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                 Text("Replying to: ${ReplyPresentation.preview(reference,status.contact.remoteDeviceId,state.messages)}",
                     Modifier.weight(1f),maxLines=2,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall)
                 TextButton(onClick={replyTo=null}) {Text("Cancel reply")}
             } }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(GhostDimensions.controlGap)) {
-                if(state.networkConfigured && !state.demo) AttachmentComposer(status.contact.remoteDeviceId,active && !state.loading,refresh)
-                OutlinedTextField(draft, onValueChange = { rejectedPaste = it.length > 65536; if (!rejectedPaste) draft = it },
-                    enabled = active && !state.loading, modifier = Modifier.weight(1f).noSensitiveCopyCut(), placeholder = { Text("Write a message…") }, maxLines = 5,
+                if(editingId==null && state.networkConfigured && !state.demo) AttachmentComposer(status.contact.remoteDeviceId,active && !state.loading,refresh)
+                OutlinedTextField(input, onValueChange = { rejectedPaste = it.length > 65536; if (!rejectedPaste) {
+                    if(editingId!=null) editDraft=it else draft=it
+                } },
+                    enabled = active && !state.loading, modifier = Modifier.weight(1f)
+                        .testTag(if(editingId!=null) "edit-composer" else "message-composer").noSensitiveCopyCut(),
+                    placeholder = { Text(if(editingId!=null) "Edit message…" else "Write a message…") }, maxLines = 5,
                     colors=OutlinedTextFieldDefaults.colors(unfocusedBorderColor=androidx.compose.ui.graphics.Color.Transparent,unfocusedContainerColor=MaterialTheme.colorScheme.surface,focusedContainerColor=MaterialTheme.colorScheme.surface),
                     shape = RoundedCornerShape(GhostDimensions.spacious), isError = size > textLimit)
-                FilledIconButton(onClick = {
+                if(editingId!=null) Button(onClick={
+                    val target=editingId ?: return@Button
+                    editMessage(target,editDraft) {editingId=null;editDraft="";rejectedPaste=false}
+                },enabled=active && !state.loading && input.isNotBlank() && size<=textLimit && !rejectedPaste &&
+                    state.messages.firstOrNull {it.localId==editingId}?.body!=editDraft) {Text("Save")}
+                else FilledIconButton(onClick = {
                     val done={ draft="";viewOnceText=false;replyTo=null }
                     val reference=replyTo
                     if(reference!=null) sendReply(draft,reference,done)
@@ -232,11 +263,11 @@ import org.ghostcloak.protocol.EnvelopeCodec
                 }, enabled = active && !state.loading && draft.isNotBlank() && size <= textLimit && !rejectedPaste,
                     modifier = Modifier.size(GhostDimensions.avatar)) { AppIcon(Glyph.SEND,"Send") }
             }
-            if(state.networkConfigured && !state.demo && draft.isNotBlank() && replyTo==null)
+            if(editingId==null && state.networkConfigured && !state.demo && draft.isNotBlank() && replyTo==null)
                 TextButton(onClick={viewOnceText=!viewOnceText},enabled=active && !state.loading) {
                     Text(if(viewOnceText) "① View Once on" else "① View Once")
                 }
-            Text(if (size > 14000) "$size / 16,368 bytes" else "End-to-end encrypted", Modifier.padding(start = GhostDimensions.controlGap, bottom = GhostDimensions.medium), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(if (size > 14000) "$size / $textLimit bytes" else "End-to-end encrypted", Modifier.padding(start = GhostDimensions.controlGap, bottom = GhostDimensions.medium), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
     revealed?.let { (_,body) -> androidx.compose.ui.window.Dialog(onDismissRequest=::closeReveal,

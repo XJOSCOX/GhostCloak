@@ -231,6 +231,10 @@ class AppRuntime internal constructor(
         check(networkConfigured && !inDemo)
         return network!!.deleteForEveryone(service,id,localId)
     }
+    suspend fun editMessage(service:ConversationService,id:String,localId:String,text:String):org.ghostcloak.messaging.EditRequestStatus {
+        check(networkConfigured && !inDemo)
+        return network!!.editMessage(service,id,localId,text)
+    }
     suspend fun retrySubmission(service:ConversationService,id:String,localId:String) {
         check(networkConfigured && !inDemo)
         network!!.retrySubmission(service,id,localId)

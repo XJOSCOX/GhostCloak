@@ -19,6 +19,7 @@ import java.time.format.DateTimeFormatter
     onCopy: (() -> Unit)? = null, replyPreview: String? = null,
     onReact:((String?)->Unit)?=null,onRetry:(()->Unit)?=null,
     onDeleteEveryone:(()->Unit)?=null,
+    onEdit:(()->Unit)?=null,
     content: (@Composable () -> Unit)? = null) {
     val outgoing = message.direction == Direction.OUTGOING
     var menu by remember { mutableStateOf(false) }
@@ -46,6 +47,7 @@ import java.time.format.DateTimeFormatter
                 if(onReply!=null && !message.deleted) DropdownMenuItem(text={Text("Reply")},onClick={menu=false;onReply()})
                 if(onReact!=null) DropdownMenuItem(text={Text("React")},onClick={menu=false;reactionPicker=true})
                 if(onCopy!=null) DropdownMenuItem(text={Text("Copy")},onClick={menu=false;onCopy()})
+                if(onEdit!=null) DropdownMenuItem(text={Text("Edit")},onClick={menu=false;onEdit()})
                 if(onRetry!=null) DropdownMenuItem(text={Text("Retry pending message")},onClick={menu=false;onRetry()})
                 if(message.state==MessageState.FAILED) DropdownMenuItem(text={Text("Retry unavailable for this attempt")},enabled=false,onClick={})
                 if(!message.deleted) DropdownMenuItem(text={Text("Details")},onClick={menu=false;details=true})
@@ -58,6 +60,11 @@ import java.time.format.DateTimeFormatter
             message.reactions.forEach {badge -> Text(if(badge.mine) "${badge.emoji} · You" else badge.emoji,
                 style=MaterialTheme.typography.labelMedium) }
         }
+        if(message.editRevision>0 && !message.deleted) Text(when(message.editStatus) {
+            EditRequestStatus.PENDING -> "Edit pending"
+            EditRequestStatus.FAILED -> "Edit not sent"
+            EditRequestStatus.SENT, null -> "Edited"
+        },style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         if(outgoing) Text(if(message.deleted) when(message.deleteStatus) {
             DeleteRequestStatus.PENDING -> "Delete request pending"
             DeleteRequestStatus.SENT -> "Delete request sent"

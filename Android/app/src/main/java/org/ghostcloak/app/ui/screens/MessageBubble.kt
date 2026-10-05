@@ -17,9 +17,12 @@ import java.time.format.DateTimeFormatter
 
 @Composable fun MessageBubble(message: Message, onDelete: () -> Unit, onReply: (() -> Unit)? = null,
     onCopy: (() -> Unit)? = null, replyPreview: String? = null,
+    onReact:((String?)->Unit)?=null,onRetry:(()->Unit)?=null,
     content: (@Composable () -> Unit)? = null) {
     val outgoing = message.direction == Direction.OUTGOING
     var menu by remember { mutableStateOf(false) }
+    var reactionPicker by remember(message.localId) {mutableStateOf(false)}
+    var details by remember(message.localId) {mutableStateOf(false)}
     val time = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(message.timestamp))
     Column(Modifier.fillMaxWidth(),horizontalAlignment=if(outgoing) Alignment.End else Alignment.Start) {
         Box {
@@ -40,9 +43,17 @@ import java.time.format.DateTimeFormatter
             }
             DropdownMenu(expanded=menu,onDismissRequest={menu=false}) {
                 if(onReply!=null) DropdownMenuItem(text={Text("Reply")},onClick={menu=false;onReply()})
+                if(onReact!=null) DropdownMenuItem(text={Text("React")},onClick={menu=false;reactionPicker=true})
                 if(onCopy!=null) DropdownMenuItem(text={Text("Copy")},onClick={menu=false;onCopy()})
+                if(onRetry!=null) DropdownMenuItem(text={Text("Retry pending message")},onClick={menu=false;onRetry()})
+                if(message.state==MessageState.FAILED) DropdownMenuItem(text={Text("Retry unavailable for this attempt")},enabled=false,onClick={})
+                DropdownMenuItem(text={Text("Details")},onClick={menu=false;details=true})
                 DropdownMenuItem(text={Text("Delete for me")},onClick={menu=false;onDelete()})
             }
+        }
+        if(message.reactions.isNotEmpty()) Row(horizontalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
+            message.reactions.forEach {badge -> Text(if(badge.mine) "${badge.emoji} · You" else badge.emoji,
+                style=MaterialTheme.typography.labelMedium) }
         }
         if(outgoing) Text(when(message.state) {
             MessageState.PENDING -> "Pending"; MessageState.ENCRYPTED -> "Encrypted"
@@ -53,4 +64,18 @@ import java.time.format.DateTimeFormatter
         },Modifier.padding(top=GhostDimensions.tiny,end=GhostDimensions.tiny),style=MaterialTheme.typography.labelSmall,
             color=if(message.state==MessageState.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
     }
+    if(reactionPicker && onReact!=null) AlertDialog(onDismissRequest={reactionPicker=false},
+        title={Text("React to message")},text={Column {
+            Row(horizontalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
+                ConversationPayload.reactionEmoji.take(3).forEach {emoji -> TextButton(onClick={reactionPicker=false;onReact(emoji)}) {Text(emoji)} }
+            }
+            Row(horizontalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
+                ConversationPayload.reactionEmoji.drop(3).forEach {emoji -> TextButton(onClick={reactionPicker=false;onReact(emoji)}) {Text(emoji)} }
+            }
+            if(message.reactions.any {it.mine}) TextButton(onClick={reactionPicker=false;onReact(null)}) {Text("Remove my reaction")}
+        }},confirmButton={},dismissButton={TextButton(onClick={reactionPicker=false}) {Text("Cancel")}})
+    if(details) AlertDialog(onDismissRequest={details=false},title={Text("Message details")},
+        text={Column(verticalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
+            MessageDetails.fields(message).forEach {(label,value) -> Text("$label: $value")}
+        }},confirmButton={TextButton(onClick={details=false}) {Text("Close")}})
 }

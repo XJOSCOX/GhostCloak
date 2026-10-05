@@ -220,6 +220,14 @@ class AppRuntime internal constructor(
         demo?.deliver(message)
         return message
     }
+    suspend fun react(service:ConversationService,id:String,target:String,emoji:String?) {
+        check(networkConfigured && !inDemo)
+        network!!.react(service,id,target,emoji)
+    }
+    suspend fun retrySubmission(service:ConversationService,id:String,localId:String) {
+        check(networkConfigured && !inDemo)
+        network!!.retrySubmission(service,id,localId)
+    }
     suspend fun acceptRequest(service:ConversationService,id:String) {
         if(networkConfigured && !inDemo) network!!.acceptRequest(service,id)
         else service.acceptRequest(id)

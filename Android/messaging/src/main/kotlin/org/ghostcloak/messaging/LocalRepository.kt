@@ -112,6 +112,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         put("app/force-hidden-request/$id",true)
         records.remove("app/profile-sync/$id")
         records.remove("app/media-peer/$id")
+        records.remove("app/reaction-peer/$id")
     }
     fun removeContact(id:String)=records.transaction {
         endAcceptedRelationship(id,RequestState.REJECTED,false)
@@ -230,6 +231,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         attachmentPeer(id,false); clearDirectoryCapability(id); records.remove("app/capability-floor/$id")
         records.remove("app/capability-deadline/$id")
         records.remove("app/media-peer/$id")
+        records.remove("app/reaction-peer/$id")
     }
     fun attachmentPeer(id: String, supported: Boolean) = records.transaction {
         if (supported) records.write("app/attachment-peer/$id", byteArrayOf(1)) else records.remove("app/attachment-peer/$id")
@@ -237,6 +239,39 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun mediaPeer(id:String):Boolean=records.transaction { records.read("app/media-peer/$id")?.contentEquals(byteArrayOf(1))==true }
     fun mediaPeer(id:String,supported:Boolean)=records.transaction {
         if(supported) records.write("app/media-peer/$id",byteArrayOf(1)) else records.remove("app/media-peer/$id")
+    }
+    fun reactionPeer(id:String):Boolean=records.transaction {records.read("app/reaction-peer/$id")?.contentEquals(byteArrayOf(1))==true}
+    fun reactionPeer(id:String,supported:Boolean)=records.transaction {
+        if(supported) records.write("app/reaction-peer/$id",byteArrayOf(1)) else records.remove("app/reaction-peer/$id")
+    }
+    private fun reactionKey(id:String,target:String,mine:Boolean):String {
+        require(RandomIdentifiers.valid(id) && RandomIdentifiers.valid(target))
+        return "app/reaction/$id/$target/${if(mine) "mine" else "peer"}"
+    }
+    fun reactionTarget(id:String,target:String):Message?=records.transaction {
+        if(!isActiveContact(id)) return@transaction null
+        messages(id).firstOrNull {it.envelopeId==target && !it.policyEvent && it.viewOnceKind==null &&
+            it.state in setOf(MessageState.RECEIVED,MessageState.SERVER_ACCEPTED,MessageState.DELIVERED,
+                MessageState.DELIVERED_LOCAL_SIMULATION)}
+    }
+    fun nextReactionSequence(id:String,target:String):Long=records.transaction {
+        val current=read<ReactionRecord>(reactionKey(id,target,true))?.sequence ?: 0L
+        Math.addExact(current,1)
+    }
+    fun applyReaction(id:String,update:ReactionUpdate,mine:Boolean):Boolean=records.transaction {
+        if(reactionTarget(id,update.targetMessageId)==null || update.sequence<=0 ||
+            (update.emoji!=null && update.emoji !in ConversationPayload.reactionEmoji)) return@transaction false
+        val key=reactionKey(id,update.targetMessageId,mine)
+        if(update.sequence<=(read<ReactionRecord>(key)?.sequence ?: 0L)) return@transaction false
+        put(key,ReactionRecord(update.sequence,update.emoji));true
+    }
+    fun reactionSnapshot(id:String):Map<String,List<ReactionBadge>> = records.transaction {
+        val prefix="app/reaction/$id/"
+        records.keys(prefix).mapNotNull {key ->
+            val value=read<ReactionRecord>(key) ?: throw EndpointStorageFailure()
+            value.emoji?.let {emoji -> key.removePrefix(prefix).substringBeforeLast('/') to
+                ReactionBadge(emoji,key.endsWith("/mine"))}
+        }.sortedBy {if(it.second.mine) 0 else 1}.groupBy({it.first},{it.second})
     }
     fun contacts(): List<Contact> = records.transaction { records.keys("app/contact/").map { read<Contact>(it) ?: throw EndpointStorageFailure() } }
     fun contact(id: String) = contacts().firstOrNull { it.remoteDeviceId == id } ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
@@ -350,6 +385,9 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         put(key, message)
     }
     fun delete(id: String, localId: String) = records.transaction {
+        read<Message>("app/message/$id/$localId")?.envelopeId?.let {target ->
+            records.keys("app/reaction/$id/$target/").forEach(records::remove)
+        }
         records.remove("app/attachment/$id/$localId")
         records.remove("app/message/$id/$localId")
         val readKey = "app/read/$id"
@@ -361,6 +399,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         // Receipt polling is derived from visible SERVER_ACCEPTED messages, not a separate ledger.
     }
     fun clear(id: String) = records.transaction {
+        records.keys("app/reaction/$id/").forEach(records::remove)
         records.keys("app/attachment/$id/").forEach(records::remove)
         records.keys("app/message/$id/").forEach(records::remove)
         records.remove("app/read/$id")

@@ -87,6 +87,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     suspend fun messagesForUi(id:String) = action {
         val contact = repository.contact(id)
         if(contact.request && (!repository.requestActive(id) || repository.requestHidden(id) || (repository.request(id).acceptedAt!=null && repository.serverNow()==null))) return@action emptyList<Message>()
+        val reactions=if(contact.request || contact.blocked) emptyMap() else repository.reactionSnapshot(id)
         repository.messages(id).map { message ->
             repository.attachment(id,message.localId)?.let { descriptor ->
                 val summary = if (contact.request) AttachmentSummary(false,"Attachment",0)
@@ -105,10 +106,36 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 message.viewOnceState==ViewOnceState.REVEALING) "View Once ${if(message.viewOnceKind==ViewOnceKind.PHOTO) "photo" else "message"} expired"
                 else "View Once ${if(message.viewOnceKind==ViewOnceKind.PHOTO) "photo" else "message"}",
                 attachment=null) else message
-        }.map { if(contact.request) it.copy(disappearingSeconds=0,expiry=null) else it }
+        }.map { if(contact.request) it.copy(disappearingSeconds=0,expiry=null) else
+            it.copy(reactions=if(it.viewOnceKind!=null) emptyList() else reactions[it.envelopeId].orEmpty()) }
     }
     suspend fun attachmentPeer(id: String) = action { networkAllowed(id); repository.attachmentPeer(id) }
     suspend fun mediaPeer(id:String)=action { networkAllowed(id);repository.mediaPeer(id) }
+    suspend fun reactionPeer(id:String)=action {networkAllowed(id);repository.reactionPeer(id)}
+    suspend fun react(id:String,target:String,emoji:String?,outbox:DurableOutbox)=action {
+        networkAllowed(id)
+        require(repository.reactionPeer(id)) {"reaction_capability_required"}
+        require(repository.reactionTarget(id,target)!=null) {"reaction_target_unavailable"}
+        require(emoji==null || emoji in ConversationPayload.reactionEmoji)
+        val update=ReactionUpdate(target,repository.nextReactionSequence(id,target),emoji)
+        val bytes=ConversationPayload.encodeReaction(update)
+        val submission=try {outbox.enqueue(id,bytes) {repository.applyReaction(id,update,true)}}
+            finally {bytes.fill(0)}
+        try {outbox.process(submission)} catch (_:ApiFailure) {return@action}
+        outbox.removeFinished(submission)
+    }
+    /** Only a retained nonterminal outbox entry is retryable; it keeps its submission ID/ciphertext. */
+    suspend fun retrySubmission(id:String,localId:String,outbox:DurableOutbox)=action {
+        networkAllowed(id)
+        val message=repository.messages(id).singleOrNull {it.localId==localId && it.direction==Direction.OUTGOING}
+            ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        require(message.state in setOf(MessageState.PENDING,MessageState.ENCRYPTED,MessageState.SENT_TO_TRANSPORT))
+        val entry=outbox.get(localId)
+        require(entry.deviceId==id && entry.state !in setOf(OutboxState.FAILED,OutboxState.SERVER_ACCEPTED))
+        val result=outbox.process(localId) {repository.acceptedOutgoing(id,it.submissionId,it.envelopeId)}
+        if(result.state==OutboxState.FAILED) repository.save(message.copy(state=MessageState.FAILED))
+        if(result.state in setOf(OutboxState.FAILED,OutboxState.SERVER_ACCEPTED)) outbox.removeFinished(localId)
+    }
     suspend fun directoryCapability(entry: DirectoryEntry, time: Long, valid: Boolean) = action {
         val contact=repository.contact(entry.deviceId)
         requireApi(contact.publicUserId == entry.accountId,"capability_binding")
@@ -270,6 +297,12 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
+            if(content.reaction!=null) {
+                if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId})
+                    repository.applyReaction(contact.remoteDeviceId,content.reaction,false)
+                repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
+                return@decryptAndCommit
+            }
             // Defer controls until this side has explicitly accepted/added the contact.
             if (content.control && (contacts.none { it.remoteDeviceId == contact.remoteDeviceId } || contact.request))
                 throw AppFailure(AppError.BLOCKED)
@@ -280,6 +313,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             if (content.attachment == null) {
                 repository.attachmentPeer(contact.remoteDeviceId,content.supportsAttachments)
                 repository.mediaPeer(contact.remoteDeviceId,content.supportsMedia)
+                repository.reactionPeer(contact.remoteDeviceId,content.supportsReactions)
             }
             val now = repository.clock.now()
             repository.saveAccepted(Message(envelope.envelopeId,contact.remoteDeviceId,Direction.INCOMING,

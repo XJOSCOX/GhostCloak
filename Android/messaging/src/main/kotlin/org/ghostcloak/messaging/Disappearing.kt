@@ -12,12 +12,16 @@ enum class DisappearingTimer(val seconds: Int, val label: String) {
         ?: throw AppFailure(AppError.INVALID_TEXT) }
 }
 
+data class ReactionUpdate(val targetMessageId:String,val sequence:Long,val emoji:String?)
+
 /** Application framing only: these bytes go inside the existing authenticated Signal envelope. */
 object ConversationPayload {
     // Authenticated padding extension. Older decoders already ignore padding.
     // Not user text: a quoted/copied advertisement can never establish support.
     private val attachmentSupport = "GhostCloak/padding/attachments/v1!".toByteArray(Charsets.US_ASCII)
     private val mediaSupport = "GhostCloak/padding/media/v1!".toByteArray(Charsets.US_ASCII)
+    private val reactionSupport = "GhostCloak/padding/reactions/v1!".toByteArray(Charsets.US_ASCII)
+    val reactionEmoji = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
     private val profileMarker = "GhostCloak/profile/v1!".toByteArray(Charsets.US_ASCII)
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
     const val MAX_CAPTION_BYTES = 512
@@ -25,7 +29,8 @@ object ConversationPayload {
     class Content(val body: String, val seconds: Int, val control: Boolean, val attachment: ByteArray? = null,
         val supportsAttachments: Boolean = false, val displayName: String? = null,
         val profileUpdate: Boolean = false, val viewOnceKind: ViewOnceKind? = null,
-        val replyTo: ReplyReference? = null, val supportsMedia:Boolean=false) {
+        val replyTo: ReplyReference? = null, val supportsMedia:Boolean=false,
+        val supportsReactions:Boolean=false,val reaction:ReactionUpdate?=null) {
         override fun toString() = "Content(redacted)"
     }
     private fun profileBytes(displayName:String?):ByteArray = displayName?.let {
@@ -49,6 +54,17 @@ object ConversationPayload {
                 trimmed.any { Character.isISOControl(it) }) throw AppFailure(AppError.INVALID_TEXT)
         }
         return trimmed
+    }
+    /** Type 9 is an authenticated Signal control; no plaintext reaction reaches the transport. */
+    fun encodeReaction(update:ReactionUpdate):ByteArray {
+        require(RandomIdentifiers.valid(update.targetMessageId) && update.sequence>0)
+        val emoji=if(update.emoji==null) 0 else reactionEmoji.indexOf(update.emoji)+1
+        require(emoji in 0..reactionEmoji.size && (update.emoji==null || emoji>0))
+        val bytes=ByteArray(256).also { SecureRandom().nextBytes(it) }
+        ByteBuffer.wrap(bytes).put(magic).put(1).put(9).putShort(0).putInt(0).putInt(46)
+            .put(update.targetMessageId.toByteArray(Charsets.US_ASCII)).putLong(update.sequence)
+            .put(emoji.toByte()).put(0)
+        return bytes
     }
     fun encodeAttachment(descriptor: org.ghostcloak.attachments.AttachmentDescriptor, displayName:String?=null,
         viewOnce:Boolean=false, caption:String=""): ByteArray {
@@ -92,6 +108,9 @@ object ConversationPayload {
             if (extension.isNotEmpty()) extension.copyInto(bytes, 16 + text.size+replyBytes.size)
             if(profile.isNotEmpty()) profile.copyInto(bytes,16+text.size+replyBytes.size+extension.size)
             if(media) mediaSupport.copyInto(bytes,16+text.size+replyBytes.size+extension.size+profile.size)
+            val reactionOffset=16+text.size+replyBytes.size+extension.size+profile.size+(if(media) mediaSupport.size else 0)
+            if(extension.isNotEmpty() && reactionOffset+reactionSupport.size<=size)
+                reactionSupport.copyInto(bytes,reactionOffset)
             return bytes
         } finally { text.fill(0) }
     }
@@ -109,12 +128,24 @@ object ConversationPayload {
         if (!ByteArray(4).also { input.get(it) }.contentEquals(magic) || input.get().toInt() != 1)
             throw AppFailure(AppError.INVALID_TEXT)
         val type = input.get().toInt()
-        if (type !in 1..8 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
+        if (type !in 1..9 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
         val seconds = input.int; DisappearingTimer.from(seconds)
         val length = input.int
         if (length !in 0..MAX_TEXT || length > input.remaining() || (type in setOf(2,4) && length != 0) ||
             (type == 4 && (seconds != 0 || bytes.size != 256))) throw AppFailure(AppError.INVALID_TEXT)
         val text = ByteArray(length).also { input.get(it) }
+        if(type==9) {
+            if(length!=46 || seconds!=0 || bytes.size!=256) throw AppFailure(AppError.INVALID_TEXT)
+            val value=ByteBuffer.wrap(text)
+            val target=ByteArray(36).also(value::get).toString(Charsets.US_ASCII)
+            val sequence=value.long
+            val emoji=value.get().toInt();val reserved=value.get().toInt()
+            text.fill(0)
+            if(!RandomIdentifiers.valid(target) || sequence<=0 || emoji !in 0..reactionEmoji.size || reserved!=0)
+                throw AppFailure(AppError.INVALID_TEXT)
+            return Content("",0,true,reaction=ReactionUpdate(target,sequence,
+                if(emoji==0) null else reactionEmoji[emoji-1]))
+        }
         val reply = if(type==7) {
             if(input.remaining()<37) throw AppFailure(AppError.INVALID_TEXT)
             val kind=ReplyKind.entries.getOrNull(input.get().toInt()) ?: throw AppFailure(AppError.INVALID_TEXT)
@@ -149,6 +180,9 @@ object ConversationPayload {
         val media = supports && bytes.size-offset>=mediaSupport.size &&
             bytes.copyOfRange(offset,offset+mediaSupport.size).contentEquals(mediaSupport)
         if(media) offset+=mediaSupport.size
+        val reactions=supports && bytes.size-offset>=reactionSupport.size &&
+            bytes.copyOfRange(offset,offset+reactionSupport.size).contentEquals(reactionSupport)
+        if(reactions) offset+=reactionSupport.size
         val minimum=offset
         if(((minimum+255)/256)*256!=bytes.size)
             throw AppFailure(AppError.INVALID_TEXT)
@@ -169,7 +203,8 @@ object ConversationPayload {
         val body = try { text.decodeToString(throwOnInvalidSequence = true) } finally { text.fill(0) }
         if (type == 1 || type == 5 || type == 7) TextRules.encode(body).fill(0)
         return Content(body, seconds, type == 2, supportsAttachments = supports,displayName=name,
-            viewOnceKind=if(type==5) ViewOnceKind.TEXT else null,replyTo=reply,supportsMedia=media)
+            viewOnceKind=if(type==5) ViewOnceKind.TEXT else null,replyTo=reply,supportsMedia=media,
+            supportsReactions=reactions)
     }
     fun policyText(seconds: Int) = if (seconds == 0) "Disappearing messages turned off"
         else "Disappearing messages set to ${DisappearingTimer.from(seconds).label}"

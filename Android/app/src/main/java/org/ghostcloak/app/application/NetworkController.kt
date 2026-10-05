@@ -210,6 +210,14 @@ class NetworkController(
             // Preserve request failure status when the outbox retains a pending message.
         }
     }
+    suspend fun react(service:ConversationService,id:String,target:String,emoji:String?)=operation(NetworkOperation.SEND) {
+        requireApi(state.registered(),"connect_required",401)
+        service.react(id,target,emoji,outbox)
+    }
+    suspend fun retrySubmission(service:ConversationService,id:String,localId:String)=operation(NetworkOperation.SEND) {
+        requireApi(state.registered(),"connect_required",401)
+        service.retrySubmission(id,localId,outbox)
+    }
     /** Local Accept and queued profile intent commit together; network delivery is best effort. */
     suspend fun acceptRequest(service:ConversationService,id:String) {
         service.acceptRequest(id,outbox)

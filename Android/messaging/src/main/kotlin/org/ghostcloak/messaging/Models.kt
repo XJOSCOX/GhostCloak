@@ -24,13 +24,16 @@ data class ContactStatus(val contact: Contact, val identity: RemoteIdentityStatu
 @Serializable enum class ReplyKind { TEXT, ATTACHMENT, VIEW_ONCE, DISAPPEARING }
 /** An encrypted-envelope identifier, scoped to the current conversation. Never a server lookup key. */
 @Serializable data class ReplyReference(val envelopeId: String, val kind: ReplyKind)
+@Serializable data class ReactionRecord(val sequence: Long, val emoji: String?)
+data class ReactionBadge(val emoji: String, val mine: Boolean)
 @Serializable
 data class Message(val localId: String, val conversationId: String, val direction: Direction,
     val body: String, val timestamp: Long, val state: MessageState, val envelopeId: String? = null,
     val disappearingSeconds: Int = 0, val expiry: ExpiryDeadline? = null, val policyEvent: Boolean = false,
     val viewOnceKind: ViewOnceKind? = null, val viewOnceState: ViewOnceState? = null,
     @kotlinx.serialization.Transient val attachment: AttachmentSummary? = null,
-    val replyTo: ReplyReference? = null) {
+    val replyTo: ReplyReference? = null,
+    @kotlinx.serialization.Transient val reactions: List<ReactionBadge> = emptyList()) {
     val activeExpiry: ExpiryDeadline? get() = if (direction == Direction.OUTGOING && state != MessageState.DELIVERED) null else expiry
     override fun toString() = "Message(redacted)"
 }

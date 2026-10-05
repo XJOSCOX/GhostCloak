@@ -28,7 +28,8 @@ import org.ghostcloak.protocol.EnvelopeCodec
     security: () -> Unit, send: (String, () -> Unit) -> Unit, delete: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, accept: () -> Unit = {}, reject: () -> Unit = {}, clear: () -> Unit = {}, disappearing: (Int) -> Unit = {}, refresh: () -> Unit = {}, block:()->Unit={},
     sendViewOnce:(String,()->Unit)->Unit={_,_->},revealText:(String,(String)->Unit)->Unit={_,_->},consume:(String)->Unit={},
     sendReply:(String,ReplyReference,()->Unit)->Unit={_,_,_->},
-    setPinned:(Boolean)->Unit={},setArchived:(Boolean)->Unit={},setMuted:(Boolean)->Unit={}) {
+    setPinned:(Boolean)->Unit={},setArchived:(Boolean)->Unit={},setMuted:(Boolean)->Unit={},
+    react:(String,String?)->Unit={_,_->},retryMessage:(String)->Unit={}) {
     var draft by remember(status.contact.remoteDeviceId) { mutableStateOf("") }
     var viewOnceText by remember(status.contact.remoteDeviceId) { mutableStateOf(false) }
     var revealed by remember(status.contact.remoteDeviceId) { mutableStateOf<Pair<String,String>?>(null) }
@@ -167,12 +168,20 @@ import org.ghostcloak.protocol.EnvelopeCodec
                     }
                     else if(message.attachment!=null) MessageBubble(message,onDelete={deleting=message.localId},
                         onReply=if(active && ReplyPresentation.reference(message)!=null) {{replyTo=ReplyPresentation.reference(message);viewOnceText=false}} else null,
-                        replyPreview=message.replyTo?.let {ReplyPresentation.preview(it,status.contact.remoteDeviceId,state.messages)}) {
+                        replyPreview=message.replyTo?.let {ReplyPresentation.preview(it,status.contact.remoteDeviceId,state.messages)},
+                        onReact=message.envelopeId?.takeIf {active && state.networkConfigured && !state.demo && state.reactionsAvailable && message.state!=MessageState.EXPIRED_UNDELIVERED}
+                            ?.let {target -> {emoji -> react(target,emoji)}},
+                        onRetry=if(message.direction==Direction.OUTGOING && message.state==MessageState.PENDING && active && state.networkConfigured && !state.demo)
+                            {{retryMessage(message.localId)}} else null) {
                         AttachmentMessage(message,active,message.localId in state.cachedAttachments,refresh)
                     } else MessageBubble(message,onDelete={deleting=message.localId},
                         onReply=if(active && ReplyPresentation.reference(message)!=null) {{replyTo=ReplyPresentation.reference(message);viewOnceText=false}} else null,
                         onCopy=if(!status.contact.request && !status.contact.blocked && message.body.isNotBlank())
                             {{copySensitive(context,message.body)}} else null,
+                        onReact=message.envelopeId?.takeIf {active && state.networkConfigured && !state.demo && state.reactionsAvailable && message.state!=MessageState.EXPIRED_UNDELIVERED}
+                            ?.let {target -> {emoji -> react(target,emoji)}},
+                        onRetry=if(message.direction==Direction.OUTGOING && message.state==MessageState.PENDING && active && state.networkConfigured && !state.demo)
+                            {{retryMessage(message.localId)}} else null,
                         replyPreview=message.replyTo?.let {ReplyPresentation.preview(it,status.contact.remoteDeviceId,state.messages)})
                 }
             }

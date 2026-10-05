@@ -122,7 +122,9 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             { text,reference,success -> model.send(id,text,success,replyTo=reference) },
                             { model.setPinned(id,it) },
                             { archived -> model.setArchived(id,archived); if(archived) nav.popBackStack() },
-                            { model.setMuted(id,it) })
+                            { model.setMuted(id,it) },
+                            { target,emoji -> model.react(id,target,emoji) },
+                            { localId -> model.retrySubmission(id,localId) })
                     }
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable

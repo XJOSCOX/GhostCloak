@@ -18,6 +18,7 @@ data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? =
     val ghostCloakId:String?=null,
     val requireRequestConfirmation:Boolean=true,
     val blockedContacts:List<Contact> = emptyList(),
+    val reactionsAvailable:Boolean=false,
     val cachedAttachments: Set<String> = emptySet(),
     val disappearingPolicies: Map<String, Int> = emptyMap(),
     val unreadExpiries: Map<String, List<ExpiryDeadline>> = emptyMap(),
@@ -75,7 +76,10 @@ class GhostViewModel internal constructor(application: Application, private val 
                     selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.markRead(it) }
                     val unread = if (identity != null) active.unreadCounts() else emptyMap()
                     val conversation = loadConversationRefreshSnapshot(contacts, selected, active::messagesForUi)
+                    val reactionsAvailable=selected?.takeIf {id -> contacts.any {it.contact.remoteDeviceId==id && !it.contact.request && !it.contact.blocked}}
+                        ?.let {id -> runCatching {active.reactionPeer(id)}.getOrDefault(false)} ?: false
                     mutable.value = mutable.value.copy(identity = identity, ghostCloakId=if(identity!=null) runtime.ownGhostCloakId() else null, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
+                        reactionsAvailable=reactionsAvailable,
                         requireRequestConfirmation=active.requireRequestConfirmation(),
                         blockedContacts=if(identity!=null) active.blockedContacts() else emptyList(),
                         cachedAttachments = runtime.cachedAttachments(selected),
@@ -203,6 +207,17 @@ class GhostViewModel internal constructor(application: Application, private val 
         it.removeContact(id); withContext(Dispatchers.Main) { success() }; null
     }
     fun delete(id: String, localId: String) = run { it.delete(id, localId); null }
+    fun react(id:String,target:String,emoji:String?)=run {
+        if(!mutable.value.reactionsAvailable) return@run "Both contacts need an updated Ghost Cloak app before using reactions."
+        runtime.react(it,id,target,emoji)
+        pollingWake.trySend(Unit)
+        null
+    }
+    fun retrySubmission(id:String,localId:String)=run {
+        runtime.retrySubmission(it,id,localId)
+        pollingWake.trySend(Unit)
+        null
+    }
     fun clearConversation(id: String) = run { it.clearConversation(id); null }
     fun setDisappearing(id: String, seconds: Int) = run {
         val message = runtime.setDisappearing(it, id, seconds)

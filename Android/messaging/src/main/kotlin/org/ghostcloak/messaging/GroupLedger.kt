@@ -3,6 +3,7 @@ package org.ghostcloak.messaging
 import kotlinx.serialization.Serializable
 import org.ghostcloak.crypto.EndpointRecords
 import org.ghostcloak.protocol.NetworkCodec
+import java.security.MessageDigest
 
 /** Encrypted local group state authority. Transport may only supply validated P13.2 bindings. */
 @Serializable internal data class GroupRecord(
@@ -21,7 +22,16 @@ class GroupLedger(
 ) {
     init { require(GroupIds.valid(localMemberId)) }
     private fun key(id:String):String { require(GroupIds.valid(id)); return "group/state/v1/$id" }
-    private fun load(id:String):GroupRecord?=records.read(key(id))?.let {
+    private val governance=GovernanceFoundationStore(records)
+    private fun load(id:String,allowPreBarrierReplay:Boolean=false):GroupRecord? {
+        val stored=records.read(key(id))
+        if(stored==null) {
+            check(governance.barrier(id)==null && governance.head(id)==null) {
+                "governance_boundary_without_group"
+            }
+            return null
+        }
+        return stored.let {
         require(it.size<=GroupStatements.MAX_LEDGER_BYTES)
         NetworkCodec.decode<GroupRecord>(it,GroupStatements.MAX_LEDGER_BYTES).also {record ->
             GroupStatements.validate(record.state)
@@ -33,6 +43,31 @@ class GroupLedger(
                 record.events.size<GroupStatements.MAX_EVENTS &&
                 record.usedInvites.size<=GroupStatements.MAX_INVITES &&
                 record.usedInvites.distinct().size==record.usedInvites.size)
+            val barrier=governance.barrier(id)
+            val head=governance.head(id)
+            check((barrier==null)==(head==null)) {"governance_boundary_incomplete"}
+            barrier?.let {
+                val barrier=it
+                val head=checkNotNull(head)
+                check(MessageDigest.isEqual(head.activationDigest,barrier.activationDigest) &&
+                    head.stateRevision>=barrier.activationStateRevision &&
+                    head.sequence==head.stateRevision-barrier.activationStateRevision)
+                if(head.sequence==0L) check(head.stateRevision==barrier.activationStateRevision &&
+                    MessageDigest.isEqual(head.stateDigest,barrier.activationStateDigest) &&
+                    MessageDigest.isEqual(head.headDigest,barrier.activationDigest))
+                val currentDigest=GroupStatements.digest(record.state)
+                if(record.state.revision<barrier.activationStateRevision) {
+                    check(allowPreBarrierReplay && head.sequence==0L &&
+                        head.stateRevision==barrier.activationStateRevision &&
+                        MessageDigest.isEqual(head.stateDigest,barrier.activationStateDigest))
+                } else {
+                    check(record.state.revision==head.stateRevision &&
+                        MessageDigest.isEqual(currentDigest,head.stateDigest))
+                    if(record.state.revision==barrier.activationStateRevision)
+                        check(MessageDigest.isEqual(currentDigest,barrier.activationStateDigest))
+                }
+            }
+        }
         }
     }
     private fun save(record:GroupRecord) {
@@ -40,8 +75,21 @@ class GroupLedger(
         require(bytes.size<=GroupStatements.MAX_LEDGER_BYTES)
         records.write(key(record.state.groupId),bytes)
     }
+    /** The single legacy-advance boundary shared by live updates and signed-chain replay. */
+    private fun legacyAdvanceAllowed(id:String,currentRevision:Long,
+        nextRevisions:List<Long>):Boolean {
+        val barrier=governance.barrier(id) ?: return true
+        return currentRevision<barrier.activationStateRevision &&
+            nextRevisions.all {it<=barrier.activationStateRevision}
+    }
     fun state(id:String):GroupState?=records.transaction { load(id)?.state }
-    fun isForked(id:String):Boolean=records.transaction { load(id)?.forked==true }
+    /** Recovery-only read for a pre-anchor legacy chain; never used to display group content. */
+    internal fun stateForLegacyReplay(id:String):GroupState?=records.transaction {
+        load(id,allowPreBarrierReplay=true)?.state
+    }
+    fun isForked(id:String):Boolean=records.transaction {
+        load(id,allowPreBarrierReplay=true)?.forked==true
+    }
     fun lifecycle(id:String):GroupLifecycle?=state(id)?.lifecycle
     fun anchorRevision(id:String):Long?=records.transaction {
         load(id)?.let {it.genesis?.state?.revision ?: it.admission?.state?.revision}
@@ -94,6 +142,8 @@ class GroupLedger(
     /** New members get a current-state admission proof, never a blind snapshot replacement. */
     fun acceptAdmission(proof:GroupAdmission):GroupApply=records.transaction {
         val state=proof.state
+        // A6.3 will provide a distinct, checkpoint-bound new-invitee bootstrap.
+        if(governance.barrier(state.groupId)!=null) return@transaction GroupApply.REJECTED
         if(proof.target.memberId!=localMemberId || state.members.any {it.memberId==localMemberId} ||
             state.members.size>=GroupStatements.MAX_MEMBERS ||
             !GroupStatements.verifyAdmission(proof,trustedPeer)) return@transaction GroupApply.REJECTED
@@ -116,18 +166,94 @@ class GroupLedger(
     }
 
     fun apply(id:String,event:GroupTransition,onAccepted:()->Unit = {}):GroupApply=records.transaction {
-        val record=load(id) ?: return@transaction GroupApply.NEEDS_RESYNC
+        val record=load(id,allowPreBarrierReplay=true) ?: return@transaction GroupApply.NEEDS_RESYNC
+        if(!legacyAdvanceAllowed(id,record.state.revision,listOf(event.next.revision)))
+            return@transaction GroupApply.REJECTED
+        governance.barrier(id)?.let {barrier ->
+            if(event.next.revision==barrier.activationStateRevision) {
+                val (result,next)=applyInTransaction(record,event,false)
+                if(result==GroupApply.FORKED) {
+                    save(record.copy(forked=true))
+                    return@transaction result
+                }
+                if(result!=GroupApply.ACCEPTED && result!=GroupApply.REMOVED)
+                    return@transaction result
+                if(next==null) return@transaction GroupApply.REJECTED
+                if(!MessageDigest.isEqual(GroupStatements.digest(next.state),
+                    barrier.activationStateDigest)) {
+                    save(record.copy(forked=true))
+                    return@transaction GroupApply.FORKED
+                }
+                save(next)
+                onAccepted()
+                return@transaction result
+            }
+        }
         applyInTransaction(record,event,true,onAccepted,null).first
+    }
+
+    /** Dormant A6.1 primitive. Only a future verified governance entry may supply its head. */
+    internal fun applyGovernedTransition(id:String,expectedHead:GovernanceHeadFoundationV1,
+        event:GroupTransition,nextHeadDigest:ByteArray):GroupApply=records.transaction {
+        val barrier=governance.barrier(id) ?: return@transaction GroupApply.REJECTED
+        val currentHead=governance.head(id) ?: error("governance_head_missing")
+        if(!governance.matches(expectedHead,currentHead) ||
+            !MessageDigest.isEqual(expectedHead.activationDigest,barrier.activationDigest))
+            return@transaction GroupApply.REJECTED
+        val record=load(id) ?: return@transaction GroupApply.NEEDS_RESYNC
+        val (result,next)=applyInTransaction(record,event,false)
+        if(result==GroupApply.FORKED) {
+            save(record.copy(forked=true))
+            return@transaction result
+        }
+        if(result!=GroupApply.ACCEPTED && result!=GroupApply.REMOVED) return@transaction result
+        if(next==null || !governance.advance(expectedHead,next.state,nextHeadDigest))
+            return@transaction GroupApply.REJECTED
+        save(next)
+        result
+    }
+
+    /** Internal future-activation hook. Nothing in production invokes it in A6.1. */
+    internal fun installGovernanceBarrierForFutureActivation(id:String,
+        activationDigest:ByteArray):GroupApply=records.transaction {
+        require(activationDigest.size==32)
+        val record=load(id) ?: return@transaction GroupApply.REJECTED
+        val current=record.state
+        val existing=governance.barrier(id)
+        if(existing!=null) return@transaction if(current.groupId==existing.groupId &&
+            MessageDigest.isEqual(existing.activationDigest,activationDigest)) GroupApply.DUPLICATE
+            else GroupApply.REJECTED
+        if(record.forked || current.lifecycle!=GroupLifecycle.ACTIVE ||
+            current.members.none {it.memberId==localMemberId}) return@transaction GroupApply.REJECTED
+        val baseline=GroupAuthorityBaselineStore(records)
+        val active=baseline.active(id) ?: return@transaction GroupApply.REJECTED
+        val certificate=baseline.certificate(id) ?: return@transaction GroupApply.REJECTED
+        val digest=GroupStatements.digest(current)
+        if(baseline.pending(id)!=null || active.stateRevision!=current.revision ||
+            !MessageDigest.isEqual(active.stateDigest,digest) ||
+            !MessageDigest.isEqual(active.certificateDigest,certificate.digest) ||
+            !MessageDigest.isEqual(active.memberSetDigest,
+                GroupAuthorityBaselineV1.memberSetDigest(GroupAuthorityBaselineV1.memberSet(current))) ||
+            !GroupAuthorityBaselineV1.verifyCertificate(certificate,current))
+            return@transaction GroupApply.REJECTED
+        governance.install(GovernanceBarrierV1(groupId=id,
+            activationStateRevision=current.revision,activationStateDigest=digest,
+            activationDigest=activationDigest,baselineCertificateDigest=certificate.digest))
+        GroupApply.ACCEPTED
     }
 
     /** A gap requires every signed intermediate event; no unverified snapshot fast-forward. */
     fun applySnapshot(id:String,snapshot:GroupSnapshot,
         historicalPeer:((GroupMember,Long)->Boolean)?=null,
         onAccepted:(GroupState,List<GroupTransition>)->Unit = {_,_->}):GroupApply=records.transaction {
-        var record=load(id) ?: return@transaction GroupApply.NEEDS_RESYNC
+        var record=load(id,allowPreBarrierReplay=true) ?: return@transaction GroupApply.NEEDS_RESYNC
         if (record.forked) return@transaction GroupApply.FORKED
         if (snapshot.chain.size !in 1..GroupStatements.MAX_EVENTS ||
             snapshot.finalState.groupId!=id) return@transaction GroupApply.REJECTED
+        if(!legacyAdvanceAllowed(id,record.state.revision,
+                snapshot.chain.map {it.next.revision}+snapshot.finalState.revision))
+            return@transaction GroupApply.REJECTED
+        val barrier=governance.barrier(id)
         val accepted=ArrayList<GroupTransition>(snapshot.chain.size)
         for (event in snapshot.chain) {
             val (result,next)=applyInTransaction(record,event,false,{},historicalPeer)
@@ -136,6 +262,12 @@ class GroupLedger(
                 return@transaction result
             }
             if ((result!=GroupApply.ACCEPTED && result!=GroupApply.REMOVED) || next==null) return@transaction result
+            if(barrier!=null && next.state.revision==barrier.activationStateRevision &&
+                !MessageDigest.isEqual(GroupStatements.digest(next.state),
+                    barrier.activationStateDigest)) {
+                save(record.copy(forked=true))
+                return@transaction GroupApply.FORKED
+            }
             record=next
             accepted.add(event)
             if (record.state.members.none {it.memberId==localMemberId}) {

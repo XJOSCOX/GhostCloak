@@ -1145,7 +1145,7 @@ class GroupMembershipTransport(
         val event=control.transition ?: throw ApiFailure(400,"group_invalid")
         val localId=localMember(control.groupId) ?: throw ApiFailure(409,"group_invalid")
         val local=GroupLedger(records,GroupTrustedPeer {false},localId)
-        val prior=local.state(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val prior=local.stateForLegacyReplay(control.groupId) ?: throw ApiFailure(409,"group_invalid")
         if(prior.members.none {it.memberId==prior.coordinatorId && it.deviceId==sender})
             throw ApiFailure(409,"group_invalid")
         val candidate=event.change.added
@@ -1210,7 +1210,7 @@ class GroupMembershipTransport(
             val memberId=runCatching {localMember(groupId)}.getOrNull() ?: continue
             val ledger=GroupLedger(records,GroupTrustedPeer {false},memberId)
             if(ledger.isForked(groupId)) continue // A valid fork has no in-group winner.
-            val current=ledger.state(groupId) ?: continue
+            val current=ledger.stateForLegacyReplay(groupId) ?: continue
             try {requestResync(groupId,current); return}
             catch(e:CancellationException) {throw e}
             catch(_:ApiFailure) {continue} // Keep the durable marker and fail closed.
@@ -1241,7 +1241,7 @@ class GroupMembershipTransport(
     }
     private suspend fun receiveResyncResponse(sender:String,control:GroupControl) {
         val localId=localMember(control.groupId) ?: throw ApiFailure(409,"group_invalid")
-        val prior=GroupLedger(records,GroupTrustedPeer {false},localId).state(control.groupId)
+        val prior=GroupLedger(records,GroupTrustedPeer {false},localId).stateForLegacyReplay(control.groupId)
             ?: throw ApiFailure(409,"group_invalid")
         if(prior.members.none {it.memberId==prior.coordinatorId && it.deviceId==sender})
             throw ApiFailure(409,"group_invalid")

@@ -30,6 +30,7 @@ object ConversationPayload {
     // This authenticated, fixed-position marker fits the existing 256-byte frame.
     private val compactGroupSupport = "GhostCloak/grp2!".toByteArray(Charsets.US_ASCII)
     private val admissionV2Support = "GC/admission-v2!".toByteArray(Charsets.US_ASCII)
+    private val baselineV1Support = "GC/baseline-v1!".toByteArray(Charsets.US_ASCII)
     val reactionEmoji = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
     private val profileMarker = "GhostCloak/profile/v1!".toByteArray(Charsets.US_ASCII)
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
@@ -44,6 +45,7 @@ object ConversationPayload {
         val supportsDelete:Boolean=false,val deleteTargetId:String?=null,
         val supportsEdit:Boolean=false,val edit:EditUpdate?=null,
         val supportsGroups:Boolean=false,val supportsAdmissionV2:Boolean=false,
+        val supportsBaselineV1:Boolean=false,
         val groupControl:GroupControl?=null,
         val groupText:GroupText?=null) {
         override fun toString() = "Content(redacted)"
@@ -135,6 +137,8 @@ object ConversationPayload {
         return ByteArray(size).also { bytes ->
             SecureRandom().nextBytes(bytes)
             ByteBuffer.wrap(bytes).put(magic).put(1).put(13).putShort(0).putInt(0).putInt(body.size).put(body)
+            if(size-16-body.size>=baselineV1Support.size)
+                baselineV1Support.copyInto(bytes,16+body.size)
         }
     }
     /** Type 14 is a group text inside a recipient-specific Signal envelope. */
@@ -230,9 +234,13 @@ object ConversationPayload {
         catch (_: java.nio.charset.CharacterCodingException) { throw AppFailure(AppError.INVALID_TEXT) }
     /** Classify only the authenticated outer type. Never decode blocked user content. */
     fun decodeBlockedGroupSystem(bytes: ByteArray): GroupControl? {
+        return decodeBlockedGroupSystemContent(bytes)?.groupControl
+    }
+    /** Retain authenticated maintenance capability without inspecting blocked user content. */
+    fun decodeBlockedGroupSystemContent(bytes: ByteArray): Content? {
         if (bytes.size < 6 || !bytes.copyOfRange(0,4).contentEquals(magic) || bytes[5].toInt()!=13)
             return null
-        return decode(bytes).groupControl ?: throw AppFailure(AppError.INVALID_TEXT)
+        return decode(bytes).also {if(it.groupControl==null) throw AppFailure(AppError.INVALID_TEXT)}
     }
     private fun decodeChecked(bytes: ByteArray): Content {
         if (bytes.isEmpty()) throw AppFailure(AppError.INVALID_TEXT)
@@ -310,7 +318,11 @@ object ConversationPayload {
                 catch (_:IllegalArgumentException) {throw AppFailure(AppError.INVALID_TEXT)}
                 catch (_:org.ghostcloak.protocol.ApiFailure) {throw AppFailure(AppError.INVALID_TEXT)}
                 finally {text.fill(0)}
-            return Content("",0,true,groupControl=control,supportsGroups=true)
+            val marker=bytes.size-16-length>=baselineV1Support.size &&
+                bytes.copyOfRange(16+length,16+length+baselineV1Support.size)
+                    .contentEquals(baselineV1Support)
+            return Content("",0,true,groupControl=control,supportsGroups=true,
+                supportsBaselineV1=marker)
         }
         if(type==14) {
             if(seconds!=0 || length !in 1..GroupTextCodec.MAX_BYTES ||

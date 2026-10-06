@@ -9,14 +9,17 @@ import org.ghostcloak.protocol.NetworkCodec
 enum class GroupControlKind { INVITE, ACCEPT, INVITE_EXPIRED, STATE_UPDATE, RESYNC_REQUEST,
     RESYNC_RESPONSE, ADMISSION_REQUEST, ADMISSION_RESPONSE,
     ADMISSION_V2_PROPOSAL, ADMISSION_V2_APPROVAL, ADMISSION_V2_EVIDENCE_REQUEST,
-    ADMISSION_V2_EVIDENCE_RESPONSE }
+    ADMISSION_V2_EVIDENCE_RESPONSE, BASELINE_V1_PROPOSAL, BASELINE_V1_APPROVAL,
+    BASELINE_V1_CERTIFICATE }
 
 /** Only internal maintenance is permitted through a blocked canonical group relationship. */
 internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     GroupControlKind.STATE_UPDATE, GroupControlKind.RESYNC_REQUEST, GroupControlKind.RESYNC_RESPONSE,
     GroupControlKind.ADMISSION_REQUEST, GroupControlKind.ADMISSION_RESPONSE,
     GroupControlKind.ADMISSION_V2_PROPOSAL, GroupControlKind.ADMISSION_V2_APPROVAL,
-    GroupControlKind.ADMISSION_V2_EVIDENCE_REQUEST, GroupControlKind.ADMISSION_V2_EVIDENCE_RESPONSE)
+    GroupControlKind.ADMISSION_V2_EVIDENCE_REQUEST, GroupControlKind.ADMISSION_V2_EVIDENCE_RESPONSE,
+    GroupControlKind.BASELINE_V1_PROPOSAL, GroupControlKind.BASELINE_V1_APPROVAL,
+    GroupControlKind.BASELINE_V1_CERTIFICATE)
 
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable data class GroupControl(
@@ -37,12 +40,17 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val approvalV2: AdmissionApprovalV2? = null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val certificateV2: AdmissionCertificateV2? = null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val evidenceEventId: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val baselineProposalV1:GroupAuthorityBaselineProposalV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val baselineApprovalV1:GroupAuthorityBaselineApprovalV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val baselineCertificateV1:GroupAuthorityBaselineCertificateV1?=null,
 ) {
     override fun toString() = "GroupControl(redacted)"
 }
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable data class PendingGroupControl(val senderDeviceId: String, val control: GroupControl,
-    val groupScoped: Boolean = false) {
+    val groupScoped: Boolean = false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val baselineV1Advertised:Boolean=false) {
     override fun toString() = "PendingGroupControl(redacted)"
 }
 
@@ -74,6 +82,17 @@ object GroupControlCodec {
         control.certificateV2?.let { require(it.proposal.groupId==control.groupId &&
             NetworkCodec.encode(it).size<=AdmissionV2.MAX_CERTIFICATE_BYTES) }
         control.evidenceEventId?.let { require(GroupIds.valid(it)) }
+        control.baselineProposalV1?.let {require(it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupAuthorityBaselineV1.MAX_PROPOSAL_BYTES)}
+        control.baselineApprovalV1?.let {require(it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupAuthorityBaselineV1.MAX_APPROVAL_BYTES)}
+        control.baselineCertificateV1?.let {require(it.proposal.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupAuthorityBaselineV1.MAX_CERTIFICATE_BYTES)}
+        val baselineAbsent=control.baselineProposalV1==null && control.baselineApprovalV1==null &&
+            control.baselineCertificateV1==null
+        if(control.kind !in setOf(GroupControlKind.BASELINE_V1_PROPOSAL,
+                GroupControlKind.BASELINE_V1_APPROVAL,GroupControlKind.BASELINE_V1_CERTIFICATE))
+            require(baselineAbsent)
         val v2Absent=control.proposalV2==null && control.approvalV2==null &&
             control.certificateV2==null && control.evidenceEventId==null
         when (control.kind) {
@@ -154,6 +173,22 @@ object GroupControlCodec {
                 control.genesis==null && control.admission==null && control.invite==null &&
                 control.transition==null && control.chain.isEmpty() && control.fromRevision==null &&
                 control.fromDigest==null && control.headRevision==null)
+            GroupControlKind.BASELINE_V1_PROPOSAL,GroupControlKind.BASELINE_V1_APPROVAL,
+            GroupControlKind.BASELINE_V1_CERTIFICATE -> {
+                require(v2Absent && control.inviteId==null && control.state==null &&
+                    control.genesis==null && control.admission==null && control.invite==null &&
+                    control.transition==null && control.chain.isEmpty() &&
+                    control.fromRevision==null && control.fromDigest==null && control.headRevision==null)
+                require(when(control.kind) {
+                    GroupControlKind.BASELINE_V1_PROPOSAL -> control.baselineProposalV1!=null &&
+                        control.baselineApprovalV1==null && control.baselineCertificateV1==null
+                    GroupControlKind.BASELINE_V1_APPROVAL -> control.baselineApprovalV1!=null &&
+                        control.baselineProposalV1==null && control.baselineCertificateV1==null
+                    GroupControlKind.BASELINE_V1_CERTIFICATE -> control.baselineCertificateV1!=null &&
+                        control.baselineProposalV1==null && control.baselineApprovalV1==null
+                    else -> false
+                })
+            }
         }
     }
 }

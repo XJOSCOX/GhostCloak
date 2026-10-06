@@ -15,6 +15,151 @@ import java.net.URI
 import java.util.concurrent.Executors
 
 class NetworkTest {
+    @Test fun existingBaselineSurvivesProspectiveAdmissionAndRemoval() = runBlocking {
+        Fixture().use {f ->
+            val people=listOf(f.person("alice",true),f.person("bob",true),
+                f.person("charlie",true),f.person("dana",true))
+            val (a,b,c,d)=people
+            val repos=people.associateWith {LocalRepository(it.records)}
+            val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
+                NetworkMailboxTransport(f.client(p),p.state))}
+            fun group(p:Person)=GroupMembershipTransport(p.records,repos.getValue(p),p.engine,p.state,
+                GroupAuthorityResolver(repos.getValue(p),p.engine,f.client(p),p.records),outboxes.getValue(p))
+            val conversations=people.associateWith {p ->ConversationService(p.engine,repos.getValue(p)).also {it.open()}}
+            for(p in people) for(q in people) if(p!=q) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repos.getValue(p).save(Contact(RandomIdentifiers.create(),q.registration.accountId,q.name,q.registration.deviceId))
+                repos.getValue(p).groupPeer(q.registration.deviceId,true)
+            }
+            suspend fun push(p:Person) {
+                val outbox=outboxes.getValue(p)
+                outbox.pendingIds().forEach {id ->
+                    if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)
+                }
+            }
+            suspend fun pull(p:Person) {
+                val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                val deliveries=mailbox.fetch()
+                deliveries.forEach {conversations.getValue(p).acceptNetwork(EnvelopeCodec.decode(it.encryptedEnvelope))}
+                if(deliveries.isNotEmpty())
+                    mailbox.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+                group(p).processPending()
+            }
+            val id=group(a).createAndInvite(b.registration.deviceId)
+            push(a);pull(b);group(b).accept(group(b).invitations().single().id)
+            push(b);pull(a);push(a);pull(b)
+            group(a).invite(id,c.registration.deviceId)
+            push(a);pull(c);group(c).accept(group(c).invitations().single().id)
+            push(c);pull(a);push(a);pull(b);pull(c)
+            val before=group(a).state(id)!!
+            assertEquals(3,before.members.size)
+            group(a).beginAuthorityBaseline(id)
+            push(a);pull(b);pull(c)
+            push(b);push(c);pull(a)
+            push(a);pull(b);pull(c)
+            push(b);push(c);pull(a)
+            push(a);pull(b);pull(c)
+            for(p in listOf(a,b,c)) assertNotNull(p.records.read("app/group/baseline-v1/active/$id"))
+            val aMember=before.members.single {it.deviceId==a.registration.deviceId}
+            for(p in listOf(a,b,c)) {
+                for(member in before.members)
+                    assertNotNull(p.records.read("app/group/historical-existing-baseline/$id/${member.memberId}"))
+            }
+            for(p in people) for(q in people) if(p!=q)
+                repos.getValue(p).admissionV2Peer(q.registration.deviceId,true)
+            group(a).invite(id,d.registration.deviceId)
+            push(a);pull(b);pull(c)
+            push(b);push(c);pull(a)
+            push(a);pull(d)
+            assertEquals(1,group(d).invitations().size)
+            group(d).accept(group(d).invitations().single().id)
+            push(d);pull(a)
+            push(a);pull(b);pull(c);pull(d)
+            val after=group(a).state(id)!!
+            assertEquals(4,after.members.size)
+            val added=after.members.single {it.deviceId==d.registration.deviceId}
+            for(p in listOf(a,b,c)) {
+                assertNotNull(p.records.read("app/group/historical-existing-baseline/$id/${aMember.memberId}"))
+                assertNotNull(p.records.read("app/group/historical-authority/$id/${added.memberId}"))
+            }
+            assertNotNull(d.records.read("app/group/historical-baseline/$id/${aMember.memberId}"))
+            group(a).removeMember(id,added.memberId)
+            assertNotNull(a.records.read("app/group/historical-authority/$id/${added.memberId}"))
+            assertNull(a.records.read("app/group/current-authority/$id/${added.memberId}"))
+        }
+    }
+    @Test fun baselineWaitsForBlockedMemberAndActivatesAllAnchorsAfterRestart() = runBlocking {
+        Fixture().use {f ->
+            val a=f.person("alice",true);val b=f.person("bob",true)
+            val ar=LocalRepository(a.records);val br=LocalRepository(b.records)
+            val ao=DurableOutbox(a.records,a.engine,NetworkMailboxTransport(f.client(a),a.state))
+            val bo=DurableOutbox(b.records,b.engine,NetworkMailboxTransport(f.client(b),b.state))
+            fun aGroup()=GroupMembershipTransport(a.records,ar,a.engine,a.state,
+                GroupAuthorityResolver(ar,a.engine,f.client(a),a.records),ao)
+            fun bGroup()=GroupMembershipTransport(b.records,br,b.engine,b.state,
+                GroupAuthorityResolver(br,b.engine,f.client(b),b.records),bo)
+            val ac=ConversationService(a.engine,ar).also {it.open()}
+            val bc=ConversationService(b.engine,br).also {it.open()}
+            for((p,q,repo) in listOf(Triple(a,b,ar),Triple(b,a,br))) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repo.save(Contact(RandomIdentifiers.create(),q.registration.accountId,q.name,q.registration.deviceId))
+                repo.groupPeer(q.registration.deviceId,true)
+            }
+            suspend fun push(outbox:DurableOutbox) {
+                outbox.pendingIds().forEach {id ->
+                    if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)
+                }
+            }
+            suspend fun pull(p:Person,conversation:ConversationService,group:GroupMembershipTransport) {
+                val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                val deliveries=mailbox.fetch()
+                deliveries.forEach {conversation.acceptNetwork(EnvelopeCodec.decode(it.encryptedEnvelope))}
+                mailbox.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+                group.processPending()
+            }
+            val groupId=aGroup().createAndInvite(b.registration.deviceId)
+            push(ao);pull(b,bc,bGroup())
+            bGroup().accept(bGroup().invitations().single().id)
+            push(bo);pull(a,ac,aGroup())
+            push(ao);pull(b,bc,bGroup())
+            val state=aGroup().state(groupId)!!
+            assertEquals(2,state.members.size)
+            ac.block(b.registration.deviceId,true)
+            assertEquals(RelationshipState.BLOCKED,ar.relationshipState(b.registration.deviceId))
+            aGroup().beginAuthorityBaseline(groupId)
+            assertNull(a.records.read("app/group/baseline-v1/active/$groupId"))
+            push(ao)
+            // Offline B has not independently verified A; restarting A cannot waive B's approval.
+            aGroup().processPending()
+            assertNull(a.records.read("app/group/baseline-v1/active/$groupId"))
+            pull(b,bc,bGroup())
+            assertTrue(br.baselineV1Peer(a.registration.deviceId))
+            assertNull(b.records.read("app/group/baseline-v1/own/$groupId"))
+            push(bo);pull(a,ac,aGroup())
+            assertTrue(ar.baselineV1Peer(b.registration.deviceId))
+            push(ao);pull(b,bc,bGroup())
+            assertNotNull(b.records.read("app/group/baseline-v1/own/$groupId"))
+            assertNull(b.records.read("app/group/baseline-v1/active/$groupId"))
+            push(bo);pull(a,ac,aGroup())
+            assertNotNull(a.records.read("app/group/baseline-v1/active/$groupId"))
+            push(ao);pull(b,bc,bGroup())
+            assertNotNull(b.records.read("app/group/baseline-v1/active/$groupId"))
+            for(p in listOf(a,b)) for(member in state.members)
+                assertNotNull(p.records.read(
+                    "app/group/historical-existing-baseline/$groupId/${member.memberId}"))
+            assertEquals(RelationshipState.BLOCKED,ar.relationshipState(b.registration.deviceId))
+            assertEquals(2L,aGroup().state(groupId)!!.revision)
+            assertTrue(ac.messages(b.registration.deviceId).isEmpty())
+            // Duplicate delivery after commit cannot create another activation or change the digest.
+            val before=a.records.read("app/group/baseline-v1/active/$groupId")!!
+            aGroup().processPending()
+            assertArrayEquals(before,a.records.read("app/group/baseline-v1/active/$groupId"))
+        }
+    }
     @Test fun blockedCanonicalPeerExchangesOnlyGroupMaintenanceWithoutRestoringContact() = runBlocking {
         Fixture().use {f ->
             val (a,b,c)=listOf(f.person("alice",true),f.person("bob",true),f.person("charlie",true))

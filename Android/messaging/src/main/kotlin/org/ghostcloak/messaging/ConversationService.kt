@@ -381,10 +381,10 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             // content remains opaque and discarded; the normal mailbox ACK follows commit.
             val signalDigest=engine.trustedRemoteIdentityDigest(contact.remoteDeviceId)
             engine.decryptAndCommit(envelope) { bytes ->
-                val control=ConversationPayload.decodeBlockedGroupSystem(bytes)
-                if(control!=null && signalDigest!=null)
+                val maintenance=ConversationPayload.decodeBlockedGroupSystemContent(bytes)
+                if(maintenance!=null && signalDigest!=null)
                     repository.queueGroupScopedSystem(contact.remoteDeviceId,envelope.envelopeId,
-                        control,signalDigest)
+                        maintenance.groupControl!!,signalDigest,maintenance.supportsBaselineV1)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
             }
             return@action
@@ -406,10 +406,11 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
                     repository.isActiveContact(contact.remoteDeviceId)) {
                     repository.groupPeer(contact.remoteDeviceId,true)
-                    repository.queueGroupControl(contact.remoteDeviceId,envelope.envelopeId,content.groupControl)
+                    repository.queueGroupControl(contact.remoteDeviceId,envelope.envelopeId,
+                        content.groupControl,content.supportsBaselineV1)
                 } else if(content.groupControl.kind.blockSafeMaintenance() && scopedDigest!=null) {
                     repository.queueGroupScopedSystem(contact.remoteDeviceId,envelope.envelopeId,
-                        content.groupControl,scopedDigest)
+                        content.groupControl,scopedDigest,content.supportsBaselineV1)
                 }
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit

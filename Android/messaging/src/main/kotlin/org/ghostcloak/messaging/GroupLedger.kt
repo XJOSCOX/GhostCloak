@@ -17,7 +17,7 @@ import org.ghostcloak.protocol.NetworkCodec
 class GroupLedger(
     private val records:EndpointRecords,
     private val trustedPeer:GroupTrustedPeer,
-    private val localMemberId:String
+    private val localMemberId:String,
 ) {
     init { require(GroupIds.valid(localMemberId)) }
     private fun key(id:String):String { require(GroupIds.valid(id)); return "group/state/v1/$id" }
@@ -117,11 +117,12 @@ class GroupLedger(
 
     fun apply(id:String,event:GroupTransition,onAccepted:()->Unit = {}):GroupApply=records.transaction {
         val record=load(id) ?: return@transaction GroupApply.NEEDS_RESYNC
-        applyInTransaction(record,event,true,onAccepted).first
+        applyInTransaction(record,event,true,onAccepted,null).first
     }
 
     /** A gap requires every signed intermediate event; no unverified snapshot fast-forward. */
     fun applySnapshot(id:String,snapshot:GroupSnapshot,
+        historicalPeer:((GroupMember,Long)->Boolean)?=null,
         onAccepted:(GroupState,List<GroupTransition>)->Unit = {_,_->}):GroupApply=records.transaction {
         var record=load(id) ?: return@transaction GroupApply.NEEDS_RESYNC
         if (record.forked) return@transaction GroupApply.FORKED
@@ -129,7 +130,7 @@ class GroupLedger(
             snapshot.finalState.groupId!=id) return@transaction GroupApply.REJECTED
         val accepted=ArrayList<GroupTransition>(snapshot.chain.size)
         for (event in snapshot.chain) {
-            val (result,next)=applyInTransaction(record,event,false)
+            val (result,next)=applyInTransaction(record,event,false,{},historicalPeer)
             if (result==GroupApply.FORKED) {
                 save(record.copy(forked=true))
                 return@transaction result
@@ -154,7 +155,8 @@ class GroupLedger(
     }
 
     private fun applyInTransaction(record:GroupRecord,event:GroupTransition,persist:Boolean,
-        onAccepted:()->Unit = {}):Pair<GroupApply,GroupRecord?> {
+        onAccepted:()->Unit = {},
+        historicalPeer:((GroupMember,Long)->Boolean)?=null):Pair<GroupApply,GroupRecord?> {
         val previous=record.state
         if (record.forked) return GroupApply.FORKED to null
         if (runCatching {GroupStatements.validateEventShape(event)}.isFailure) return GroupApply.REJECTED to null
@@ -174,7 +176,7 @@ class GroupLedger(
                 record.events.lastOrNull()?.change?.invite?.inviteId?.let(used::remove)
             }
             if (parent!=null && next.previousDigest.contentEquals(GroupStatements.digest(parent)) &&
-                authorizedSignatures(parent,event) && runCatching {
+                authorizedSignatures(parent,event,historicalPeer) && runCatching {
                     GroupStatements.digest(GroupRules.derive(parent,event.change,usedBeforeLast,trustedPeer))
                         .contentEquals(nextDigest)
                 }.getOrDefault(false)) {
@@ -186,13 +188,13 @@ class GroupLedger(
         if (next.revision<previous.revision) return GroupApply.STALE to null
         if (next.revision>previous.revision+1) return GroupApply.NEEDS_RESYNC to null
         if (!next.previousDigest.contentEquals(GroupStatements.digest(previous))) {
-            if (authorizedSignatures(previous,event)) {
+            if (authorizedSignatures(previous,event,historicalPeer)) {
                 if (persist) save(record.copy(forked=true))
                 return GroupApply.FORKED to null
             }
             return GroupApply.REJECTED to null
         }
-        if (!authorizedSignatures(previous,event)) return GroupApply.REJECTED to null
+        if (!authorizedSignatures(previous,event,historicalPeer)) return GroupApply.REJECTED to null
         if (record.events.any {it.change.eventId==event.change.eventId}) return GroupApply.REJECTED to null
         val derived=runCatching {GroupRules.derive(previous,event.change,record.usedInvites.toSet(),trustedPeer)}
             .getOrNull() ?: return GroupApply.REJECTED to null
@@ -206,10 +208,13 @@ class GroupLedger(
         return (if(next.members.none {it.memberId==localMemberId}) GroupApply.REMOVED else GroupApply.ACCEPTED) to updated
     }
 
-    private fun authorizedSignatures(previous:GroupState,event:GroupTransition):Boolean {
+    private fun authorizedSignatures(previous:GroupState,event:GroupTransition,
+        historicalPeer:((GroupMember,Long)->Boolean)?):Boolean {
         val actor=previous.members.singleOrNull {it.memberId==event.change.actorId} ?: return false
         val coordinator=previous.members.singleOrNull {it.memberId==previous.coordinatorId} ?: return false
-        if (!trustedPeer.matches(actor) || !trustedPeer.matches(coordinator)) return false
+        fun trusted(member:GroupMember)=trustedPeer.matches(member) ||
+            historicalPeer?.invoke(member,previous.revision)==true
+        if (!trusted(actor) || !trusted(coordinator)) return false
         val actorStatement=runCatching {GroupStatements.actor(previous,event.change,event.next)}.getOrNull() ?: return false
         if (!GroupStatements.verify(actor.authPublicKey,actorStatement,event.actorSignature) ||
             !GroupStatements.verify(coordinator.authPublicKey,

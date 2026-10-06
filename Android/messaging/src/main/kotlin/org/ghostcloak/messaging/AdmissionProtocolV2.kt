@@ -158,18 +158,37 @@ internal class HistoricalGroupAuthority(private val records:EndpointRecords) {
                 DeviceAuth.digest(NetworkCodec.encode(proof)),proof.state.revision,
                 GroupStatements.digest(proof.state))))
     }
-    fun matches(groupId:String,member:GroupMember):Boolean {
+    /** A5 is prospective from this exact state; it says nothing about earlier events. */
+    fun anchorExistingBaseline(state:GroupState,member:GroupMember,certificateDigest:ByteArray) {
+        require(certificateDigest.size==32 && state.members.any {
+            it.memberId==member.memberId &&
+                MessageDigest.isEqual(GroupStatements.digestMember(it),GroupStatements.digestMember(member))
+        })
+        records.write("app/group/historical-existing-baseline/${state.groupId}/${member.memberId}",
+            NetworkCodec.encode(HistoricalExistingMemberBaselineV1(state.groupId,member,
+                state.revision,GroupStatements.digest(state),certificateDigest)))
+    }
+    /** Only replay of an event with this parent revision may consult historical evidence. */
+    fun matchesAt(groupId:String,member:GroupMember,eventParentRevision:Long):Boolean {
+        if(eventParentRevision<1) return false
         val value=records.read(key(groupId,member.memberId))?.let {
             runCatching {NetworkCodec.decode<HistoricalGroupAuthorityV2>(it,1024)}.getOrNull()
         }
         val baseline=records.read("app/group/historical-baseline/$groupId/${member.memberId}")?.let {
             runCatching {NetworkCodec.decode<HistoricalAdmissionBaselineV2>(it,1024)}.getOrNull()
         }
+        val existing=records.read("app/group/historical-existing-baseline/$groupId/${member.memberId}")?.let {
+            runCatching {NetworkCodec.decode<HistoricalExistingMemberBaselineV1>(it,1024)}.getOrNull()
+        }
         fun same(anchor:GroupMember):Boolean=anchor.memberId==member.memberId &&
             anchor.accountId==member.accountId && anchor.deviceId==member.deviceId &&
             MessageDigest.isEqual(anchor.authPublicKey,member.authPublicKey) &&
             MessageDigest.isEqual(anchor.signalIdentityDigest,member.signalIdentityDigest)
-        return (value?.groupId==groupId && same(value.member)) ||
-            (baseline?.groupId==groupId && same(baseline.member))
+        return (value?.groupId==groupId && eventParentRevision>=value.addRevision &&
+            same(value.member)) ||
+            (baseline?.groupId==groupId && eventParentRevision>=baseline.joinParentRevision &&
+                same(baseline.member)) ||
+            (existing?.groupId==groupId && eventParentRevision>=existing.fromRevision &&
+                same(existing.member))
     }
 }

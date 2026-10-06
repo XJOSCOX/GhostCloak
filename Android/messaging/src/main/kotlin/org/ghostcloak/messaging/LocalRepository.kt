@@ -374,6 +374,11 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         require(RandomIdentifiers.valid(envelopeId))
         records.remove("app/group-control/pending/$envelopeId")
     }
+    fun queueGroupText(senderId:String,envelopeId:String,value:GroupText)=records.transaction {
+        require(isActiveContact(senderId))
+        GroupChatStore(records).queue(senderId,envelopeId,value)
+    }
+    fun groupOutboxIds():Set<String> = GroupChatStore(records).outboxIds()
     private fun reactionKey(id:String,target:String,mine:Boolean):String {
         require(RandomIdentifiers.valid(id) && RandomIdentifiers.valid(target))
         return "app/reaction/$id/$target/${if(mine) "mine" else "peer"}"

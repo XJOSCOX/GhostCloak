@@ -72,7 +72,9 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                 if (state.identity == null) FirstLaunchScreen(state, model::create)
                 else NavHost(nav, startDestination = "contacts") {
                     composable("contacts") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") },
-                        model::connectNetwork, model::syncNetwork,showArchived={nav.navigate("archived")}) }
+                        model::connectNetwork, model::syncNetwork,showArchived={nav.navigate("archived")},
+                        openGroup={nav.navigate("group/$it")},
+                        createGroup={id -> model.createGroupAndOpen(id) {nav.navigate("group/$it")} }) }
                     composable("archived") { ContactsScreen(state, {}, { id -> nav.navigate("conversation/$id") },
                         model::connectNetwork,model::syncNetwork,archived=true,
                         unarchive={model.setArchived(it,false)},back={nav.popBackStack()}) }
@@ -134,6 +136,13 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             { localId -> model.retrySubmission(id,localId) },
                             { localId -> model.deleteForEveryone(id,localId) },
                             { localId,text,done -> model.editMessage(id,localId,text,done) })
+                    }
+                    composable("group/{id}") { backStack ->
+                        val id=backStack.arguments?.getString("id") ?: return@composable
+                        val group=state.groups.firstOrNull {it.groupId==id} ?: return@composable
+                        GroupConversationScreen(state,group,{nav.popBackStack()},
+                            {text,done->model.sendGroupText(id,text,done)},
+                            {device->model.inviteToGroup(id,device)})
                     }
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable

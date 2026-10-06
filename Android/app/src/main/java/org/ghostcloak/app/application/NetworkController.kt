@@ -304,6 +304,11 @@ class NetworkController(
         capabilities.publish()
     }
     fun groupInvitations()=groups.invitations()
+    fun groupConversations()=groups.conversations()
+    suspend fun sendGroupText(id:String,text:String)=operation(NetworkOperation.SEND) {
+        requireApi(state.registered(),"connect_required",401)
+        groups.sendText(id,text)
+    }
     fun forkedGroupCount()=groups.forkedCount()
     fun pendingGroupInvitationNotices()=groups.pendingInvitationNotices()
     fun markGroupInvitationNotice(id:String,complete:Boolean)=groups.markInvitationNotice(id,complete)

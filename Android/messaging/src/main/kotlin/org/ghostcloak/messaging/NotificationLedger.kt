@@ -29,6 +29,10 @@ class NotificationLedger(private val records: EndpointRecords, private val clock
             if (message.direction == Direction.INCOMING && !message.policyEvent)
                 records.write("$PREFIX${message.conversationId}/${message.localId}", byteArrayOf(PENDING.toByte()))
         }
+        internal fun acceptedGroup(records:EndpointRecords,groupId:String,logicalId:String) {
+            require(GroupIds.valid(groupId) && GroupIds.valid(logicalId))
+            records.write("$PREFIX$groupId/$logicalId",byteArrayOf(PENDING.toByte()))
+        }
     }
     private fun state(key: String): Int {
         val bytes = records.read(key) ?: throw EndpointStorageFailure()
@@ -43,6 +47,14 @@ class NotificationLedger(private val records: EndpointRecords, private val clock
         records.keys(PREFIX).mapNotNull { key ->
             val parts = key.removePrefix(PREFIX).split('/')
             if (parts.size != 2) throw EndpointStorageFailure()
+            if(GroupIds.valid(parts[0])) {
+                val groupId=parts[0]
+                val local=records.read("app/group/member/$groupId")?.decodeToString()
+                val active=local?.let {GroupLedger(records,GroupTrustedPeer {false},it).status(groupId)}==GroupLocalStatus.ACTIVE
+                val groupMessage=if(active) GroupChatStore(records).message(groupId,parts[1]) else null
+                if(groupMessage==null || groupMessage.outgoing) {records.remove(key);return@mapNotNull null}
+                return@mapNotNull Entry(key,state(key),Presentation(null,null,null,false,false,false,groupMessage.localOrder))
+            }
             val message = unread[parts[0]]?.get(parts[1])
             val contact = contacts[parts[0]]
             if (message == null || contact == null) { records.remove(key); null }

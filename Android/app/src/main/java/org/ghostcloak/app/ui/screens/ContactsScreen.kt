@@ -3,6 +3,7 @@ package org.ghostcloak.app.ui.screens
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -21,10 +22,12 @@ import org.ghostcloak.identity.IdentityTrustState
 
 @Composable fun ContactsScreen(state: AppState, add: () -> Unit, open: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, directory: Boolean = false,
     archived:Boolean=false,showArchived:()->Unit={},unarchive:(String)->Unit={},back:()->Unit={},
-    acceptGroupInvite:(String)->Unit={},declineGroupInvite:(String)->Unit={}) {
+    acceptGroupInvite:(String)->Unit={},declineGroupInvite:(String)->Unit={},
+    openGroup:(String)->Unit={},createGroup:(String)->Unit={}) {
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
     var chatOptions by remember { mutableStateOf(false) }
+    var groupPicker by remember { mutableStateOf(false) }
     val source=when {
         directory -> state.contacts.filter { !it.contact.request && !it.contact.blocked }.sortedBy {it.contact.visibleName.lowercase()}
         archived -> ChatOrganization.archived(state.contacts,state.previews)
@@ -45,6 +48,7 @@ import org.ghostcloak.identity.IdentityTrustState
                     HeaderAction(Glyph.MORE,"Chat options") { chatOptions=true }
                     DropdownMenu(expanded=chatOptions,onDismissRequest={chatOptions=false}) {
                         DropdownMenuItem(text={Text("Archived chats")},onClick={chatOptions=false;showArchived()})
+                        DropdownMenuItem(text={Text("Create group")},onClick={chatOptions=false;groupPicker=true})
                     }
                 }
             }
@@ -86,7 +90,7 @@ import org.ghostcloak.identity.IdentityTrustState
                     }
                 }
             }
-            if(chats.isEmpty()) {
+            if(chats.isEmpty() && (directory || archived || state.groups.isEmpty())) {
                 Column(Modifier.weight(1f).fillMaxWidth().padding(GhostDimensions.roomy),verticalArrangement=Arrangement.Center,horizontalAlignment=Alignment.CenterHorizontally) {
                     Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer) {
                         Box(Modifier.size(GhostDimensions.emptyStateIcon),contentAlignment=Alignment.Center) {AppIcon(Glyph.CHAT,modifier=Modifier.size(GhostDimensions.featureIcon),tint=MaterialTheme.colorScheme.primary)}
@@ -97,6 +101,24 @@ import org.ghostcloak.identity.IdentityTrustState
                     Text(when {query.isNotEmpty()->"Try another name."; else->"Start with someone's Ghost Cloak ID."},style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(bottom=GhostLayout.pageInset)) {
+                if(!directory && !archived && state.groups.isNotEmpty()) {
+                    item {Text("GROUPS",Modifier.padding(start=GhostDimensions.tiny,bottom=GhostDimensions.controlGap),
+                        style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                    items(state.groups.size) {index ->
+                        val group=state.groups[index]
+                        Surface(onClick={openGroup(group.groupId)},shape=MaterialTheme.shapes.large,
+                            color=MaterialTheme.colorScheme.surface,
+                            modifier=Modifier.fillMaxWidth().padding(bottom=GhostDimensions.micro)) {
+                            Column(Modifier.padding(GhostDimensions.regular)) {
+                                Text("Group conversation",style=MaterialTheme.typography.titleMedium)
+                                Text("${group.memberCount} members · ${group.status.name.lowercase().replaceFirstChar(Char::uppercase)}",
+                                    style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                                group.messages.lastOrNull()?.let {Text(it.text,maxLines=1,
+                                    style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                            }
+                        }
+                    }
+                }
                 if(directory) item {Text("YOUR CONTACTS",Modifier.padding(start=GhostDimensions.tiny,bottom=GhostDimensions.controlGap),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
                 itemsIndexed(chats,key={_,status->status.contact.contactId}) { index,status ->
                     if(pinnedCount>0 && index==0) Text("Pinned",Modifier.padding(
@@ -114,4 +136,13 @@ import org.ghostcloak.identity.IdentityTrustState
         }
         }
     }
+    if(groupPicker) AlertDialog(onDismissRequest={groupPicker=false},title={Text("Create group")},
+        text={Column {
+            Text("Choose an accepted contact to invite first. Add others after they join.")
+            state.contacts.filter {it.groupCapable && !it.contact.request && !it.contact.blocked}.forEach {contact ->
+                TextButton(onClick={groupPicker=false;createGroup(contact.contact.remoteDeviceId)}) {
+                    Text(contact.contact.visibleName)
+                }
+            }
+        }},confirmButton={TextButton(onClick={groupPicker=false}) {Text("Close")}})
 }

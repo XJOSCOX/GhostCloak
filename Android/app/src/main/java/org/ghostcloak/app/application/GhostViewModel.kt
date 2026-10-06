@@ -21,6 +21,7 @@ data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? =
     val requireRequestConfirmation:Boolean=true,
     val blockedContacts:List<Contact> = emptyList(),
     val groupInvitations:List<GroupMembershipTransport.Invitation> = emptyList(),
+    val groups:List<GroupMembershipTransport.Conversation> = emptyList(),
     val forkedGroupCount:Int=0,
     val reactionsAvailable:Boolean=false,
     val deleteAvailable:Boolean=false,
@@ -97,6 +98,7 @@ class GhostViewModel internal constructor(application: Application, private val 
                         requireRequestConfirmation=active.requireRequestConfirmation(),
                         blockedContacts=if(identity!=null) active.blockedContacts() else emptyList(),
                         groupInvitations=if(identity!=null) runtime.groupInvitations() else emptyList(),
+                        groups=if(identity!=null) runtime.groupConversations() else emptyList(),
                         forkedGroupCount=if(identity!=null) runtime.forkedGroupCount() else 0,
                         cachedAttachments = runtime.cachedAttachments(selected),
                         disappearingPolicies = if (identity != null) active.policies() else emptyMap(),
@@ -165,6 +167,23 @@ class GhostViewModel internal constructor(application: Application, private val 
     }
     fun acceptRequest(id: String) = run { runtime.acceptRequest(it,id); pollingWake.trySend(Unit); null }
     fun createGroupAndInvite(id:String) = run { runtime.createGroupAndInvite(id); pollingWake.trySend(Unit); null }
+    fun createGroupAndOpen(id:String,opened:(String)->Unit)=run {
+        val groupId=runtime.createGroupAndInvite(id)
+        pollingWake.trySend(Unit)
+        withContext(Dispatchers.Main.immediate) {opened(groupId)}
+        null
+    }
+    fun sendGroupText(id:String,text:String,success:()->Unit)=run {
+        runtime.sendGroupText(id,text)
+        pollingWake.trySend(Unit)
+        withContext(Dispatchers.Main.immediate) {success()}
+        null
+    }
+    fun inviteToGroup(groupId:String,id:String)=run {
+        runtime.inviteToGroup(groupId,id)
+        pollingWake.trySend(Unit)
+        null
+    }
     fun acceptGroupInvite(id:String) = run { runtime.acceptGroupInvite(id); pollingWake.trySend(Unit); null }
     fun declineGroupInvite(id:String) = run { runtime.declineGroupInvite(id); null }
     fun deleteRequest(id: String) = run { it.deleteRequest(id); null }

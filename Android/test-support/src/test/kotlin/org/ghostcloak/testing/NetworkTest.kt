@@ -15,6 +15,74 @@ import java.net.URI
 import java.util.concurrent.Executors
 
 class NetworkTest {
+    @Test fun groupTextFanoutOfflineCatchupReplayAndRemoval() = runBlocking {
+        Fixture().use {f ->
+            val people=listOf(f.person("alice",true),f.person("bob",true),f.person("charlie",true))
+            val repos=people.associateWith {LocalRepository(it.records)}
+            val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
+                NetworkMailboxTransport(f.client(p),p.state))}
+            val groups=people.associateWith {p ->GroupMembershipTransport(p.records,repos.getValue(p),p.engine,p.state,
+                GroupAuthorityResolver(repos.getValue(p),p.engine,f.client(p),p.records),outboxes.getValue(p))}
+            val conversations=people.associateWith {p ->ConversationService(p.engine,repos.getValue(p)).also {it.open()}}
+            for(p in people) for(q in people) if(p!=q) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repos.getValue(p).save(Contact(RandomIdentifiers.create(),q.registration.accountId,q.name,q.registration.deviceId))
+                repos.getValue(p).groupPeer(q.registration.deviceId,true)
+            }
+            suspend fun push(p:Person) {
+                val outbox=outboxes.getValue(p)
+                outbox.pendingIds().forEach {id ->if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)}
+            }
+            suspend fun pull(p:Person,ack:Boolean=true):List<Delivery> {
+                val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                val deliveries=mailbox.fetch()
+                deliveries.forEach {conversations.getValue(p).acceptNetwork(EnvelopeCodec.decode(it.encryptedEnvelope))}
+                if(ack) mailbox.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+                groups.getValue(p).processPending()
+                return deliveries
+            }
+            val (a,b,c)=people
+            val groupId=groups.getValue(a).createAndInvite(b.registration.deviceId)
+            push(a);pull(b)
+            groups.getValue(b).accept(groups.getValue(b).invitations().single().id)
+            push(b);pull(a);push(a);pull(b)
+            groups.getValue(a).invite(groupId,c.registration.deviceId)
+            push(a);pull(c)
+            groups.getValue(c).accept(groups.getValue(c).invitations().single().id)
+            push(c);pull(a);push(a);pull(b);pull(c)
+            assertEquals(3,groups.getValue(a).state(groupId)!!.members.size)
+            val id=groups.getValue(a).sendText(groupId,"private group hello")
+            groups.getValue(a).processPending()
+            val sent=groups.getValue(a).conversation(groupId)!!.messages.single {it.logicalId==id}
+            assertEquals(2,sent.recipients.count {it.state==GroupRecipientState.SENT})
+            pull(b)
+            assertEquals(listOf("private group hello"),groups.getValue(b).conversation(groupId)!!.messages.map {it.text})
+            val notice=NotificationLedger(b.records).eligible().single {it.presentation.body==null}
+            assertNull(notice.presentation.name)
+            assertNull(notice.presentation.body)
+            // C is offline; replaying an unacknowledged FETCH after process recreation is idempotent.
+            val unacked=pull(c,false)
+            val restarted=GroupMembershipTransport(c.records,repos.getValue(c),c.engine,c.state,
+                GroupAuthorityResolver(repos.getValue(c),c.engine,f.client(c),c.records),outboxes.getValue(c))
+            unacked.forEach {conversations.getValue(c).acceptNetwork(EnvelopeCodec.decode(it.encryptedEnvelope))}
+            NetworkMailboxTransport(f.client(c),c.state).acknowledgeAccepted(unacked.map {it.serverMessageId})
+            restarted.processPending()
+            assertEquals(listOf("private group hello"),restarted.conversation(groupId)!!.messages.map {it.text})
+            val removed=groups.getValue(a).state(groupId)!!.members.single {it.deviceId==c.registration.deviceId}
+            val stale=groups.getValue(a).sendText(groupId,"stale unsent")
+            groups.getValue(a).removeMember(groupId,removed.memberId)
+            assertEquals(0,groups.getValue(a).conversation(groupId)!!.messages.single {it.logicalId==stale}
+                .recipients.count {it.state==GroupRecipientState.PENDING})
+            push(a);pull(b)
+            val fresh=groups.getValue(a).sendText(groupId,"after removal")
+            groups.getValue(a).processPending();pull(b)
+            assertTrue(groups.getValue(b).conversation(groupId)!!.messages.any {it.logicalId==fresh})
+            assertFalse(groups.getValue(c).conversation(groupId)!!.messages.any {it.logicalId==fresh})
+            assertFalse(f.database.dump().decodeToString().contains(groupId))
+        }
+    }
     @Test fun staleInvitationExpiresAndFreshInviteCanJoin() = runBlocking {
         Fixture().use {f ->
             val people=listOf(f.person("alice",true),f.person("bob",true),f.person("charlie",true))

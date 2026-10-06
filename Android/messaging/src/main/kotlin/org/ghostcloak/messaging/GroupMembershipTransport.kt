@@ -6,13 +6,15 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import org.ghostcloak.crypto.EndpointRecords
 import org.ghostcloak.crypto.SecureSessionEngine
+import org.ghostcloak.crypto.CryptoFailure
+import org.ghostcloak.crypto.CryptoError
 import org.ghostcloak.identity.RandomIdentifiers
 import org.ghostcloak.protocol.ApiFailure
 import org.ghostcloak.protocol.DeviceAuth
 import org.ghostcloak.protocol.NetworkCodec
 import java.security.MessageDigest
 
-/** P13.2 membership controls. Group content delivery is deliberately absent. */
+/** Signed membership and text fan-out over existing authenticated pairwise Signal sessions. */
 class GroupMembershipTransport(
     private val records:EndpointRecords,
     private val repository:LocalRepository,
@@ -22,6 +24,10 @@ class GroupMembershipTransport(
     private val outbox:DurableOutbox,
 ) {
     private val acceptanceMutex = Mutex()
+    private val textMutex = Mutex()
+    private val chats=GroupChatStore(records)
+    data class Conversation(val groupId:String,val status:GroupLocalStatus,val memberCount:Int,
+        val memberDevices:Map<String,String>,val messages:List<GroupChatMessage>,val invitationPending:Boolean=false)
     // Retry scheduling is only a transport throttle. The durable marker, not this clock,
     // is the authority for whether the group still needs a signed chain.
     private var lastResyncRequestNanos = 0L
@@ -191,8 +197,40 @@ class GroupMembershipTransport(
             GroupLedger(records,GroupTrustedPeer {false},member).isForked(id)
         }
     }
+    fun conversations():List<Conversation> = chats.groups().mapNotNull {id ->
+        val current=state(id) ?: return@mapNotNull null
+        val status=status(id) ?: return@mapNotNull null
+        val pending=records.transaction {
+            records.keys("app/group/outgoing/").any { key ->
+                val offer=NetworkCodec.decode<Outgoing>(records.read(key) ?: return@any false,16_384)
+                offer.offer.groupId==id && !offer.used
+            } || records.keys("app/group/admission/").any { key ->
+                val offer=NetworkCodec.decode<Outgoing>(records.read(key) ?: return@any false,16_384)
+                offer.offer.groupId==id
+            }
+        }
+        Conversation(id,status,current.members.size,current.members.associate {it.memberId to it.deviceId},chats.messages(id),pending)
+    }
+    fun conversation(id:String):Conversation?=conversations().firstOrNull {it.groupId==id}
+    /** Persist one logical message and its immutable recipient set before any pairwise enqueue. */
+    suspend fun sendText(groupId:String,text:String):String = textMutex.withLock {
+        val localId=localMember(groupId) ?: throw ApiFailure(409,"group_unavailable")
+        val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+        val current=ledger.state(groupId) ?: throw ApiFailure(409,"group_unavailable")
+        if(ledger.status(groupId)!=GroupLocalStatus.ACTIVE || current.lifecycle!=GroupLifecycle.ACTIVE ||
+            current.members.size<2 || current.members.none {it.memberId==localId})
+            throw ApiFailure(409,"group_unavailable")
+        trusted(listOf(current.members.single {it.memberId==localId}))
+        val logicalId=GroupIds.create()
+        val payload=GroupText(groupId=groupId,epoch=current.epoch,senderMemberId=localId,
+            logicalId=logicalId,text=text)
+        GroupTextCodec.validate(payload)
+        chats.create(GroupChatMessage(groupId,logicalId,current.epoch,localId,true,text,
+            chats.nextOrder(),current.members.filter {it.memberId!=localId}.map {GroupRecipient(it.deviceId)}))
+        logicalId
+    }
     /** Internal membership foundation; no group chat or role-management UI is exposed. */
-    suspend fun removeMember(groupId:String,targetMemberId:String) {
+    suspend fun removeMember(groupId:String,targetMemberId:String) = textMutex.withLock {
         val localId=localMember(groupId) ?: throw ApiFailure(404,"group_unavailable")
         val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
         val current=ledger.state(groupId) ?: throw ApiFailure(404,"group_unavailable")
@@ -206,6 +244,8 @@ class GroupMembershipTransport(
             network.signGroupStatement(GroupStatements.coordinator(current,change,next)))
         val result=GroupLedger(records,trusted,localId).apply(groupId,event) {
             val removedDevice=current.members.single {it.memberId==targetMemberId}.deviceId
+            chats.markRemoved(groupId,removedDevice)
+            chats.cancelStale(groupId,next.epoch)
             records.keys("app/group/fanout/$groupId/").filter {it.endsWith("/$removedDevice")}
                 .forEach(records::remove)
             for(member in next.members.filter {it.memberId!=localId})
@@ -245,7 +285,7 @@ class GroupMembershipTransport(
     }
 
     /** Pending plaintext never reaches UI before fresh P13.2A binding checks succeed. */
-    suspend fun processPending() {
+    suspend fun processPending() = textMutex.withLock {
         for((id,pending) in repository.pendingGroupControls()) {
             if(!repository.isActiveContact(pending.senderDeviceId)) {
                 repository.finishGroupControl(id);continue
@@ -272,6 +312,94 @@ class GroupMembershipTransport(
         }
         flushFanout()
         retryMarkedResync()
+        processPendingTexts()
+        flushTexts()
+    }
+    private suspend fun processPendingTexts() {
+        for((envelopeId,pending) in chats.pending()) {
+            val value=pending.text
+            val localId=localMember(value.groupId)
+            if(localId==null) {chats.discardPending(envelopeId);continue}
+            val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+            val current=ledger.state(value.groupId)
+            if(current==null || ledger.status(value.groupId)!=GroupLocalStatus.ACTIVE) {
+                chats.discardPending(envelopeId);continue
+            }
+            if(value.epoch>current.epoch) {
+                records.transaction {records.write("app/group/resync/${value.groupId}",byteArrayOf(1))}
+                continue // Only a complete signed resync chain can make this message displayable.
+            }
+            if(value.epoch!=current.epoch || !GroupMessageContext(value.groupId,value.epoch,
+                    value.senderMemberId,value.logicalId).allowedBy(current)) {
+                chats.discardPending(envelopeId);continue
+            }
+            val sender=current.members.singleOrNull {it.memberId==value.senderMemberId}
+            if(sender==null || sender.deviceId!=pending.senderDeviceId ||
+                !repository.isActiveContact(sender.deviceId)) {
+                chats.discardPending(envelopeId);continue
+            }
+            try {trusted(listOf(sender))}
+            catch(e:CancellationException) {throw e}
+            catch(_:ApiFailure) {continue} // Keep ciphertext-local pending record for later trust repair.
+            chats.accept(envelopeId,pending)
+        }
+    }
+    private suspend fun flushTexts() {
+        var budget=8
+        for(groupId in chats.groups()) {
+            if(budget<=0) break
+            val localId=localMember(groupId) ?: continue
+            val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+            val current=ledger.state(groupId) ?: continue
+            if(ledger.status(groupId)!=GroupLocalStatus.ACTIVE) continue
+            for(message in chats.messages(groupId).filter {it.outgoing}) {
+                if(budget<=0) break
+                // Epoch changes never reinterpret queued old-epoch text as current content.
+                if(message.epoch!=current.epoch) {chats.cancelStale(groupId,current.epoch);continue}
+                for(recipient in message.recipients) {
+                    if(budget<=0) break
+                    if(recipient.state !in setOf(GroupRecipientState.PENDING,GroupRecipientState.QUEUED)) continue
+                    // Include trust failures and offline peers in the bound; no single
+                    // recipient may monopolize a sync pass.
+                    budget--
+                    if(recipient.state==GroupRecipientState.PENDING) {
+                        if(current.members.none {it.deviceId==recipient.deviceId} ||
+                            !repository.isActiveContact(recipient.deviceId) || !repository.groupPeer(recipient.deviceId)) {
+                            chats.markUnavailable(groupId,message.logicalId,recipient.deviceId);continue
+                        }
+                        val member=current.members.single {it.deviceId==recipient.deviceId}
+                        try {trusted(listOf(member))} catch(e:CancellationException) {throw e}
+                        catch(_:ApiFailure) {continue}
+                        val payload=ConversationPayload.encodeGroupText(GroupText(groupId=groupId,
+                            epoch=message.epoch,senderMemberId=localId,logicalId=message.logicalId,text=message.text))
+                        try {outbox.enqueue(recipient.deviceId,payload) {id ->
+                            chats.markQueued(groupId,message.logicalId,recipient.deviceId,id)
+                        }} catch(e:CancellationException) {throw e}
+                        catch(_:ApiFailure) {continue}
+                        finally {payload.fill(0)}
+                    }
+                    val slot=chats.message(groupId,message.logicalId)?.recipients?.singleOrNull {
+                        it.deviceId==recipient.deviceId
+                    } ?: continue
+                    if(slot.state!=GroupRecipientState.QUEUED || slot.outboxId==null) continue
+                    val currentMember=current.members.singleOrNull {it.deviceId==recipient.deviceId} ?: continue
+                    try {trusted(listOf(currentMember))} catch(e:CancellationException) {throw e}
+                    catch(_:ApiFailure) {continue}
+                    val result=try {outbox.process(slot.outboxId)}
+                        catch(e:CancellationException) {throw e}
+                        catch(e:ApiFailure) {if(e.status==429) return else continue}
+                        catch(e:CryptoFailure) {
+                            if(e.error in setOf(CryptoError.IdentityChanged,CryptoError.UnknownSession,
+                                    CryptoError.ReauthenticationRequired)) continue
+                            throw e
+                        }
+                    if(result.state in setOf(OutboxState.SERVER_ACCEPTED,OutboxState.FAILED,OutboxState.SUBMISSION_EXPIRED)) {
+                        chats.markResult(slot.outboxId,result.state==OutboxState.SERVER_ACCEPTED)
+                        outbox.removeFinished(slot.outboxId)
+                    }
+                }
+            }
+        }
     }
     /** Delegated coordinator asks the online owner to co-sign this exact current-state admission. */
     private suspend fun receiveAdmissionRequest(sender:String,control:GroupControl) {
@@ -394,6 +522,7 @@ class GroupMembershipTransport(
         val event=GroupTransition(change,next,network.signGroupStatement(GroupStatements.actor(current,change,next)),
             network.signGroupStatement(GroupStatements.coordinator(current,change,next)))
         val result=GroupLedger(records,trusted,localId).apply(control.groupId,event) {
+            chats.cancelStale(control.groupId,next.epoch)
             records.write(outgoingKey(invite.inviteId),NetworkCodec.encode(outgoing.copy(used=true)))
             for(member in next.members.filter {it.memberId!=localId})
                 records.write(fanoutKey(next.groupId,next.revision,member.deviceId),
@@ -411,7 +540,9 @@ class GroupMembershipTransport(
             throw ApiFailure(409,"group_invalid")
         val candidates=prior.members+listOfNotNull(event.change.added)
         val trusted=trusted(candidates)
-        val result=GroupLedger(records,trusted,localId).apply(control.groupId,event)
+        val result=GroupLedger(records,trusted,localId).apply(control.groupId,event) {
+            chats.cancelStale(control.groupId,event.next.epoch)
+        }
         if(result==GroupApply.NEEDS_RESYNC) requestResync(control.groupId,prior)
         else if(result==GroupApply.FORKED) records.transaction {
             records.write("app/group/resync/${control.groupId}",byteArrayOf(1))
@@ -477,6 +608,7 @@ class GroupMembershipTransport(
         val ledger=GroupLedger(records,trusted,localId)
         val result=ledger.applySnapshot(control.groupId,GroupSnapshot(control.state!!,control.chain))
         if(result!=GroupApply.ACCEPTED) throw ApiFailure(409,"group_invalid")
+        chats.cancelStale(control.groupId,control.state.epoch)
         if(control.state.revision<control.headRevision!!) requestResync(control.groupId,control.state)
         else records.transaction {records.remove("app/group/resync/${control.groupId}")}
     }

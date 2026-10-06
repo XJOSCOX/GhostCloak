@@ -289,6 +289,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     }
     suspend fun retryNetwork(outbox:DurableOutbox)=action {
         val existing=outbox.pendingIds().toSet()
+        val groupOutbox=repository.groupOutboxIds()
         for(id in repository.profileCancellations()) {
             val entry=if(id in existing) outbox.get(id) else null
             if(entry!=null) {
@@ -298,6 +299,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             repository.profileCancellationDone(id)
         }
         for(id in outbox.pendingIds()) {
+            if(id in groupOutbox) continue // Group fan-out is processed under its membership-change barrier.
             val entry=outbox.get(id)
             if(repository.messages(entry.deviceId).any {it.localId==id && it.state==MessageState.EXPIRED_UNDELIVERED}) {
                 outbox.removeExpired(id);continue
@@ -383,6 +385,13 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         }
         engine.decryptAndCommit(envelope) { bytes ->
             val content = ConversationPayload.decode(bytes)
+            if(content.groupText!=null) {
+                if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
+                    repository.isActiveContact(contact.remoteDeviceId))
+                    repository.queueGroupText(contact.remoteDeviceId,envelope.envelopeId,content.groupText)
+                repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
+                return@decryptAndCommit
+            }
             if(content.groupControl!=null) {
                 // Authentication and ratchet/replay receipt commit together. Authority resolution
                 // can require a network request, so the control remains encrypted locally and

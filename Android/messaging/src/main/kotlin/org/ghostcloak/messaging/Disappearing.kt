@@ -39,7 +39,8 @@ object ConversationPayload {
         val supportsProfiles:Boolean=false,val profile:ProfileUpdate?=null,
         val supportsDelete:Boolean=false,val deleteTargetId:String?=null,
         val supportsEdit:Boolean=false,val edit:EditUpdate?=null,
-        val supportsGroups:Boolean=false,val groupControl:GroupControl?=null) {
+        val supportsGroups:Boolean=false,val groupControl:GroupControl?=null,
+        val groupText:GroupText?=null) {
         override fun toString() = "Content(redacted)"
     }
     private fun profileBytes(displayName:String?):ByteArray = displayName?.let {
@@ -131,6 +132,18 @@ object ConversationPayload {
             ByteBuffer.wrap(bytes).put(magic).put(1).put(13).putShort(0).putInt(0).putInt(body.size).put(body)
         }
     }
+    /** Type 14 is a group text inside a recipient-specific Signal envelope. */
+    fun encodeGroupText(value:GroupText):ByteArray {
+        val body=GroupTextCodec.encode(value)
+        try {
+            val size=((16+body.size+255)/256)*256
+            require(size<=4096)
+            return ByteArray(size).also { bytes ->
+                SecureRandom().nextBytes(bytes)
+                ByteBuffer.wrap(bytes).put(magic).put(1).put(14).putShort(0).putInt(0).putInt(body.size).put(body)
+            }
+        } finally {body.fill(0)}
+    }
     fun encodeAttachment(descriptor: org.ghostcloak.attachments.AttachmentDescriptor, displayName:String?=null,
         viewOnce:Boolean=false, caption:String=""): ByteArray {
         if(viewOnce) require(descriptor.kind==org.ghostcloak.attachments.AttachmentKind.IMAGE && caption.isBlank())
@@ -205,7 +218,7 @@ object ConversationPayload {
         if (!ByteArray(4).also { input.get(it) }.contentEquals(magic) || input.get().toInt() != 1)
             throw AppFailure(AppError.INVALID_TEXT)
         val type = input.get().toInt()
-        if (type !in 1..13 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
+        if (type !in 1..14 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
         val seconds = input.int; DisappearingTimer.from(seconds)
         val length = input.int
         if (length !in 0..MAX_TEXT || length > input.remaining() || (type in setOf(2,4) && length != 0) ||
@@ -270,6 +283,15 @@ object ConversationPayload {
                 catch (_:org.ghostcloak.protocol.ApiFailure) {throw AppFailure(AppError.INVALID_TEXT)}
                 finally {text.fill(0)}
             return Content("",0,true,groupControl=control,supportsGroups=true)
+        }
+        if(type==14) {
+            if(seconds!=0 || length !in 1..GroupTextCodec.MAX_BYTES ||
+                ((16+length+255)/256)*256!=bytes.size || bytes.size>4096) throw AppFailure(AppError.INVALID_TEXT)
+            val value=try {GroupTextCodec.decode(text)}
+                catch (_:IllegalArgumentException) {throw AppFailure(AppError.INVALID_TEXT)}
+                catch (_:org.ghostcloak.protocol.ApiFailure) {throw AppFailure(AppError.INVALID_TEXT)}
+                finally {text.fill(0)}
+            return Content("",0,true,groupText=value,supportsGroups=true)
         }
         val reply = if(type==7) {
             if(input.remaining()<37) throw AppFailure(AppError.INVALID_TEXT)

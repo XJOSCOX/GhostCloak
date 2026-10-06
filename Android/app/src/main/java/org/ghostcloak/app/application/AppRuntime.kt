@@ -258,6 +258,16 @@ class AppRuntime internal constructor(
     }
     fun groupInvitations():List<org.ghostcloak.messaging.GroupMembershipTransport.Invitation> =
         if(networkConfigured && !inDemo) network?.groupInvitations().orEmpty() else emptyList()
+    fun groupConversations():List<org.ghostcloak.messaging.GroupMembershipTransport.Conversation> =
+        if(networkConfigured && !inDemo) network?.groupConversations().orEmpty() else emptyList()
+    suspend fun sendGroupText(id:String,text:String):String {
+        check(networkConfigured && !inDemo)
+        return network!!.sendGroupText(id,text)
+    }
+    suspend fun inviteToGroup(groupId:String,id:String):String {
+        check(networkConfigured && !inDemo)
+        return network!!.inviteToGroup(groupId,id)
+    }
     fun forkedGroupCount():Int = if(networkConfigured && !inDemo) network?.forkedGroupCount() ?: 0 else 0
     suspend fun createGroupAndInvite(id:String):String {
         check(networkConfigured && !inDemo)

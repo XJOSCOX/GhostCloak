@@ -8,6 +8,29 @@ import org.junit.Test
 import java.io.*
 
 class PhotoCacheTest {
+    @Test fun explicitClearDropsDownloadedCiphertextButKeepsDescriptorAndAllowsRedownload()=runBlocking {
+        AttachmentTest.Fixture().use { f ->
+            val sender=f.person("cache-sender"); val recipient=f.person("cache-recipient")
+            val bytes=byteArrayOf(7,8,9)
+            val descriptor=sender.store.prepare(bytes.inputStream(),bytes.size.toLong(),AttachmentKind.IMAGE,0){true}
+            sender.store.upload(descriptor.id,sender.bulk){true}
+            recipient.store.cacheEncrypted(descriptor,"chat/message",recipient.bulk){true}
+            assertTrue(File(recipient.directory,"scratch").listFiles().orEmpty().isEmpty())
+            recipient.store.download(descriptor,"chat/message",noNetwork()){true}.close()
+            assertTrue(recipient.store.downloadedCacheBytes()>0)
+            recipient.store.clearDownloadedCache()
+            assertEquals(0L,recipient.store.downloadedCacheBytes())
+            assertNotNull(recipient.store.entry(descriptor.id))
+            recipient.store.cacheEncrypted(descriptor,"chat/message",recipient.bulk){true}
+            assertTrue(File(recipient.directory,"scratch").listFiles().orEmpty().isEmpty())
+            recipient.store.download(descriptor,"chat/message",noNetwork()){true}.use { verified ->
+                val output=ByteArrayOutputStream(); verified.copyTo(output)
+                assertArrayEquals(bytes,output.toByteArray())
+            }
+            assertTrue(recipient.store.downloadedCacheBytes()>0)
+            assertTrue(File(recipient.directory,"scratch").listFiles().orEmpty().isEmpty())
+        }
+    }
     private fun noNetwork()=object:BlobTransferClient {
         override suspend fun reserve(descriptor:AttachmentDescriptor):BlobResult=error("unexpected network")
         override suspend fun upload(descriptor:AttachmentDescriptor,ciphertext:File):BlobResult=error("unexpected network")

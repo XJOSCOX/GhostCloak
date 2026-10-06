@@ -132,6 +132,14 @@ class AttachmentPresentation(private val app: GhostApplication) {
             }
             check(expected)
             try {
+                val preset=app.runtime.privacyDefaults().voiceMask
+                check(expected)
+                mutable.value=mutable.value.copy(voiceMask=when(preset) {
+                    org.ghostcloak.messaging.VoiceMaskPreference.ORIGINAL -> VoiceMask.OFF
+                    org.ghostcloak.messaging.VoiceMaskPreference.SUBTLE -> VoiceMask.SUBTLE
+                    org.ghostcloak.messaging.VoiceMaskPreference.STRONG -> VoiceMask.STRONG
+                    org.ghostcloak.messaging.VoiceMaskPreference.SYNTHETIC -> VoiceMask.SYNTHETIC
+                })
                 file=voiceCapture.start(::stopVoiceRecording,::cancel)
                 check(expected)
                 mutable.value=mutable.value.copy(busy=false,recording=true)

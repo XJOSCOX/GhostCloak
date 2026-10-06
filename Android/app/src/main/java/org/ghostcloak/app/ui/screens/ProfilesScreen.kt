@@ -72,7 +72,7 @@ import org.ghostcloak.protocol.GhostCloakIds
             Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Share with accepted contacts",style=MaterialTheme.typography.titleMedium)
-                    Text("Your name, About and photo are sent only inside encrypted conversations.",
+                    Text("Your name, About and photo are sent only inside encrypted conversations. Turning this off stops future updates; it cannot erase details contacts already received.",
                         style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Switch(checked=state.ownProfile.sharing,onCheckedChange=setSharing,enabled=!state.loading)

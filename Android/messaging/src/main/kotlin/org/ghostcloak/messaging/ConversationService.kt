@@ -36,6 +36,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         repository.updateLocalProfile(photo=bytes,changePhoto=true)
     }
     suspend fun setProfileSharing(value:Boolean):LocalProfile=action {repository.updateLocalProfile(sharing=value)}
+    suspend fun privacyDefaults():PrivacyDefaults=action {repository.privacyDefaults()}
+    suspend fun privacyDefaults(value:PrivacyDefaults)=action {repository.privacyDefaults(value)}
     private fun profilePayload(id:String):ByteArray {
         val me=identity ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
         val local=repository.localProfile()
@@ -89,7 +91,10 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             return@action repository.contact(card.deviceId)
         }
         repository.card(card.deviceId, text)
-        Contact(RandomIdentifiers.create(), card.userId, GhostCloakIds.display(card.ghostCloakId), card.deviceId, ghostCloakId=card.ghostCloakId).also(repository::save)
+        Contact(RandomIdentifiers.create(), card.userId, GhostCloakIds.display(card.ghostCloakId), card.deviceId, ghostCloakId=card.ghostCloakId).also {
+            repository.save(it)
+            repository.applyDefaultPolicyIfNew(card.deviceId,queueControl=true)
+        }
     }
     suspend fun contacts(): List<ContactStatus> = action {
         repository.expireRequests()
@@ -263,7 +268,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 repository.clock.now().wall, MessageState.PENDING, disappearingSeconds = seconds, policyEvent = control,
                 viewOnceKind=if(viewOnce) ViewOnceKind.TEXT else null,replyTo=replyTo)
             repository.save(message)
-            if (control) repository.policy(id, seconds)
+            if (control) {repository.policy(id, seconds);repository.clearPendingDefaultTimer(id)}
         } } finally { bytes.fill(0) }
         val result = try { outbox.process(submission) { repository.acceptedOutgoing(id, it.submissionId,it.envelopeId) } }
             catch (_: org.ghostcloak.protocol.ApiFailure) { return message }
@@ -328,6 +333,17 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             val bytes=profilePayload(peer)
             try { outbox.enqueue(peer,bytes) { repository.profileIntent(peer,it) } }
             finally { bytes.fill(0) }
+        }
+        // Acceptance wrote this intent before exposing the conversation. The control is
+        // cleared only in the same durable transaction that enqueues its encrypted outbox entry.
+        for((peer,seconds) in repository.pendingDefaultTimers()) {
+            try { networkAllowed(peer) } catch (_: AppFailure) { continue }
+            catch (e: CryptoFailure) {
+                if(e.error in setOf(CryptoError.IdentityChanged,CryptoError.UnknownSession,CryptoError.ReauthenticationRequired)) continue
+                throw e
+            }
+            if(seconds>0) enqueueNetwork(peer,"",seconds,true,outbox)
+            else repository.clearPendingDefaultTimer(peer)
         }
     }
     suspend fun acceptNetwork(envelope:EncryptedEnvelope, sender:SenderProfile? = null, serverAcceptedAt:Long?=null)=action {
@@ -438,13 +454,14 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         val contact = repository.contact(id)
         if (contact.blocked) throw AppFailure(AppError.BLOCKED)
         if(contact.request) {
-            if(outbox==null || (!repository.localProfile().sharing && !repository.profilePeer(id))) repository.acceptRequest(id)
+            if(outbox==null || (!repository.localProfile().sharing && !repository.profilePeer(id)))
+                repository.acceptRequest(id,queueDefaultControl=outbox!=null)
             else {
                 identity ?: if(repository.hasIdentity()) engine.createIdentity("Local").also { identity=it }
                     else throw AppFailure(AppError.CONTACT_UNAVAILABLE)
                 val bytes=profilePayload(id)
                 try { outbox.enqueue(id,bytes) { submission ->
-                    repository.acceptRequest(id) { repository.profileIntent(id,submission) }
+                    repository.acceptRequest(id,{ repository.profileIntent(id,submission) },queueDefaultControl=true)
                 } } finally { bytes.fill(0) }
             }
         }

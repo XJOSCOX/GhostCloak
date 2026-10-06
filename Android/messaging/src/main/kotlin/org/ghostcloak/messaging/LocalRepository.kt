@@ -23,6 +23,12 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         try { records.write(key, bytes) } finally { bytes.fill(0) }
     }
     fun hasIdentity() = records.transaction { records.read("local/device") != null }
+    fun privacyDefaults():PrivacyDefaults=records.transaction {
+        (read<PrivacyDefaults>("app/privacy-defaults") ?: PrivacyDefaults()).validated()
+    }
+    fun privacyDefaults(value:PrivacyDefaults)=records.transaction {
+        put("app/privacy-defaults",value.validated())
+    }
     fun requireRequestConfirmation():Boolean=records.transaction {read<Boolean>("app/request-privacy") ?: true}
     fun requireRequestConfirmation(value:Boolean)=records.transaction {
         // Freeze old request presentation before changing the default.
@@ -94,6 +100,14 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         }
     }
     fun isActiveContact(id:String)=relationshipState(id)==RelationshipState.ACCEPTED_CONTACT
+    /** Snapshot the global default only once; subsequent global changes never touch this chat. */
+    fun applyDefaultPolicyIfNew(id:String,queueControl:Boolean)=records.transaction {
+        val seconds=privacyDefaults().disappearingSeconds
+        if(seconds>0 && records.read("app/disappearing/$id")==null) {
+            policy(id,seconds)
+            if(queueControl) records.write("app/default-timer-pending/$id",byteArrayOf(1))
+        }
+    }
     fun activateRetainedContact(id:String,card:String)=records.transaction {
         val c=contact(id)
         if(c.blocked) throw AppFailure(AppError.BLOCKED)
@@ -121,6 +135,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         records.remove("app/delete-peer/$id")
         records.remove("app/edit-peer/$id")
         records.keys("app/edit/$id/").forEach(records::remove)
+        records.remove("app/default-timer-pending/$id")
     }
     fun removeContact(id:String)=records.transaction {
         endAcceptedRelationship(id,RequestState.REJECTED,false)
@@ -189,7 +204,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         expired.forEach {finishRequest(it.remoteDeviceId,RequestState.EXPIRED)}
         expired.size
     }
-    fun acceptRequest(id:String, onAccepted:()->Unit = {}) {
+    fun acceptRequest(id:String, onAccepted:()->Unit = {}, queueDefaultControl:Boolean=false) {
         val failure=records.transaction {
             expireRequests()
             val r=request(id)
@@ -197,7 +212,9 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 r.state!=RequestState.PENDING || requestExpired(id) -> "request_expired"
                 r.grace.boot!=clock.now().boot && serverNow()==null -> "request_time_unavailable"
                 else -> {save(contact(id).copy(request=false));finishRequest(id,RequestState.ACCEPTED)
-                    records.write("app/profile/ready/$id",byteArrayOf(1));onAccepted();null}
+                    records.write("app/profile/ready/$id",byteArrayOf(1))
+                    applyDefaultPolicyIfNew(id,queueDefaultControl)
+                    onAccepted();null}
             }
         }
         // Throw outside the transaction so rejecting Accept cannot roll back expiry cleanup.
@@ -403,6 +420,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         val id=message.conversationId;val localId=message.localId
         save(message.copy(body="",viewOnceState=ViewOnceState.CONSUMED))
         records.remove("app/attachment/$id/$localId")
+        records.remove("app/auto-download/$id/$localId")
         NotificationLedger.remove(records,id,localId)
         val readKey="app/read/$id"
         val seen=read<List<String>>(readKey).orEmpty()
@@ -410,6 +428,13 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     }
     fun policy(id: String): Int = records.transaction { read<Int>("app/disappearing/$id")?.also { DisappearingTimer.from(it) } ?: 0 }
     fun policy(id: String, seconds: Int) = records.transaction { DisappearingTimer.from(seconds); put("app/disappearing/$id", seconds) }
+    fun pendingDefaultTimers():Map<String,Int> = records.transaction {
+        records.keys("app/default-timer-pending/").associate { key ->
+            val id=key.removePrefix("app/default-timer-pending/")
+            id to policy(id)
+        }
+    }
+    fun clearPendingDefaultTimer(id:String)=records.transaction {records.remove("app/default-timer-pending/$id")}
     fun expire(conversationId: String? = null): Int = records.transaction {
         val now = clock.now()
         val prefix = if (conversationId == null) "app/message/" else "app/message/$conversationId/"
@@ -473,6 +498,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
             viewOnceKind=null,viewOnceState=null,replyTo=null)
     private fun removeTargetState(id:String,target:String,localId:String) {
         records.remove("app/attachment/$id/$localId")
+        records.remove("app/auto-download/$id/$localId")
         records.keys("app/reaction/$id/$target/").forEach(records::remove)
         NotificationLedger.remove(records,id,localId)
     }
@@ -585,6 +611,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
             records.remove("app/outgoing-envelope/$id/$target")
         }
         records.remove("app/attachment/$id/$localId")
+        records.remove("app/auto-download/$id/$localId")
         records.remove("app/message/$id/$localId")
         val readKey = "app/read/$id"
         val remaining = read<List<String>>(readKey).orEmpty().filterNot { it == localId }
@@ -597,9 +624,11 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun clear(id: String) = records.transaction {
         records.keys("app/reaction/$id/").forEach(records::remove)
         records.keys("app/attachment/$id/").forEach(records::remove)
+        records.keys("app/auto-download/$id/").forEach(records::remove)
         records.keys("app/message/$id/").forEach(records::remove)
         records.keys("app/edit/$id/").forEach(records::remove)
         records.keys("app/outgoing-envelope/$id/").forEach(records::remove)
+        records.remove("app/default-timer-pending/$id")
         records.remove("app/read/$id")
         NotificationLedger.clear(records, id)
         records.remove("app/retained-history/$id")
@@ -642,9 +671,40 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         message!=null && message.activeExpiry?.reached(clock.now())!=true && contact!=null && isActiveContact(id) && hasAttachment(id,localId) &&
             (message.viewOnceKind==null || message.viewOnceState==ViewOnceState.REVEALING)
     }
+    fun autoDownloadDescriptor(id:String,localId:String):org.ghostcloak.attachments.AttachmentDescriptor?=records.transaction {
+        val message=read<Message>("app/message/$id/$localId") ?: return@transaction null
+        if(!isActiveContact(id) || message.direction!=Direction.INCOMING || message.deleted ||
+            message.viewOnceKind!=null || message.activeExpiry?.reached(clock.now())==true) return@transaction null
+        attachment(id,localId)
+    }
+    fun autoDownloadEnabled(kind:org.ghostcloak.attachments.AttachmentKind):Boolean=records.transaction {
+        val preferences=privacyDefaults()
+        when(kind) {
+            org.ghostcloak.attachments.AttachmentKind.IMAGE -> preferences.photos
+            org.ghostcloak.attachments.AttachmentKind.VOICE_NOTE -> preferences.voiceNotes
+            org.ghostcloak.attachments.AttachmentKind.DOCUMENT -> preferences.documents
+            else -> DownloadPreference.MANUAL
+        }==DownloadPreference.AUTOMATIC
+    }
+    fun pendingAutoDownloads():List<Pair<String,String>> = records.transaction {
+        records.keys("app/auto-download/").map {key ->
+            val parts=key.removePrefix("app/auto-download/").split('/')
+            if(parts.size!=2 || !RandomIdentifiers.valid(parts[0]) || !RandomIdentifiers.valid(parts[1]))
+                throw EndpointStorageFailure()
+            parts[0] to parts[1]
+        }
+    }
+    fun clearPendingAutoDownload(id:String,localId:String)=records.transaction {
+        records.remove("app/auto-download/$id/$localId")
+    }
+    fun clearAllPendingAutoDownloads()=records.transaction {
+        records.keys("app/auto-download/").forEach(records::remove)
+    }
     fun attachment(id:String,localId:String,bytes:ByteArray) = records.transaction {
-        org.ghostcloak.attachments.AttachmentFormat.decode(bytes)
+        val descriptor=org.ghostcloak.attachments.AttachmentFormat.decode(bytes)
         records.write("app/attachment/$id/$localId",bytes)
+        if(autoDownloadEnabled(descriptor.kind) && autoDownloadDescriptor(id,localId)!=null)
+            records.write("app/auto-download/$id/$localId",byteArrayOf(1))
     }
     fun accepted(sender:String,id:String,hash:ByteArray):Boolean=records.transaction {
         val existing=records.read("app/accepted/$sender/$id") ?: return@transaction false

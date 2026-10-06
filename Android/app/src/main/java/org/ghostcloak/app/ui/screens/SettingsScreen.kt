@@ -13,36 +13,21 @@ import org.ghostcloak.app.BuildConfig
 import org.ghostcloak.app.ui.components.*
 
 @Composable fun SettingsScreen(state: AppState, developerAvailable: Boolean,
-    demo: () -> Unit, leave: () -> Unit, connect:()->Unit={}, sync:()->Unit={}, publish:()->Unit={}, logout:()->Unit={}, appLock:()->Unit={}, requestPrivacy:(Boolean)->Unit={}, blockedContacts:()->Unit={}, emergencyWipe:()->Unit={}, inactiveProtection:()->Unit={}) {
+    demo: () -> Unit, leave: () -> Unit, connect:()->Unit={}, sync:()->Unit={}, publish:()->Unit={}, logout:()->Unit={}, appLock:()->Unit={}, requestPrivacy:(Boolean)->Unit={}, blockedContacts:()->Unit={}, emergencyWipe:()->Unit={}, inactiveProtection:()->Unit={}, privacy:()->Unit={}) {
     var advanced by remember { mutableStateOf(false) }
     PageContent("Settings") {
         ErrorNotice(state.error, important = state.errorImportant)
         SettingsGroup("Appearance") { AppearanceSelector() }
-        SettingsGroup("Privacy & Security") {
-            OutlinedButton(onClick=blockedContacts,enabled=!state.loading) {Text("Blocked contacts")}
-            Text("Message request privacy",style=MaterialTheme.typography.titleMedium)
-            Text("Require confirmation hides message content and attachments until you accept the request.")
-            Row(verticalAlignment=Alignment.CenterVertically) {
-                Text(if(state.requireRequestConfirmation) "Require confirmation" else "Show request messages immediately",Modifier.weight(1f))
-                Switch(state.requireRequestConfirmation,onCheckedChange=requestPrivacy,enabled=!state.loading)
-            }
-            Text("Changes apply to future requests. Existing hidden requests stay hidden.",style=MaterialTheme.typography.bodySmall)
-            DetailRow(Glyph.SHIELD,"Encrypted on this device","Your conversations and keys are kept in encrypted local storage.")
-            Text("Screenshots and task previews are protected. Optional app lock controls access to your screens; background delivery continues.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-            if (org.ghostcloak.app.access.LocalAppLock.current != null) {
-                OutlinedButton(onClick = appLock) { Text("App lock") }
-                OutlinedButton(onClick = inactiveProtection) { Text("Inactive Device Protection") }
-                if (org.ghostcloak.app.BuildConfig.EMERGENCY_PIN_ARMING_ENABLED) {
-                    OutlinedButton(onClick=emergencyWipe) { Text("Safe Exit") }
-                }
-            }
+        SettingsGroup("Privacy") {
+            Text("Messaging, media, profile, notifications and device protection in one place.")
+            OutlinedButton(onClick=privacy,enabled=!state.loading) {Text("Open Privacy settings")}
         }
-        if (!state.demo && state.networkConfigured) NotificationSettings()
         if(!state.demo) SettingsGroup("Connection") {
             if(state.networkConfigured) {
                 NetworkActions(state,connect,sync)
                 Text("Background checks are best-effort and may be delayed by Android. Notification detail follows your local privacy setting and App Lock.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 if(state.networkConnected) TextButton(onClick=logout,enabled=!state.loading) {Text("Disconnect and revoke session")}
+                Text("Disconnect revokes the current server session. Your local encrypted identity, conversations and contacts remain. Safe Exit is the destructive local action.",style=MaterialTheme.typography.bodySmall)
                 TextButton(onClick={advanced=!advanced}) {Text(if(advanced) "Hide connection details" else "Connection details")}
                 if(advanced) {
                     Text("The service can see routing metadata. Keystore: ${state.protection.lowercase()}.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)

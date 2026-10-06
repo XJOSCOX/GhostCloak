@@ -13,6 +13,9 @@ import org.ghostcloak.app.ui.theme.GhostCloakTheme
 import org.ghostcloak.attachments.AttachmentKind
 import org.ghostcloak.crypto.*
 import org.ghostcloak.identity.RandomIdentifiers
+import org.ghostcloak.messaging.LocalRepository
+import org.ghostcloak.messaging.PrivacyDefaults
+import org.ghostcloak.messaging.VoiceMaskPreference
 import org.ghostcloak.storage.*
 import org.junit.Assert.*
 import org.junit.Before
@@ -48,6 +51,9 @@ class LocalDestructionAndroidTest {
             assertEquals(LocalOperationState.NONE,f.journal.read())
             assertNull(DurableInactivityStore(f).read())
             assertTrue(f.own.all {f.real.absent(it)})
+            EncryptedEndpointStore.open(f,f.endpoint).use {records ->
+                assertEquals(PrivacyDefaults(),LocalRepository(records).privacyDefaults())
+            }
         } finally {f.retireKeys()}
     }
     private class Crash : RuntimeException("synthetic_interruption")
@@ -80,6 +86,7 @@ class LocalDestructionAndroidTest {
             EncryptedEndpointStore.open(this,endpoint).use {records ->
                 SignalProtocolEngine(records).createIdentity("fixture")
                 records.transaction {records.write("synthetic",byteArrayOf(1,2,3))}
+                LocalRepository(records).privacyDefaults(PrivacyDefaults(voiceMask=VoiceMaskPreference.STRONG))
             }
             KeystoreDeviceAuth(gate).publicKey(auth,true)
             KeystoreDeviceAuth().publicKey(unrelated,true)
@@ -115,6 +122,7 @@ class LocalDestructionAndroidTest {
                 org.ghostcloak.app.attachments.ProfilePhotoPreparation.prepare(avatarInput)
             } finally {avatarInput.delete()}
             a.use {it.setAbout("synthetic profile");it.setProfilePhoto(normalizedAvatar)}
+            a.use {it.privacyDefaults(PrivacyDefaults(voiceMask=VoiceMaskPreference.STRONG))}
             assertEquals("synthetic profile",a.use {it.localProfile()}.about)
             assertArrayEquals(normalizedAvatar,a.use {it.localProfile()}.photo)
             assertNotNull(a.ownGhostCloakId())
@@ -152,6 +160,7 @@ class LocalDestructionAndroidTest {
                 compose.waitUntil(20000) {model.state.value.ready && !model.state.value.loading}
                 compose.onNodeWithText("Create identity").assertExists()
                 assertNull(model.state.value.identity); assertTrue(model.state.value.contacts.isEmpty())
+                assertEquals(PrivacyDefaults(),model.state.value.privacyDefaults)
                 assertEquals("",model.state.value.ownProfile.about)
                 assertNull(model.state.value.ownProfile.photo)
                 assertEquals(requestCount,api.requests)

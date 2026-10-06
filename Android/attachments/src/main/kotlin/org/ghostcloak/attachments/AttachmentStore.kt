@@ -76,6 +76,12 @@ class AttachmentStore(private val records: EndpointRecords, root: File,
         it.state in setOf(TransferState.READY,TransferState.UPLOADED) &&
             (file(downloads,it.descriptor.id).exists() || (it.upload && file(uploads,it.descriptor.id).exists()))
     }.flatMap { it.references }.toSet()
+    /** Explicit user action: discard only downloaded ciphertext, never sent/upload copies or descriptors. */
+    fun clearDownloadedCache() {
+        invalidate()
+        check(downloads.listFiles()?.filter { it.isFile }?.all { it.delete() || !it.exists() } != false)
+    }
+    fun downloadedCacheBytes():Long=downloads.listFiles()?.filter {it.isFile}?.sumOf {it.length()} ?: 0L
     private fun update(entry:TransferEntry,state:TransferState) = records.transaction {
         val current=this.entry(entry.descriptor.id) ?: error("attachment_unavailable")
         TransferEntry(entry.descriptor,state,current.upload,entry.createdAt,current.references).also(::save)
@@ -129,6 +135,43 @@ class AttachmentStore(private val records: EndpointRecords, root: File,
     }
     /** Foreground photo callers must pass the same accepted-contact/presentation gate as manual opens.
      * Future view-once needs a separate durable opening gate and must not use automatic callers. */
+    suspend fun cacheEncrypted(descriptor:AttachmentDescriptor,reference:String,client:BlobTransferClient,
+        allowed:()->Boolean)=transfer {
+        val epoch=generation.get();checkpoint(epoch,allowed)
+        val safe=AttachmentFormat.decode(AttachmentFormat.encode(descriptor))
+        require(reference.length in 1..256)
+        val previous=entry(safe.id)
+        if(previous!=null) require(previous.descriptor.digest.contentEquals(safe.digest) &&
+            previous.descriptor.key.contentEquals(safe.key))
+        val ownCopy=previous?.upload==true && previous.references.isNotEmpty() &&
+            file(uploads,safe.id).exists()
+        if(ownCopy) return@transfer
+        val ciphertext=file(downloads,safe.id)
+        val cached=ciphertext.exists() && ciphertext.length()==safe.ciphertextLength &&
+            java.security.MessageDigest.isEqual(AttachmentFormat.digest(ciphertext),safe.digest)
+        if(!cached && safe.kind==AttachmentKind.IMAGE)
+            admitPhoto((safe.ciphertextLength-ciphertext.length()).coerceAtLeast(0),safe.id)
+        if(!cached && safe.kind==AttachmentKind.DOCUMENT)
+            require(entries().filter {it.descriptor.kind==AttachmentKind.DOCUMENT && it.descriptor.id!=safe.id}
+                .sumOf {file(downloads,it.descriptor.id).length()}+safe.ciphertextLength<=100L*1048576)
+        require(directory.usableSpace>=(if(cached) 0 else safe.ciphertextLength)+1048576)
+        var saved=TransferEntry(safe,TransferState.DOWNLOADING,previous?.upload==true,
+            previous?.createdAt ?: System.currentTimeMillis(),previous?.references.orEmpty()+reference)
+        records.transaction {checkpoint(epoch,allowed);save(saved)}
+        try {
+            if(!cached) {ciphertext.delete();client.download(safe,ciphertext)}
+            checkpoint(epoch,allowed)
+            check(ciphertext.length()==safe.ciphertextLength &&
+                java.security.MessageDigest.isEqual(AttachmentFormat.digest(ciphertext),safe.digest))
+            saved=update(saved,TransferState.READY)
+            ciphertext.setLastModified(System.currentTimeMillis())
+            emit(AttachmentEvent.ATTACH_DOWNLOAD_SUCCESS)
+        } catch(failure:Throwable) {
+            if(!cached) ciphertext.delete()
+            failed(saved);emit(AttachmentEvent.ATTACH_DOWNLOAD_FAILED)
+            throw failure
+        }
+    }
     suspend fun download(descriptor:AttachmentDescriptor,reference:String,client:BlobTransferClient,
         allowed:()->Boolean):VerifiedAttachment=transfer {
         val epoch=generation.get(); checkpoint(epoch,allowed)

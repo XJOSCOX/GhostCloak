@@ -17,6 +17,7 @@ import org.ghostcloak.transport.TransportFailure
 data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? = null,
     val ghostCloakId:String?=null,
     val ownProfile:LocalProfile=LocalProfile(),
+    val privacyDefaults:PrivacyDefaults=PrivacyDefaults(),
     val requireRequestConfirmation:Boolean=true,
     val blockedContacts:List<Contact> = emptyList(),
     val reactionsAvailable:Boolean=false,
@@ -87,6 +88,7 @@ class GhostViewModel internal constructor(application: Application, private val 
                         ?.let {id -> runCatching {active.editPeer(id)}.getOrDefault(false)} ?: false
                     mutable.value = mutable.value.copy(identity = identity, ghostCloakId=if(identity!=null) runtime.ownGhostCloakId() else null, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
                         ownProfile=if(identity!=null) active.localProfile() else LocalProfile(),
+                        privacyDefaults=active.privacyDefaults(),
                         reactionsAvailable=reactionsAvailable,
                         deleteAvailable=deleteAvailable,
                         editAvailable=editAvailable,
@@ -148,6 +150,15 @@ class GhostViewModel internal constructor(application: Application, private val 
         } finally { runtime.foregroundStopped(); foregroundMutex.unlock() }
     }
     fun requestPrivacy(required:Boolean)=run {it.requireRequestConfirmation(required);null}
+    fun setPrivacyDefaults(value:PrivacyDefaults)=run {it.privacyDefaults(value);null}
+    fun cacheBytes(result:(Long)->Unit)=viewModelScope.launch {
+        runCatching {runtime.downloadedCacheBytes()}.getOrNull()?.let {withContext(Dispatchers.Main) {result(it)}}
+    }
+    fun clearDownloadedCache(done:()->Unit)=run {
+        runtime.clearDownloadedCache()
+        withContext(Dispatchers.Main) {done()}
+        null
+    }
     fun acceptRequest(id: String) = run { runtime.acceptRequest(it,id); pollingWake.trySend(Unit); null }
     fun deleteRequest(id: String) = run { it.deleteRequest(id); null }
     fun refresh() = run()

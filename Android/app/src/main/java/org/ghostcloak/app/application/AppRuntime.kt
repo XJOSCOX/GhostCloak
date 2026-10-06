@@ -42,6 +42,7 @@ class AppRuntime internal constructor(
     private var network: NetworkController? = null
     private var notificationLedger: NotificationLedger? = null
     private var attachments: org.ghostcloak.attachments.AttachmentStore? = null
+    private var autoDownloadCursor=0
     @Volatile private var attachmentContacts:Set<String> = emptySet()
     private class AttachmentUiAccess(val accountEligible: Boolean = false,
         val messages: Map<Pair<String,String>,ExpiryDeadline?> = emptyMap())
@@ -257,7 +258,37 @@ class AppRuntime internal constructor(
         if (requested != null && requested != syncGeneration) return
         network!!.sync(service)
         syncGeneration++
+        autoDownload()
     }
+    private suspend fun autoDownload() {
+        if(!attachmentAllowed() || store==null || attachments==null) return
+        val repository=LocalRepository(store!!,expiryClock)
+        val pending=repository.pendingAutoDownloads()
+        if(pending.isEmpty()) {autoDownloadCursor=0;return}
+        val start=autoDownloadCursor%pending.size
+        val candidates=(pending.drop(start)+pending.take(start)).take(4)
+        autoDownloadCursor=(start+candidates.size)%pending.size
+        val cached=attachments!!.cachedReferences()
+        for((conversation,message) in candidates) {
+            if(!attachmentAllowed()) break
+            val descriptor=repository.autoDownloadDescriptor(conversation,message)
+            if(descriptor==null || !repository.autoDownloadEnabled(descriptor.kind) ||
+                "$conversation/$message" in cached) {repository.clearPendingAutoDownload(conversation,message);continue}
+            val allowed={attachmentAllowed() && repository.autoDownloadDescriptor(conversation,message)!=null}
+            try {
+                attachments!!.cacheEncrypted(descriptor,"$conversation/$message",
+                    network!!.blobClient(allowed,{check(allowed())}),allowed)
+                repository.clearPendingAutoDownload(conversation,message)
+            } catch(cancelled:kotlinx.coroutines.CancellationException) {throw cancelled}
+            catch (_:Exception) { /* Manual download stays available; never undo message ACK. */ }
+        }
+    }
+    internal suspend fun downloadedCacheBytes():Long=use { attachments?.downloadedCacheBytes() ?: 0L }
+    internal suspend fun clearDownloadedCache()=use {
+        attachments?.clearDownloadedCache()
+        LocalRepository(store!!,expiryClock).clearAllPendingAutoDownloads()
+    }
+    internal suspend fun privacyDefaults():PrivacyDefaults=use { it.privacyDefaults() }
     suspend fun addNetwork(ghostCloakId: String, service: ConversationService) { network!!.add(ghostCloakId, service) }
     suspend fun publishNetwork() { network!!.publish() }
     suspend fun logoutNetwork() {
@@ -346,6 +377,8 @@ class AppRuntime internal constructor(
         val descriptor=use { check(attachmentAllowed()); it.attachment(conversation,message) ?: error("attachment_missing") }
         val allowed = { attachmentAllowed() && conversation in attachmentContacts &&
             LocalRepository(store!!,expiryClock).attachmentAvailable(conversation,message) }
-        attachments!!.download(descriptor,"$conversation/$message",network!!.blobClient(allowed,{check(allowed())}),allowed)
+        attachments!!.download(descriptor,"$conversation/$message",network!!.blobClient(allowed,{check(allowed())}),allowed).also {
+            LocalRepository(store!!,expiryClock).clearPendingAutoDownload(conversation,message)
+        }
     }
 }

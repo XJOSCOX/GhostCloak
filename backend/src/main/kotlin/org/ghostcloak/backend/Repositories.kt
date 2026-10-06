@@ -18,6 +18,20 @@ interface BackendDatabase : AccountRepository, DeviceRepository, PreKeyRepositor
     fun mailboxForRecipient(id: String): List<MailboxRow> = mailbox.all().filter { it.recipientRoutingId == id }
     fun submissionByServerId(id: String): List<SubmissionRow> = submissions.all().filter { it.serverId == id }
     fun countSubmissionsForSender(id: String): Int = submissions.all().count { it.sender == id }
+    fun countLiveSubmissions(now: Long, sender: String? = null, legacy: Boolean = false): Int =
+        submissions.all().count { row ->
+            (sender == null || row.sender == sender) &&
+                ((row.id.substringAfter('/', "").startsWith("s3") && !legacy && row.expiresAt >= now) ||
+                    (!row.id.substringAfter('/', "").startsWith("s3") && legacy))
+        }
+    /** Only intrinsically expired V3 receipts may be retired; legacy UUIDs remain durable. */
+    fun retireSubmissions(now: Long, limit: Int = 128): Int {
+        require(limit in 1..128)
+        val ids = submissions.all().filter { it.id.substringAfter('/', "").startsWith("s3") && it.expiresAt < now }
+            .sortedWith(compareBy<SubmissionRow> { it.expiresAt }.thenBy { it.id }).take(limit).map { it.id }
+        ids.forEach(submissions::remove)
+        return ids.size
+    }
     fun mailboxUsageForRecipient(id: String): MailboxUsage {
         val rows = mailboxForRecipient(id)
         return MailboxUsage(rows.size, rows.sumOf { it.encryptedEnvelope.size.toLong() })

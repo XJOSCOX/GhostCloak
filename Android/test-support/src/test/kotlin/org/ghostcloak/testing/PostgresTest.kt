@@ -378,6 +378,204 @@ class PostgresTest {
             assertEquals(before,f.db.transaction {f.db.mailbox.size() to f.db.submissions.size()})
         }
     }
+    @Test fun v009RetiresOnlyExpiredV3AndLateRetryCannotResurrect()=runBlocking {
+        Fixture().use { f ->
+            var now=System.currentTimeMillis()
+            val clock=object:Clock() {
+                override fun getZone()=ZoneOffset.UTC
+                override fun withZone(zone:ZoneId)=this
+                override fun instant()=Instant.ofEpochMilli(now)
+                override fun millis()=now
+            }
+            val server=MailboxService(f.db,clock,rate=RateLimiter{_,_,_->true})
+            val a=register(server,"sender"); val b=register(server,"recipient")
+            a.engine.establishSession(b.registration.bundles.single().remote())
+            val wire=EnvelopeCodec.encode(a.engine.encrypt(b.registration.deviceId,"fixture".toByteArray()))
+            val oldId=SubmissionIds.create(now+1000)
+            val newId=SubmissionIds.create(now+100000)
+            val legacyId=RandomIdentifiers.create()
+            val oldRequest=ApiRequest.Send(oldId,b.registration.routingId,wire)
+            val oldServerId=call(server,a,oldRequest).serverMessageId!!
+            call(server,a,ApiRequest.Send(newId,b.registration.routingId,wire))
+            call(server,a,ApiRequest.Send(legacyId,b.registration.routingId,wire))
+            call(server,b,ApiRequest.Ack(listOf(oldServerId)))
+            assertEquals(3,f.db.transaction { f.db.submissions.size() })
+            assertEquals(0,f.db.retireSubmissions(now+1000)) // expiry is inclusive
+            now+=1001
+            assertEquals(1,f.db.retireSubmissions(now)) // direct call, no transaction wrapper
+            assertEquals(0,f.db.retireSubmissions(now))
+            f.db.transaction {
+                assertNull(f.db.submissions.get(a.registration.deviceId+"/"+oldId))
+                assertNotNull(f.db.submissions.get(a.registration.deviceId+"/"+newId))
+                assertNotNull(f.db.submissions.get(a.registration.deviceId+"/"+legacyId))
+                assertEquals(1,f.db.countLiveSubmissions(now,a.registration.deviceId))
+                assertEquals(1,f.db.countLiveSubmissions(now,a.registration.deviceId,legacy=true))
+            }
+            assertEquals(0,f.db.transaction { f.db.mailbox.size() - 2 })
+            try { call(server,a,oldRequest); fail("late retry accepted") }
+            catch(e:ApiFailure) { assertEquals(410,e.status); assertEquals("submission_expired",e.code) }
+            assertEquals(2,f.db.transaction { f.db.mailbox.size() })
+            f.source.connection.use { c -> c.createStatement().use { s ->
+                listOf("SELECT","INSERT","UPDATE","DELETE").forEach { privilege ->
+                    s.executeQuery("SELECT has_table_privilege(current_user,'${f.schema}.message_deduplication','$privilege')").use { r ->
+                        assertTrue(r.next()); assertTrue("missing $privilege",r.getBoolean(1))
+                    }
+                }
+                s.executeQuery("SELECT count(*) FROM pg_indexes WHERE schemaname='${f.schema}' AND indexname IN ('dedupe_v3_retirement','dedupe_v3_live_sender')").use { r ->
+                    assertTrue(r.next()); assertEquals(2,r.getInt(1))
+                }
+            } }
+        }
+    }
+    @Test fun v008ToV009MigrationPreservesReceiptsAndRejectsUnmigratedRuntime()=runBlocking {
+        Fixture().use { f ->
+            val sender=register(f.service(),"sender")
+            val legacy=sender.registration.deviceId+"/"+RandomIdentifiers.create()
+            val v3=sender.registration.deviceId+"/"+SubmissionIds.create(System.currentTimeMillis()+60_000)
+            f.db.transaction { listOf(legacy,v3).forEach { id ->
+                f.db.submissions.put(id,SubmissionRow(id,sender.registration.deviceId,ByteArray(32),RandomIdentifiers.create(),System.currentTimeMillis()+60_000))
+            } }
+            f.source.connection.use { c -> c.createStatement().use { s ->
+                s.execute("DROP INDEX ${f.schema}.dedupe_v3_retirement")
+                s.execute("DROP INDEX ${f.schema}.dedupe_v3_live_sender")
+                s.execute("DELETE FROM ${f.schema}.schema_history WHERE version=9")
+            } }
+            assertThrows(IllegalStateException::class.java) { PostgresDatabase(f.source) }
+            val upgraded=PostgresDatabase(f.source,migrate=true)
+            upgraded.transaction {
+                assertNotNull(upgraded.submissions.get(legacy))
+                assertNotNull(upgraded.submissions.get(v3))
+                assertEquals(1,upgraded.countLiveSubmissions(System.currentTimeMillis()))
+                assertEquals(1,upgraded.countLiveSubmissions(System.currentTimeMillis(),legacy=true))
+            }
+            assertTrue(upgraded.healthy())
+        }
+    }
+    @Test fun v3LiveCapsIsolateSendersAndExpiredRowsReleaseCapacity()=runBlocking {
+        Fixture().use { f ->
+            var now=System.currentTimeMillis()
+            val clock=object:Clock() {
+                override fun getZone()=ZoneOffset.UTC
+                override fun withZone(zone:ZoneId)=this
+                override fun instant()=Instant.ofEpochMilli(now)
+                override fun millis()=now
+            }
+            val server=MailboxService(f.db,clock,rate=RateLimiter{_,_,_->true})
+            val a=register(server,"A"); val b=register(server,"B")
+            a.engine.establishSession(b.registration.bundles.single().remote())
+            val wire=EnvelopeCodec.encode(a.engine.encrypt(b.registration.deviceId,"fixture".toByteArray()))
+            fun request(id:String)=ApiRequest.Send(id,b.registration.routingId,wire)
+            val syntheticExpiry=now+1000
+            f.source.connection.use { c -> c.prepareStatement("""INSERT INTO ${f.schema}.message_deduplication
+                (id,sender_device_id,payload_hash,server_message_id,expires_at,mailbox_expires_at)
+                SELECT ?||'/s3'||lpad(to_hex(g),31,'0'),?,decode(repeat('aa',32),'hex'),
+                '00000000-0000-0000-0000-'||lpad(to_hex(g),12,'0'),?,?
+                FROM generate_series(1,?) g""").use { p ->
+                p.setString(1,a.registration.deviceId);p.setString(2,a.registration.deviceId)
+                p.setLong(3,syntheticExpiry);p.setLong(4,syntheticExpiry)
+                p.setInt(5,DeliveryCapacity.SENDER_LIVE_V3);p.executeUpdate()
+            } }
+            assertEquals(DeliveryCapacity.SENDER_LIVE_V3,f.db.transaction {f.db.countLiveSubmissions(now,a.registration.deviceId)})
+            assertEquals(429,assertThrows(ApiFailure::class.java) {call(server,a,request(SubmissionIds.create(now+60_000)))}.status)
+            b.engine.establishSession(a.registration.bundles.single().remote())
+            val otherWire=EnvelopeCodec.encode(b.engine.encrypt(a.registration.deviceId,"unrelated".toByteArray()))
+            assertNotNull(call(server,b,ApiRequest.Send(SubmissionIds.create(now+60_000),a.registration.routingId,otherWire)).serverMessageId)
+            now+=1001
+            assertEquals(128,f.db.retireSubmissions(now))
+            assertEquals(0,f.db.transaction {f.db.countLiveSubmissions(now,a.registration.deviceId)})
+            assertNotNull(call(server,a,request(SubmissionIds.create(now+60_000))).serverMessageId)
+        }
+    }
+    @Test fun concurrentLateSendAckStatusAndRetirementNeverResurrect()=runBlocking {
+        Fixture().use { f ->
+            var now=System.currentTimeMillis()
+            val clock=object:Clock() {
+                override fun getZone()=ZoneOffset.UTC
+                override fun withZone(zone:ZoneId)=this
+                override fun instant()=Instant.ofEpochMilli(now)
+                override fun millis()=now
+            }
+            val server=MailboxService(f.db,clock,rate=RateLimiter{_,_,_->true})
+            val a=register(server,"A");val b=register(server,"B")
+            a.engine.establishSession(b.registration.bundles.single().remote())
+            val wire=EnvelopeCodec.encode(a.engine.encrypt(b.registration.deviceId,"fixture".toByteArray()))
+            val id=SubmissionIds.create(now+1000)
+            val request=ApiRequest.Send(id,b.registration.routingId,wire)
+            val serverId=call(server,a,request).serverMessageId!!
+            val senderToken=a.state.read();val recipientToken=b.state.read()
+            now+=1001
+            val pool=Executors.newFixedThreadPool(4)
+            val start=CountDownLatch(1)
+            try {
+                val retry=pool.submit<Int> {start.await();try {server.execute(request,senderToken);0} catch(e:ApiFailure) {e.status}}
+                val ack=pool.submit {start.await();server.execute(ApiRequest.Ack(listOf(serverId)),recipientToken)}
+                val status=pool.submit<DeliveryStatus> {start.await();server.execute(ApiRequest.Fetch(submissionIds=listOf(id),retention=true),senderToken).statuses.single()}
+                val cleanup=pool.submit<Int> {start.await();f.db.retireSubmissions(now)}
+                start.countDown()
+                assertEquals(410,retry.get(10,TimeUnit.SECONDS))
+                ack.get(10,TimeUnit.SECONDS)
+                assertEquals(id,status.get(10,TimeUnit.SECONDS).submissionId)
+                assertTrue(cleanup.get(10,TimeUnit.SECONDS) in 0..1)
+                assertNull(f.db.transaction {f.db.submissions.get(a.registration.deviceId+"/"+id)})
+                assertNull(f.db.transaction {f.db.mailbox.get(serverId)})
+            } finally { start.countDown();pool.shutdownNow() }
+        }
+    }
+    @Test fun globalLiveCapRejectsAnotherV3WithoutAffectingLegacyPartition()=runBlocking {
+        Fixture().use { f ->
+            val now=System.currentTimeMillis()
+            val server=f.service()
+            val senders=(0 until 8).map {register(server,"S$it")}
+            val recipient=register(server,"recipient")
+            f.source.connection.use { c -> c.prepareStatement("""INSERT INTO ${f.schema}.message_deduplication
+                (id,sender_device_id,payload_hash,server_message_id,expires_at,mailbox_expires_at)
+                SELECT ?||'/s3'||lpad(to_hex(g),31,'0'),?,decode(repeat('aa',32),'hex'),
+                '00000000-0000-0000-0000-'||lpad(to_hex(g),12,'0'),?,?
+                FROM generate_series(1,12500) g""").use { p ->
+                senders.forEach { person ->
+                    p.setString(1,person.registration.deviceId);p.setString(2,person.registration.deviceId)
+                    p.setLong(3,now+60_000);p.setLong(4,now+60_000);p.executeUpdate()
+                }
+            } }
+            assertEquals(DeliveryCapacity.GLOBAL_LIVE_V3,f.db.transaction {f.db.countLiveSubmissions(now)})
+            val sender=senders.first()
+            sender.engine.establishSession(recipient.registration.bundles.single().remote())
+            val wire=EnvelopeCodec.encode(sender.engine.encrypt(recipient.registration.deviceId,"fixture".toByteArray()))
+            val request=ApiRequest.Send(SubmissionIds.create(now+60_000),recipient.registration.routingId,wire)
+            assertEquals(429,assertThrows(ApiFailure::class.java) {call(server,sender,request)}.status)
+            assertEquals(0,f.db.transaction {f.db.countLiveSubmissions(now,legacy=true)})
+        }
+    }
+    @Test fun mailboxRowByteAndMinuteSendBudgetsStayBounded()=runBlocking {
+        Fixture().use { f ->
+            val server=f.service()
+            val a=register(server,"sender");val b=register(server,"recipient")
+            a.engine.establishSession(b.registration.bundles.single().remote())
+            val wire=EnvelopeCodec.encode(a.engine.encrypt(b.registration.deviceId,"fixture".toByteArray()))
+            fun send()=call(server,a,ApiRequest.Send(SubmissionIds.create(System.currentTimeMillis()+60_000),b.registration.routingId,wire))
+            fun fill(rows:Int, bytes:Int) {
+                val now=System.currentTimeMillis()
+                f.source.connection.use { c -> c.prepareStatement("""INSERT INTO ${f.schema}.mailbox_messages
+                    (id,recipient_routing_id,encrypted_envelope,received_at,expires_at)
+                    SELECT '00000000-0000-0000-0000-'||lpad(to_hex(g),12,'0'),?,
+                    decode(repeat('aa',?),'hex'),?,? FROM generate_series(1,?) g""").use { p ->
+                    p.setString(1,b.registration.routingId);p.setInt(2,bytes)
+                    p.setLong(3,now);p.setLong(4,now+60_000);p.setInt(5,rows);p.executeUpdate()
+                } }
+            }
+            fill(128,131_072)
+            assertEquals("mailbox_full",assertThrows(ApiFailure::class.java) {send()}.code)
+            f.source.connection.use {c->c.createStatement().use {it.execute("DELETE FROM ${f.schema}.mailbox_messages")}}
+            fill(DeliveryCapacity.RECIPIENT_MAILBOX_ROWS,1)
+            assertEquals("mailbox_full",assertThrows(ApiFailure::class.java) {send()}.code)
+            val rate=PostgresRateLimiter(f.db)
+            val principal="isolated-send-principal"
+            val minute=System.currentTimeMillis()
+            repeat(60) {assertTrue(rate.allow(ServerOperation.SEND,principal,minute))}
+            assertFalse(rate.allow(ServerOperation.SEND,principal,minute))
+            assertTrue(rate.allow(ServerOperation.SEND,principal,minute+60_000))
+        }
+    }
     @Test fun postgresHttpDeliveryRestartDedupeAckAndDump()=runBlocking {
         Fixture().use {f->
             var service=f.service()
@@ -534,6 +732,24 @@ class PostgresTest {
                 while(worker.completedCycles==0L && System.nanoTime()<deadline) Thread.sleep(20)
                 assertTrue("retention worker did not complete its first cycle",worker.completedCycles>0L)
                 assertTrue("successful retention cycle must leave health ready",worker.healthy)
+            }
+        }
+    }
+    @Test fun retentionWorkerRetiresV3AndKeepsHealthReady()=runBlocking {
+        Fixture().use { f ->
+            val sender=register(f.service(),"sender")
+            val old=sender.registration.deviceId+"/"+SubmissionIds.create(System.currentTimeMillis()-1)
+            val legacy=sender.registration.deviceId+"/"+RandomIdentifiers.create()
+            f.db.transaction {
+                f.db.submissions.put(old,SubmissionRow(old,sender.registration.deviceId,ByteArray(32),RandomIdentifiers.create(),System.currentTimeMillis()-1))
+                f.db.submissions.put(legacy,SubmissionRow(legacy,sender.registration.deviceId,ByteArray(32),RandomIdentifiers.create(),System.currentTimeMillis()-1))
+            }
+            RetentionWorker(f.service(),f.db).use { worker ->
+                val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(10)
+                while(worker.completedCycles==0L && System.nanoTime()<deadline) Thread.sleep(20)
+                assertTrue(worker.completedCycles>0)
+                assertTrue(worker.healthy)
+                f.db.transaction { assertNull(f.db.submissions.get(old)); assertNotNull(f.db.submissions.get(legacy)) }
             }
         }
     }

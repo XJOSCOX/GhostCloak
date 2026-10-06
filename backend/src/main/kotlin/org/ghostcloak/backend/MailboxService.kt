@@ -38,6 +38,16 @@ class BackendPolicy(val audience: String = "ghostcloak.local", val challengeTtl:
     val sessionTtl: Long = 300000, val mailboxTtl: Long = 604800000, val dedupeTtl: Long = 2592000000) {
     init { require(audience.matches(Regex("[a-z0-9.-]{1,100}"))); require(challengeTtl in 1000..120000 && sessionTtl in 1000..900000 && mailboxTtl in 1000..604800000 && dedupeTtl in mailboxTtl..2592000000) }
 }
+/** Transport limits; one logical five-member group text consumes four SENDs. */
+object DeliveryCapacity {
+    const val SENDER_LIVE_V3 = 16_384
+    const val GLOBAL_LIVE_V3 = 100_000
+    const val LEGACY_SENDER = 1_024
+    const val LEGACY_GLOBAL = 10_000
+    const val RECIPIENT_MAILBOX_ROWS = 512
+    const val GLOBAL_MAILBOX_ROWS = 20_000
+    const val RECIPIENT_MAILBOX_BYTES = 16L * 1024 * 1024
+}
 class MailboxService(private val db: BackendDatabase, private val clock: Clock = Clock.systemUTC(),
     val policy: BackendPolicy = BackendPolicy(), private val rate: RateLimiter = DevelopmentRateLimiter(),
     private val logger: ServerLogger = ServerLogger { _, _ -> },
@@ -382,8 +392,16 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
             return ApiResponse(serverMessageId = old.serverId)
         }
         val usage = db.mailboxUsageForRecipient(target.routingId)
-        requireApi(usage.count < 128 && usage.bytes + r.encryptedEnvelope.size <= 8L * 1024 * 1024 && db.mailbox.size() < 2048, "mailbox_full", 429)
-        requireApi(db.countSubmissionsForSender(sender.id) < 1024 && db.submissions.size() < 10000, "submission_capacity", 429)
+        requireApi(usage.count < DeliveryCapacity.RECIPIENT_MAILBOX_ROWS &&
+            usage.bytes + r.encryptedEnvelope.size <= DeliveryCapacity.RECIPIENT_MAILBOX_BYTES &&
+            db.mailbox.size() < DeliveryCapacity.GLOBAL_MAILBOX_ROWS, "mailbox_full", 429)
+        if (format is SubmissionIds.Parsed.ExpiringV3) {
+            requireApi(db.countLiveSubmissions(receivedAt,sender.id) < DeliveryCapacity.SENDER_LIVE_V3 &&
+                db.countLiveSubmissions(receivedAt) < DeliveryCapacity.GLOBAL_LIVE_V3, "submission_capacity", 429)
+        } else {
+            requireApi(db.countLiveSubmissions(receivedAt,sender.id,legacy=true) < DeliveryCapacity.LEGACY_SENDER &&
+                db.countLiveSubmissions(receivedAt,legacy=true) < DeliveryCapacity.LEGACY_GLOBAL, "submission_capacity", 429)
+        }
         val serverId = RandomIdentifiers.create()
         // One authoritative millisecond sample/deadline for payload and sender receipt.
         val expiresAt = Math.addExact(receivedAt, policy.mailboxTtl)

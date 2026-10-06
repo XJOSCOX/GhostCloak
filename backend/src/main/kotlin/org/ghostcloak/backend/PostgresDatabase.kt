@@ -74,7 +74,14 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
                 execute("INSERT INTO schema_history VALUES (8,?)",allocationChecksum)
             }
             check(query("SELECT checksum FROM schema_history WHERE version=8") {it.getString(1)}.singleOrNull()==allocationChecksum) {"Migration validation failed"}
-            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 8) { "Unknown schema version" }
+            val retirementMigration=javaClass.getResourceAsStream("/db/V009__submission_retirement.sql")!!.use {it.readBytes()}
+            val retirementChecksum=DeviceAuth.digest(retirementMigration).joinToString("") {"%02x".format(it)}
+            if(migrate && query("SELECT version FROM schema_history WHERE version=9") {it.getInt(1)}.isEmpty()) {
+                retirementMigration.toString(Charsets.UTF_8).split(';').filter {it.isNotBlank()}.forEach {execute(it)}
+                execute("INSERT INTO schema_history VALUES (9,?)",retirementChecksum)
+            }
+            check(query("SELECT checksum FROM schema_history WHERE version=9") {it.getString(1)}.singleOrNull()==retirementChecksum) {"Migration validation failed"}
+            check(query("SELECT count(*) FROM schema_history") { it.getInt(1) }.single() == 9) { "Unknown schema version" }
         }
     }
     override fun expireMailbox(now:Long,limit:Int) {
@@ -141,6 +148,19 @@ class PostgresDatabase(private val source: DataSource, migrate: Boolean = false)
         MailboxUsage(it.getInt(1),it.getLong(2))
     }.single()
     override fun countSubmissionsForSender(id:String):Int = query("SELECT count(*) FROM message_deduplication WHERE sender_device_id=?",id) { it.getInt(1) }.single()
+    override fun countLiveSubmissions(now:Long,sender:String?,legacy:Boolean):Int {
+        val kind=if(legacy) "<>" else "="
+        val expiry=if(legacy) "" else " AND expires_at>=?"
+        val who=if(sender==null) "" else " AND sender_device_id=?"
+        val args=buildList<Any> {if(!legacy) add(now); if(sender!=null) add(sender)}
+        return query("SELECT count(*) FROM message_deduplication WHERE substring(id from 38 for 2) $kind 's3'$expiry$who",*args.toTypedArray()) {it.getInt(1)}.single()
+    }
+    override fun retireSubmissions(now:Long,limit:Int):Int {
+        require(limit in 1..128)
+        return transaction {
+            query("DELETE FROM message_deduplication WHERE id IN (SELECT id FROM message_deduplication WHERE substring(id from 38 for 2)='s3' AND expires_at<? ORDER BY expires_at,id LIMIT ?) RETURNING id",now,limit) {it.getString(1)}.size
+        }
+    }
     override fun submissionByServerId(id:String):List<SubmissionRow> = query("SELECT id,sender_device_id,payload_hash,server_message_id,expires_at,acknowledged,mailbox_expires_at FROM message_deduplication WHERE server_message_id=?",id) {
         SubmissionRow(it.getString(1),it.getString(2),it.getBytes(3),it.getString(4),it.getLong(5),it.getBoolean(6),it.getLong(7))
     }

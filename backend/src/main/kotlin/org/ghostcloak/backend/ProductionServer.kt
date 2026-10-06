@@ -91,7 +91,7 @@ class RetentionWorker(private val service:MailboxService,private val db:Postgres
     private val executor=Executors.newSingleThreadScheduledExecutor()
     @Volatile var healthy=true; private set
     @Volatile var completedCycles=0L; private set
-    init {executor.scheduleWithFixedDelay({try {service.cleanup(); db.expireAllocations(System.currentTimeMillis()); db.cleanupRateLimits(System.currentTimeMillis()); blobs?.cleanup(); completedCycles++; healthy=true} catch(_:Exception) {healthy=false}},0,30,TimeUnit.SECONDS)}
+    init {executor.scheduleWithFixedDelay({try {service.cleanup(); db.retireSubmissions(System.currentTimeMillis()); db.expireAllocations(System.currentTimeMillis()); db.cleanupRateLimits(System.currentTimeMillis()); blobs?.cleanup(); completedCycles++; healthy=true} catch(_:Exception) {healthy=false}},0,30,TimeUnit.SECONDS)}
     override fun close(){executor.shutdownNow()}
 }
 fun main(args:Array<String>) {

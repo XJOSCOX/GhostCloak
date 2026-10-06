@@ -132,7 +132,13 @@ class SubmissionProtocolTest {
         val freshServerId=a.call(ApiRequest.Send(freshId,b.registration.routingId,sent.encryptedEnvelope)).serverMessageId!!
         assertNotEquals(serverId,freshServerId)
         b.call(ApiRequest.Ack(listOf(freshServerId)))
+        now=expiry-1
+        assertEquals(serverId,a.call(sent).serverMessageId)
+        now=expiry
+        assertEquals(serverId,a.call(sent).serverMessageId)
+        assertEquals(0,db.transaction { db.retireSubmissions(now) })
         now=expiry+1
+        assertEquals(2,db.transaction { db.retireSubmissions(now) })
         db.transaction { db.submissions.remove(a.registration.deviceId+"/"+id) }
         val before=db.transaction { db.mailbox.size() to db.submissions.size() }
         assertEquals(410,assertThrows(ApiFailure::class.java) {a.call(sent)}.status)

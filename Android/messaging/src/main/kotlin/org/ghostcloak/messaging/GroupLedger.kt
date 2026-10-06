@@ -83,6 +83,12 @@ class GroupLedger(
             nextRevisions.all {it<=barrier.activationStateRevision}
     }
     fun state(id:String):GroupState?=records.transaction { load(id)?.state }
+    internal fun governanceHead(id:String):GovernanceHeadFoundationV1?=records.transaction {
+        load(id);governance.head(id)
+    }
+    internal fun governanceBarrier(id:String):GovernanceBarrierV1?=records.transaction {
+        load(id);governance.barrier(id)
+    }
     /** Recovery-only read for a pre-anchor legacy chain; never used to display group content. */
     internal fun stateForLegacyReplay(id:String):GroupState?=records.transaction {
         load(id,allowPreBarrierReplay=true)?.state
@@ -194,7 +200,8 @@ class GroupLedger(
 
     /** Dormant A6.1 primitive. Only a future verified governance entry may supply its head. */
     internal fun applyGovernedTransition(id:String,expectedHead:GovernanceHeadFoundationV1,
-        event:GroupTransition,nextHeadDigest:ByteArray):GroupApply=records.transaction {
+        event:GroupTransition,nextHeadDigest:ByteArray,
+        onAccepted:()->Unit={}):GroupApply=records.transaction {
         val barrier=governance.barrier(id) ?: return@transaction GroupApply.REJECTED
         val currentHead=governance.head(id) ?: error("governance_head_missing")
         if(!governance.matches(expectedHead,currentHead) ||
@@ -210,12 +217,13 @@ class GroupLedger(
         if(next==null || !governance.advance(expectedHead,next.state,nextHeadDigest))
             return@transaction GroupApply.REJECTED
         save(next)
+        onAccepted()
         result
     }
 
     /** Internal future-activation hook. Nothing in production invokes it in A6.1. */
     internal fun installGovernanceBarrierForFutureActivation(id:String,
-        activationDigest:ByteArray):GroupApply=records.transaction {
+        activationDigest:ByteArray,onInstalled:()->Unit={}):GroupApply=records.transaction {
         require(activationDigest.size==32)
         val record=load(id) ?: return@transaction GroupApply.REJECTED
         val current=record.state
@@ -239,6 +247,7 @@ class GroupLedger(
         governance.install(GovernanceBarrierV1(groupId=id,
             activationStateRevision=current.revision,activationStateDigest=digest,
             activationDigest=activationDigest,baselineCertificateDigest=certificate.digest))
+        onInstalled()
         GroupApply.ACCEPTED
     }
 

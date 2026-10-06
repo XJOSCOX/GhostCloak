@@ -384,7 +384,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 val maintenance=ConversationPayload.decodeBlockedGroupSystemContent(bytes)
                 if(maintenance!=null && signalDigest!=null)
                     repository.queueGroupScopedSystem(contact.remoteDeviceId,envelope.envelopeId,
-                        maintenance.groupControl!!,signalDigest,maintenance.supportsBaselineV1)
+                        maintenance.groupControl!!,signalDigest,maintenance.supportsBaselineV1,
+                        maintenance.supportsGovernanceV1)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
             }
             return@action
@@ -407,10 +408,11 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                     repository.isActiveContact(contact.remoteDeviceId)) {
                     repository.groupPeer(contact.remoteDeviceId,true)
                     repository.queueGroupControl(contact.remoteDeviceId,envelope.envelopeId,
-                        content.groupControl,content.supportsBaselineV1)
+                        content.groupControl,content.supportsBaselineV1,content.supportsGovernanceV1)
                 } else if(content.groupControl.kind.blockSafeMaintenance() && scopedDigest!=null) {
                     repository.queueGroupScopedSystem(contact.remoteDeviceId,envelope.envelopeId,
-                        content.groupControl,scopedDigest,content.supportsBaselineV1)
+                        content.groupControl,scopedDigest,content.supportsBaselineV1,
+                        content.supportsGovernanceV1)
                 }
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit

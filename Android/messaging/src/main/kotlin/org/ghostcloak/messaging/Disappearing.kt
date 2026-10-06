@@ -31,6 +31,7 @@ object ConversationPayload {
     private val compactGroupSupport = "GhostCloak/grp2!".toByteArray(Charsets.US_ASCII)
     private val admissionV2Support = "GC/admission-v2!".toByteArray(Charsets.US_ASCII)
     private val baselineV1Support = "GC/baseline-v1!".toByteArray(Charsets.US_ASCII)
+    private val governanceV1Support = "GC/governance-v1!".toByteArray(Charsets.US_ASCII)
     val reactionEmoji = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
     private val profileMarker = "GhostCloak/profile/v1!".toByteArray(Charsets.US_ASCII)
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
@@ -45,7 +46,7 @@ object ConversationPayload {
         val supportsDelete:Boolean=false,val deleteTargetId:String?=null,
         val supportsEdit:Boolean=false,val edit:EditUpdate?=null,
         val supportsGroups:Boolean=false,val supportsAdmissionV2:Boolean=false,
-        val supportsBaselineV1:Boolean=false,
+        val supportsBaselineV1:Boolean=false,val supportsGovernanceV1:Boolean=false,
         val groupControl:GroupControl?=null,
         val groupText:GroupText?=null) {
         override fun toString() = "Content(redacted)"
@@ -137,8 +138,18 @@ object ConversationPayload {
         return ByteArray(size).also { bytes ->
             SecureRandom().nextBytes(bytes)
             ByteBuffer.wrap(bytes).put(magic).put(1).put(13).putShort(0).putInt(0).putInt(body.size).put(body)
-            if(size-16-body.size>=baselineV1Support.size)
-                baselineV1Support.copyInto(bytes,16+body.size)
+            val padding=size-16-body.size
+            if(control.kind==GroupControlKind.GOVERNANCE_CAPABILITY_ECHO &&
+                padding<baselineV1Support.size+governanceV1Support.size &&
+                padding>=governanceV1Support.size) {
+                // Keep the legacy minimal frame: the echo can advertise at offset zero alone.
+                governanceV1Support.copyInto(bytes,16+body.size)
+            } else {
+                if(padding>=baselineV1Support.size)
+                    baselineV1Support.copyInto(bytes,16+body.size)
+                if(padding>=baselineV1Support.size+governanceV1Support.size)
+                    governanceV1Support.copyInto(bytes,16+body.size+baselineV1Support.size)
+            }
         }
     }
     /** Type 14 is a group text inside a recipient-specific Signal envelope. */
@@ -321,8 +332,17 @@ object ConversationPayload {
             val marker=bytes.size-16-length>=baselineV1Support.size &&
                 bytes.copyOfRange(16+length,16+length+baselineV1Support.size)
                     .contentEquals(baselineV1Support)
+            val governanceAfterBaseline=marker && bytes.size-16-length-baselineV1Support.size>=
+                governanceV1Support.size &&
+                bytes.copyOfRange(16+length+baselineV1Support.size,
+                    16+length+baselineV1Support.size+governanceV1Support.size)
+                    .contentEquals(governanceV1Support)
+            val governanceStandalone=control.kind==GroupControlKind.GOVERNANCE_CAPABILITY_ECHO &&
+                bytes.size-16-length>=governanceV1Support.size &&
+                bytes.copyOfRange(16+length,16+length+governanceV1Support.size)
+                    .contentEquals(governanceV1Support)
             return Content("",0,true,groupControl=control,supportsGroups=true,
-                supportsBaselineV1=marker)
+                supportsBaselineV1=marker,supportsGovernanceV1=governanceAfterBaseline || governanceStandalone)
         }
         if(type==14) {
             if(seconds!=0 || length !in 1..GroupTextCodec.MAX_BYTES ||

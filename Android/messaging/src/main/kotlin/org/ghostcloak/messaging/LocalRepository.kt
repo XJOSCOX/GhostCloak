@@ -373,18 +373,26 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun baselineV1Peer(id:String,supported:Boolean)=records.transaction {
         if(supported) records.write("app/group-baseline-v1-peer/$id",byteArrayOf(1))
     }
+    fun governanceV1Peer(id:String):Boolean=records.transaction {
+        records.read("app/group-governance-v1-peer/$id")?.contentEquals(byteArrayOf(1))==true
+    }
+    fun governanceV1Peer(id:String,supported:Boolean)=records.transaction {
+        if(supported) records.write("app/group-governance-v1-peer/$id",byteArrayOf(1))
+    }
     fun queueGroupControl(senderId:String,envelopeId:String,control:GroupControl,
-        baselineV1Advertised:Boolean=false)=records.transaction {
+        baselineV1Advertised:Boolean=false,governanceV1Advertised:Boolean=false)=records.transaction {
         require(isActiveContact(senderId) && RandomIdentifiers.valid(envelopeId))
         val keys=records.keys("app/group-control/pending/")
         require(keys.size<128)
         records.write("app/group-control/pending/$envelopeId",
             NetworkCodec.encode(PendingGroupControl(senderId,control,
-                baselineV1Advertised=baselineV1Advertised)))
+                baselineV1Advertised=baselineV1Advertised,
+                governanceV1Advertised=governanceV1Advertised)))
     }
     /** Called only after Signal authentication, inside its decrypt-and-commit transaction. */
     fun queueGroupScopedSystem(senderId:String,envelopeId:String,control:GroupControl,
-        signalDigest:ByteArray,baselineV1Advertised:Boolean=false)=records.transaction {
+        signalDigest:ByteArray,baselineV1Advertised:Boolean=false,
+        governanceV1Advertised:Boolean=false)=records.transaction {
         if(isActiveContact(senderId) || !RandomIdentifiers.valid(envelopeId) ||
             !control.kind.blockSafeMaintenance() ||
             GroupCurrentAuthority(records).current(control.groupId,senderId,signalDigest)==null)
@@ -393,7 +401,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         require(keys.size<128)
         records.write("app/group-control/pending/$envelopeId",
             NetworkCodec.encode(PendingGroupControl(senderId,control,groupScoped=true,
-                baselineV1Advertised=baselineV1Advertised)))
+                baselineV1Advertised=baselineV1Advertised,
+                governanceV1Advertised=governanceV1Advertised)))
         true
     }
     fun pendingGroupControls():List<Pair<String,PendingGroupControl>> = records.transaction {

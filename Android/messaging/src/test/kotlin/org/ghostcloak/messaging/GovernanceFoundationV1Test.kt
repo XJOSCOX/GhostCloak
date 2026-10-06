@@ -298,4 +298,35 @@ class GovernanceFoundationV1Test {
                 sign(other.owner.key,GroupStatements.genesis(other.state))))))
         assertThrows(IllegalStateException::class.java) {other.ledger.state(other.state.groupId)}
     }
+    @Test fun activationEvidenceAndEntryEvidenceRollbackWithLedgerBoundary() {
+        val f=fixture();baseline(f)
+        val id=f.state.groupId
+        val activation=DeviceAuth.digest(byteArrayOf(81))
+        val evidenceKey="app/group/governance-v1/commit/$id"
+        f.records.failPrefix="app/group/governance-v1/commit/"
+        assertThrows(IllegalStateException::class.java) {
+            f.ledger.installGovernanceBarrierForFutureActivation(id,activation) {
+                f.records.write(evidenceKey,byteArrayOf(1))
+            }
+        }
+        assertNull(GovernanceFoundationStore(f.records).barrier(id))
+        assertNull(GovernanceFoundationStore(f.records).head(id))
+        f.records.failPrefix=null
+        assertEquals(GroupApply.ACCEPTED,f.ledger.installGovernanceBarrierForFutureActivation(
+            id,activation) {f.records.write(evidenceKey,byteArrayOf(1))})
+        assertArrayEquals(byteArrayOf(1),f.records.read(evidenceKey))
+        val head=checkNotNull(GovernanceFoundationStore(f.records).head(id))
+        val event=profile(f,f.state)
+        val entryKey="app/group/governance-v1/entry/$id"
+        f.records.failPrefix="app/group/governance-v1/entry/"
+        assertThrows(IllegalStateException::class.java) {
+            f.ledger.applyGovernedTransition(id,head,event,DeviceAuth.digest(byteArrayOf(82))) {
+                f.records.write(entryKey,byteArrayOf(2))
+            }
+        }
+        assertEquals(f.state.revision,f.ledger.state(id)!!.revision)
+        assertTrue(GovernanceFoundationStore(f.records).matches(head,
+            checkNotNull(GovernanceFoundationStore(f.records).head(id))))
+        f.records.failPrefix=null
+    }
 }

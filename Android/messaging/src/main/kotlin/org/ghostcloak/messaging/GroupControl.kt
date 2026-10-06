@@ -10,7 +10,12 @@ enum class GroupControlKind { INVITE, ACCEPT, INVITE_EXPIRED, STATE_UPDATE, RESY
     RESYNC_RESPONSE, ADMISSION_REQUEST, ADMISSION_RESPONSE,
     ADMISSION_V2_PROPOSAL, ADMISSION_V2_APPROVAL, ADMISSION_V2_EVIDENCE_REQUEST,
     ADMISSION_V2_EVIDENCE_RESPONSE, BASELINE_V1_PROPOSAL, BASELINE_V1_APPROVAL,
-    BASELINE_V1_CERTIFICATE }
+    BASELINE_V1_CERTIFICATE,
+    GOVERNANCE_OWNER_SIGN_REQUEST, GOVERNANCE_OWNER_SIGN_RESPONSE,
+    GOVERNANCE_ACTIVATION_PROPOSAL, GOVERNANCE_ACTIVATION_ACK,
+    GOVERNANCE_ACTIVATION_COMMIT, GOVERNANCE_ACTIVATION_INSTALLED_ACK,
+    GOVERNANCE_ACTIVATION_READY, GOVERNANCE_ENTRY, GOVERNANCE_ENTRY_APPLIED_ACK,
+    GOVERNANCE_CAPABILITY_ECHO }
 
 /** Only internal maintenance is permitted through a blocked canonical group relationship. */
 internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
@@ -19,7 +24,12 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     GroupControlKind.ADMISSION_V2_PROPOSAL, GroupControlKind.ADMISSION_V2_APPROVAL,
     GroupControlKind.ADMISSION_V2_EVIDENCE_REQUEST, GroupControlKind.ADMISSION_V2_EVIDENCE_RESPONSE,
     GroupControlKind.BASELINE_V1_PROPOSAL, GroupControlKind.BASELINE_V1_APPROVAL,
-    GroupControlKind.BASELINE_V1_CERTIFICATE)
+    GroupControlKind.BASELINE_V1_CERTIFICATE,
+    GroupControlKind.GOVERNANCE_OWNER_SIGN_REQUEST,GroupControlKind.GOVERNANCE_OWNER_SIGN_RESPONSE,
+    GroupControlKind.GOVERNANCE_ACTIVATION_PROPOSAL,GroupControlKind.GOVERNANCE_ACTIVATION_ACK,
+    GroupControlKind.GOVERNANCE_ACTIVATION_COMMIT,GroupControlKind.GOVERNANCE_ACTIVATION_INSTALLED_ACK,
+    GroupControlKind.GOVERNANCE_ACTIVATION_READY,GroupControlKind.GOVERNANCE_ENTRY,
+    GroupControlKind.GOVERNANCE_ENTRY_APPLIED_ACK,GroupControlKind.GOVERNANCE_CAPABILITY_ECHO)
 
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable data class GroupControl(
@@ -43,6 +53,13 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val baselineProposalV1:GroupAuthorityBaselineProposalV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val baselineApprovalV1:GroupAuthorityBaselineApprovalV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val baselineCertificateV1:GroupAuthorityBaselineCertificateV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceProposalV1:GroupGovernanceActivationProposalV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceAckV1:GroupGovernanceActivationAckV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceCommitV1:GroupGovernanceActivationCommitV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceInstalledV1:GroupGovernanceInstalledAckV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceReadyV1:GroupGovernanceReadyV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceEntryV1:GroupGovernanceEntryV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceEntryAckV1:GroupGovernanceEntryAppliedAckV1?=null,
 ) {
     override fun toString() = "GroupControl(redacted)"
 }
@@ -50,7 +67,8 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable data class PendingGroupControl(val senderDeviceId: String, val control: GroupControl,
     val groupScoped: Boolean = false,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) val baselineV1Advertised:Boolean=false) {
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val baselineV1Advertised:Boolean=false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceV1Advertised:Boolean=false) {
     override fun toString() = "PendingGroupControl(redacted)"
 }
 
@@ -88,6 +106,27 @@ object GroupControlCodec {
             NetworkCodec.encode(it).size<=GroupAuthorityBaselineV1.MAX_APPROVAL_BYTES)}
         control.baselineCertificateV1?.let {require(it.proposal.groupId==control.groupId &&
             NetworkCodec.encode(it).size<=GroupAuthorityBaselineV1.MAX_CERTIFICATE_BYTES)}
+        control.governanceProposalV1?.let {require(it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupGovernanceV1.MAX_PROPOSAL_BYTES)}
+        control.governanceAckV1?.let {require(it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupGovernanceV1.MAX_ACK_BYTES)}
+        control.governanceCommitV1?.let {require(it.proposal.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupGovernanceV1.MAX_COMMIT_BYTES)}
+        control.governanceInstalledV1?.let {require(it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupGovernanceV1.MAX_ACK_BYTES)}
+        control.governanceReadyV1?.let {require(it.commit.proposal.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupGovernanceV1.MAX_READY_BYTES)}
+        control.governanceEntryV1?.let {require(it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupGovernanceV1.MAX_ENTRY_BYTES)}
+        control.governanceEntryAckV1?.let {require(it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupGovernanceV1.MAX_ACK_BYTES)}
+        val governanceCount=listOf(control.governanceProposalV1,control.governanceAckV1,
+            control.governanceCommitV1,control.governanceInstalledV1,control.governanceReadyV1,
+            control.governanceEntryV1,control.governanceEntryAckV1).count {it!=null}
+        val governanceKind=control.kind.name.startsWith("GOVERNANCE_")
+        if(control.kind==GroupControlKind.GOVERNANCE_CAPABILITY_ECHO) require(governanceCount==0)
+        else if(governanceKind) require(governanceCount==1)
+        else require(governanceCount==0)
         val baselineAbsent=control.baselineProposalV1==null && control.baselineApprovalV1==null &&
             control.baselineCertificateV1==null
         if(control.kind !in setOf(GroupControlKind.BASELINE_V1_PROPOSAL,
@@ -186,6 +225,34 @@ object GroupControlCodec {
                         control.baselineProposalV1==null && control.baselineCertificateV1==null
                     GroupControlKind.BASELINE_V1_CERTIFICATE -> control.baselineCertificateV1!=null &&
                         control.baselineProposalV1==null && control.baselineApprovalV1==null
+                    else -> false
+                })
+            }
+            GroupControlKind.GOVERNANCE_OWNER_SIGN_REQUEST,
+            GroupControlKind.GOVERNANCE_OWNER_SIGN_RESPONSE,
+            GroupControlKind.GOVERNANCE_ACTIVATION_PROPOSAL,
+            GroupControlKind.GOVERNANCE_ACTIVATION_ACK,
+            GroupControlKind.GOVERNANCE_ACTIVATION_COMMIT,
+            GroupControlKind.GOVERNANCE_ACTIVATION_INSTALLED_ACK,
+            GroupControlKind.GOVERNANCE_ACTIVATION_READY,
+            GroupControlKind.GOVERNANCE_ENTRY,
+            GroupControlKind.GOVERNANCE_ENTRY_APPLIED_ACK,
+            GroupControlKind.GOVERNANCE_CAPABILITY_ECHO -> {
+                require(v2Absent && baselineAbsent && control.inviteId==null && control.state==null &&
+                    control.genesis==null && control.admission==null && control.invite==null &&
+                    control.transition==null && control.chain.isEmpty() && control.fromRevision==null &&
+                    control.fromDigest==null && control.headRevision==null)
+                require(when(control.kind) {
+                    GroupControlKind.GOVERNANCE_OWNER_SIGN_REQUEST,
+                    GroupControlKind.GOVERNANCE_OWNER_SIGN_RESPONSE,
+                    GroupControlKind.GOVERNANCE_ACTIVATION_PROPOSAL -> control.governanceProposalV1!=null
+                    GroupControlKind.GOVERNANCE_ACTIVATION_ACK -> control.governanceAckV1!=null
+                    GroupControlKind.GOVERNANCE_ACTIVATION_COMMIT -> control.governanceCommitV1!=null
+                    GroupControlKind.GOVERNANCE_ACTIVATION_INSTALLED_ACK -> control.governanceInstalledV1!=null
+                    GroupControlKind.GOVERNANCE_ACTIVATION_READY -> control.governanceReadyV1!=null
+                    GroupControlKind.GOVERNANCE_ENTRY -> control.governanceEntryV1!=null
+                    GroupControlKind.GOVERNANCE_ENTRY_APPLIED_ACK -> control.governanceEntryAckV1!=null
+                    GroupControlKind.GOVERNANCE_CAPABILITY_ECHO -> governanceCount==0
                     else -> false
                 })
             }

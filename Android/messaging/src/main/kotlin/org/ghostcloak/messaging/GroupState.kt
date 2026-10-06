@@ -104,7 +104,14 @@ object GroupStatements {
     private const val BASELINE_APPROVAL_DOMAIN="GhostCloak.GroupAuthorityBaselineApproval.v1"
     private val SIGNING_DOMAINS=setOf(GENESIS_DOMAIN,INVITE_DOMAIN,ACCEPT_DOMAIN,ACTOR_DOMAIN,
         COORDINATOR_DOMAIN,TRANSFER_DOMAIN,ADMISSION_DOMAIN,ADMISSION_PROPOSAL_V2_DOMAIN,
-        ADMISSION_APPROVAL_V2_DOMAIN,BASELINE_PROPOSAL_DOMAIN,BASELINE_APPROVAL_DOMAIN)
+        ADMISSION_APPROVAL_V2_DOMAIN,BASELINE_PROPOSAL_DOMAIN,BASELINE_APPROVAL_DOMAIN,
+        "GhostCloak.GroupGovernanceActivationOwner.v1",
+        "GhostCloak.GroupGovernanceActivationCoordinator.v1",
+        "GhostCloak.GroupGovernanceActivationAck.v1",
+        "GhostCloak.GroupGovernanceInstalledAck.v1",
+        "GhostCloak.GroupGovernanceActor.v1",
+        "GhostCloak.GroupGovernanceCoordinator.v1",
+        "GhostCloak.GroupGovernanceEntryAppliedAck.v1")
     private val zero=ByteArray(32)
 
     fun digest(state:GroupState):ByteArray=DeviceAuth.digest(bytes(state))
@@ -182,6 +189,10 @@ object GroupStatements {
     }.toByteArray()
     private fun number(value:Long)=ByteBuffer.allocate(8).putLong(value).array()
     private fun text(value:String)=value.toByteArray(Charsets.UTF_8)
+    internal fun governanceStatement(domain:String,body:ByteArray):ByteArray {
+        require(domain in SIGNING_DOMAINS && domain.startsWith("GhostCloak.GroupGovernance"))
+        return statement(domain,body)
+    }
     fun admissionProposalV2(groupId:String,parentDigest:ByteArray,revision:Long,inviteId:String,
         inviterId:String,candidateDigest:ByteArray,eventId:String):ByteArray =
         statement(ADMISSION_PROPOSAL_V2_DOMAIN,text(groupId),parentDigest,number(revision),text(inviteId),
@@ -199,7 +210,7 @@ object GroupStatements {
         statement(BASELINE_APPROVAL_DOMAIN,text(groupId),number(revision),stateDigest,
             memberSetDigest,proposalDigest,text(approverId))
     fun isGroupSigningStatement(bytes:ByteArray):Boolean {
-        if(bytes.size !in 16..MAX_EVENT_BYTES) return false
+        if(bytes.size !in 16..GroupControlCodec.MAX_BYTES) return false
         val header=ByteBuffer.wrap(bytes)
         if(header.int!=1) return false
         val size=header.int

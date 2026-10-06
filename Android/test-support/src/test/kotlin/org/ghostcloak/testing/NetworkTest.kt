@@ -754,6 +754,231 @@ class NetworkTest {
         override fun withZone(zone: ZoneId): Clock = this
         override fun instant(): Instant = Instant.ofEpochMilli(time)
     }
+    @Test fun governanceActivationBlockedMemberReadyFenceAndOneOrderedEntry() = runBlocking {
+        Fixture().use {f ->
+            val a=f.person("alice",true);val b=f.person("bob",true)
+            val ar=LocalRepository(a.records);val br=LocalRepository(b.records)
+            val ao=DurableOutbox(a.records,a.engine,NetworkMailboxTransport(f.client(a),a.state))
+            val bo=DurableOutbox(b.records,b.engine,NetworkMailboxTransport(f.client(b),b.state))
+            fun group(p:Person,repo:LocalRepository,outbox:DurableOutbox)=
+                GroupMembershipTransport(p.records,repo,p.engine,p.state,
+                    GroupAuthorityResolver(repo,p.engine,f.client(p),p.records),outbox)
+            fun ag()=group(a,ar,ao)
+            fun bg()=group(b,br,bo)
+            val ac=ConversationService(a.engine,ar).also {it.open()}
+            val bc=ConversationService(b.engine,br).also {it.open()}
+            for((p,q,repo) in listOf(Triple(a,b,ar),Triple(b,a,br))) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repo.save(Contact(RandomIdentifiers.create(),q.registration.accountId,q.name,q.registration.deviceId))
+                repo.groupPeer(q.registration.deviceId,true)
+            }
+            suspend fun push(outbox:DurableOutbox) {
+                outbox.pendingIds().forEach {id ->
+                    if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)
+                }
+            }
+            suspend fun pull(p:Person,conversation:ConversationService,transport:GroupMembershipTransport) {
+                val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                val deliveries=mailbox.fetch()
+                deliveries.forEach {conversation.acceptNetwork(EnvelopeCodec.decode(it.encryptedEnvelope))}
+                if(deliveries.isNotEmpty()) mailbox.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+                transport.processPending()
+            }
+            val id=ag().createAndInvite(b.registration.deviceId)
+            push(ao);pull(b,bc,bg());bg().accept(bg().invitations().single().id)
+            push(bo);pull(a,ac,ag());push(ao);pull(b,bc,bg())
+            ag().beginAuthorityBaseline(id)
+            repeat(5) {push(ao);pull(b,bc,bg());push(bo);pull(a,ac,ag())}
+            assertNotNull(a.records.read("app/group/baseline-v1/active/$id"))
+            assertNotNull(b.records.read("app/group/baseline-v1/active/$id"))
+            ac.block(b.registration.deviceId,true)
+            assertTrue(ar.governanceV1Peer(b.registration.deviceId))
+            assertTrue(br.governanceV1Peer(a.registration.deviceId))
+            ag().beginGovernanceActivation(id)
+            assertNull(a.records.read("app/group/governance-foundation-v1/barrier/$id"))
+            rejectAsync {ag().changeGroupTimerGoverned(id,30)}
+            push(ao);pull(b,bc,bg())
+            assertNotNull(b.records.read("app/group/governance-v1/own/$id"))
+            assertNull(b.records.read("app/group/governance-foundation-v1/barrier/$id"))
+            push(bo);pull(a,ac,ag())
+            assertNotNull(a.records.read("app/group/governance-foundation-v1/barrier/$id"))
+            assertNull(a.records.read("app/group/governance-v1/ready/$id"))
+            rejectAsync {ag().changeGroupTimerGoverned(id,30)}
+            push(ao);pull(b,bc,bg())
+            assertNotNull(b.records.read("app/group/governance-foundation-v1/barrier/$id"))
+            assertNull(b.records.read("app/group/governance-v1/ready/$id"))
+            push(bo);pull(a,ac,ag())
+            assertNotNull(a.records.read("app/group/governance-v1/ready/$id"))
+            push(ao);pull(b,bc,bg())
+            assertNotNull(b.records.read("app/group/governance-v1/ready/$id"))
+            assertEquals(RelationshipState.BLOCKED,ar.relationshipState(b.registration.deviceId))
+            assertTrue(ac.messages(b.registration.deviceId).isEmpty())
+            val before=ag().state(id)!!
+            ag().changeGroupTimerGoverned(id,30)
+            rejectAsync {ag().changeGroupTimerGoverned(id,300)}
+            push(ao);pull(b,bc,bg())
+            assertEquals(before.revision+1,bg().state(id)!!.revision)
+            assertEquals(30,bg().state(id)!!.disappearingSeconds)
+            push(bo);pull(a,ac,ag())
+            ag().changeGroupTimerGoverned(id,300)
+            push(ao);pull(b,bc,bg())
+            assertEquals(300,bg().state(id)!!.disappearingSeconds)
+            val anchor=bg().state(id)!!
+            val memberId=a.records.read("app/group/member/$id")!!.decodeToString()
+            val rawChange=GroupChange(GroupIds.create(),GroupAction.TIMER,memberId,newTimer=3600)
+            val rawNext=GroupRules.derive(anchor,rawChange,emptySet(),GroupTrustedPeer {true})
+            val raw=GroupTransition(rawChange,rawNext,
+                a.state.signGroupStatement(GroupStatements.actor(anchor,rawChange,rawNext)),
+                a.state.signGroupStatement(GroupStatements.coordinator(anchor,rawChange,rawNext)))
+            val update=ConversationPayload.encodeGroup(GroupControl(kind=GroupControlKind.STATE_UPDATE,
+                groupId=id,transition=raw))
+            ao.process(ao.enqueue(b.registration.deviceId,update))
+            pull(b,bc,bg())
+            assertEquals(anchor.revision,bg().state(id)!!.revision)
+            val snapshot=ConversationPayload.encodeGroup(GroupControl(kind=GroupControlKind.RESYNC_RESPONSE,
+                groupId=id,state=rawNext,chain=listOf(raw),headRevision=rawNext.revision))
+            ao.process(ao.enqueue(b.registration.deviceId,snapshot))
+            pull(b,bc,bg())
+            assertEquals(anchor.revision,bg().state(id)!!.revision)
+        }
+    }
+    @Test fun delegatedCoordinatorRequiresOwnersRealSignatureForActivation() = runBlocking {
+        Fixture().use {f ->
+            val a=f.person("alice",true);val b=f.person("bob",true)
+            val ar=LocalRepository(a.records);val br=LocalRepository(b.records)
+            val ao=DurableOutbox(a.records,a.engine,NetworkMailboxTransport(f.client(a),a.state))
+            val bo=DurableOutbox(b.records,b.engine,NetworkMailboxTransport(f.client(b),b.state))
+            fun ag()=GroupMembershipTransport(a.records,ar,a.engine,a.state,
+                GroupAuthorityResolver(ar,a.engine,f.client(a),a.records),ao)
+            fun bg()=GroupMembershipTransport(b.records,br,b.engine,b.state,
+                GroupAuthorityResolver(br,b.engine,f.client(b),b.records),bo)
+            val ac=ConversationService(a.engine,ar).also {it.open()}
+            val bc=ConversationService(b.engine,br).also {it.open()}
+            for((p,q,repo) in listOf(Triple(a,b,ar),Triple(b,a,br))) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repo.save(Contact(RandomIdentifiers.create(),q.registration.accountId,q.name,q.registration.deviceId))
+                repo.groupPeer(q.registration.deviceId,true)
+            }
+            suspend fun push(outbox:DurableOutbox) {
+                outbox.pendingIds().forEach {id ->
+                    if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)
+                }
+            }
+            suspend fun pull(p:Person,conversation:ConversationService,group:GroupMembershipTransport) {
+                val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                val deliveries=mailbox.fetch()
+                deliveries.forEach {conversation.acceptNetwork(EnvelopeCodec.decode(it.encryptedEnvelope))}
+                if(deliveries.isNotEmpty()) mailbox.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+                group.processPending()
+            }
+            val id=ag().createAndInvite(b.registration.deviceId)
+            push(ao);pull(b,bc,bg());bg().accept(bg().invitations().single().id)
+            push(bo);pull(a,ac,ag());push(ao);pull(b,bc,bg())
+            val aId=a.records.read("app/group/member/$id")!!.decodeToString()
+            val bId=b.records.read("app/group/member/$id")!!.decodeToString()
+            for(action in listOf(GroupAction.PROMOTE,GroupAction.DELEGATE_COORDINATOR)) {
+                val prior=ag().state(id)!!
+                val change=GroupChange(GroupIds.create(),action,aId,targetId=bId)
+                val next=GroupRules.derive(prior,change,emptySet(),GroupTrustedPeer {true})
+                val event=GroupTransition(change,next,
+                    a.state.signGroupStatement(GroupStatements.actor(prior,change,next)),
+                    a.state.signGroupStatement(GroupStatements.coordinator(prior,change,next)))
+                for((p,memberId) in listOf(a to aId,b to bId))
+                    assertEquals(GroupApply.ACCEPTED,
+                        GroupLedger(p.records,GroupTrustedPeer {true},memberId).apply(id,event))
+            }
+            assertEquals(bId,bg().state(id)!!.coordinatorId)
+            bg().beginAuthorityBaseline(id)
+            repeat(6) {push(bo);pull(a,ac,ag());push(ao);pull(b,bc,bg())}
+            assertNotNull(a.records.read("app/group/baseline-v1/active/$id"))
+            assertNotNull(b.records.read("app/group/baseline-v1/active/$id"))
+            bg().beginGovernanceActivation(id)
+            val partial=b.records.read("app/group/governance-v1/pending/$id")!!
+            assertNull(b.records.read("app/group/governance-foundation-v1/barrier/$id"))
+            push(bo);pull(a,ac,ag())
+            val ownerSigned=a.records.read("app/group/governance-v1/pending/$id")!!
+            assertFalse(partial.contentEquals(ownerSigned))
+            assertNull(a.records.read("app/group/governance-foundation-v1/barrier/$id"))
+            repeat(8) {push(ao);pull(b,bc,bg());push(bo);pull(a,ac,ag())}
+            assertNotNull(a.records.read("app/group/governance-v1/ready/$id"))
+            assertNotNull(b.records.read("app/group/governance-v1/ready/$id"))
+        }
+    }
+    @Test fun governanceThreeMemberCommitWaitsForOfflineAckAndBlockedPeer() = runBlocking {
+        Fixture().use {f ->
+            val people=listOf(f.person("alice",true),f.person("bob",true),f.person("charlie",true))
+            val (a,b,c)=people
+            val repos=people.associateWith {LocalRepository(it.records)}
+            val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
+                NetworkMailboxTransport(f.client(p),p.state))}
+            fun group(p:Person)=GroupMembershipTransport(p.records,repos.getValue(p),p.engine,p.state,
+                GroupAuthorityResolver(repos.getValue(p),p.engine,f.client(p),p.records),outboxes.getValue(p))
+            val conversations=people.associateWith {p ->ConversationService(p.engine,
+                repos.getValue(p)).also {it.open()}}
+            for(p in people) for(q in people) if(p!=q) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repos.getValue(p).save(Contact(RandomIdentifiers.create(),q.registration.accountId,
+                    q.name,q.registration.deviceId))
+                repos.getValue(p).groupPeer(q.registration.deviceId,true)
+            }
+            suspend fun push(p:Person) {
+                val outbox=outboxes.getValue(p)
+                outbox.pendingIds().forEach {id ->
+                    if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)
+                }
+            }
+            suspend fun pull(p:Person) {
+                val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                val deliveries=mailbox.fetch()
+                deliveries.forEach {conversations.getValue(p).acceptNetwork(
+                    EnvelopeCodec.decode(it.encryptedEnvelope))}
+                if(deliveries.isNotEmpty()) mailbox.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+                group(p).processPending()
+            }
+            val id=group(a).createAndInvite(b.registration.deviceId)
+            push(a);pull(b);group(b).accept(group(b).invitations().single().id)
+            push(b);pull(a);push(a);pull(b)
+            group(a).invite(id,c.registration.deviceId)
+            push(a);pull(c);group(c).accept(group(c).invitations().single().id)
+            push(c);pull(a);push(a);pull(b);pull(c)
+            assertEquals(3,group(a).state(id)!!.members.size)
+            group(a).beginAuthorityBaseline(id)
+            repeat(8) {for(p in people) push(p);for(p in people) pull(p)}
+            for(p in people) assertNotNull(p.records.read("app/group/baseline-v1/active/$id"))
+            conversations.getValue(a).block(b.registration.deviceId,true)
+            a.records.remove("app/group-governance-v1-peer/${c.registration.deviceId}")
+            rejectAsync {group(a).beginGovernanceActivation(id)}
+            assertNull(a.records.read("app/group/governance-v1/pending/$id"))
+            assertNull(a.records.read("app/group/governance-foundation-v1/barrier/$id"))
+            val textId=group(a).sendText(id,"mixed version text")
+            group(a).processPending();push(a);pull(b);pull(c)
+            assertTrue(group(c).conversation(id)!!.messages.any {it.logicalId==textId})
+            repeat(5) {for(p in people) push(p);for(p in people) pull(p)}
+            for(q in people.filter {it!=a})
+                assertTrue("alice lacks ${q.name} governance evidence",
+                    repos.getValue(a).governanceV1Peer(q.registration.deviceId))
+            group(a).beginGovernanceActivation(id)
+            val pending=a.records.read("app/group/governance-v1/pending/$id")!!.copyOf()
+            group(a).processPending()
+            assertArrayEquals(pending,a.records.read("app/group/governance-v1/pending/$id"))
+            push(a);pull(b)
+            push(b);pull(a)
+            assertNull(a.records.read("app/group/governance-foundation-v1/barrier/$id"))
+            assertNull(b.records.read("app/group/governance-foundation-v1/barrier/$id"))
+            repeat(12) {for(p in people) push(p);for(p in people) pull(p)}
+            for(p in people)
+                assertNotNull(p.records.read("app/group/governance-foundation-v1/barrier/$id"))
+            for(p in people) assertNotNull(p.records.read("app/group/governance-v1/ready/$id"))
+            assertEquals(RelationshipState.BLOCKED,repos.getValue(a).relationshipState(b.registration.deviceId))
+            assertTrue(conversations.getValue(a).messages(b.registration.deviceId).isEmpty())
+        }
+    }
     private class Person(val name: String,groupCredential:Boolean=false) {
         val records = MemoryRecords(); val engine = SignalProtocolEngine(records)
         val state = EndpointNetworkState(records, "ghostcloak.local",if(groupCredential) RecoveryCredential() else null)

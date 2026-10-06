@@ -14,15 +14,19 @@ import org.ghostcloak.messaging.GroupMembershipTransport
 import org.ghostcloak.messaging.GroupLocalStatus
 import org.ghostcloak.messaging.GroupRecipientState
 import org.ghostcloak.messaging.GroupTextCodec
+import org.ghostcloak.identity.IdentityTrustState
+import org.ghostcloak.identity.SessionLifecycle
 
 /** P13.3 deliberately exposes only text and sequential invitation management. */
 @Composable fun GroupConversationScreen(state:AppState,group:GroupMembershipTransport.Conversation,
-    back:()->Unit,send:(String,()->Unit)->Unit,invite:(String)->Unit) {
+    back:()->Unit,send:(String,()->Unit)->Unit,invite:(String)->Unit,openChat:(String)->Unit={}) {
     var draft by remember(group.groupId) {mutableStateOf("")}
     var inviting by remember {mutableStateOf(false)}
     val active=group.status==GroupLocalStatus.ACTIVE && group.memberCount>=2
-    val candidates=state.contacts.filter {it.groupCapable && !it.contact.request && !it.contact.blocked &&
+    val candidates=state.contacts.filter {!it.contact.request && !it.contact.blocked &&
         it.contact.remoteDeviceId !in group.memberDevices.values}
+    val readyCandidates=candidates.filter {it.groupCapable && it.session==SessionLifecycle.ACTIVE &&
+        it.identity?.trustState!=IdentityTrustState.CHANGED}
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(16.dp),verticalAlignment=Alignment.CenterVertically) {
             TextButton(onClick=back) {Text("Back")}
@@ -80,10 +84,29 @@ import org.ghostcloak.messaging.GroupTextCodec
     if(inviting) AlertDialog(onDismissRequest={inviting=false},title={Text("Invite one contact")},
         text={Column {
             Text("Add members one at a time after each membership is confirmed.")
-            candidates.forEach {candidate ->
-                TextButton(onClick={inviting=false;invite(candidate.contact.remoteDeviceId)}) {
-                    Text(candidate.contact.visibleName)
+            if(readyCandidates.isEmpty()) Text(
+                "No other contacts are ready yet. Group invites require an active, unchanged identity and a recent group-support message from the updated app.",
+                color=MaterialTheme.colorScheme.onSurfaceVariant)
+            LazyColumn(Modifier.heightIn(max=320.dp)) {items(candidates,key={it.contact.remoteDeviceId}) {candidate ->
+                val ready=candidate in readyCandidates
+                val reason=when {
+                    candidate.identity?.trustState==IdentityTrustState.CHANGED -> "Identity changed — review contact security"
+                    candidate.session!=SessionLifecycle.ACTIVE -> "Secure session unavailable"
+                    !candidate.groupCapable -> "Waiting for group support confirmation"
+                    else -> null
                 }
-            }
+                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(candidate.contact.visibleName)
+                        if(reason!=null) Text(reason,style=MaterialTheme.typography.bodySmall,
+                            color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    TextButton(onClick={
+                        inviting=false
+                        if(ready) invite(candidate.contact.remoteDeviceId)
+                        else openChat(candidate.contact.remoteDeviceId)
+                    }) {Text(if(ready) "Invite" else "Open chat")}
+                }
+            }}
         }},confirmButton={TextButton(onClick={inviting=false}) {Text("Close")}})
 }

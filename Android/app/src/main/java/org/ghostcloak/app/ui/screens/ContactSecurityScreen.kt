@@ -89,7 +89,7 @@ import org.ghostcloak.protocol.GhostCloakIds
                 modifier=Modifier.fillMaxWidth()) {
                 Text("Invite to a new group")
             }
-            Text("The invitation is for membership only. Group chat is not available yet.",
+            Text("Group invitations require a recent authenticated group-support signal from this contact. If unavailable, ask them to send a new message from the updated app.",
                 style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedButton(onClick={manageAction="delete"},enabled=!state.loading,modifier=Modifier.fillMaxWidth().heightIn(min=GhostDimensions.avatar)) {
                 Text("Delete conversation")

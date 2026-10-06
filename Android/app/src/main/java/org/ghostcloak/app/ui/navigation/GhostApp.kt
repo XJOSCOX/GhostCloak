@@ -142,7 +142,8 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                         val group=state.groups.firstOrNull {it.groupId==id} ?: return@composable
                         GroupConversationScreen(state,group,{nav.popBackStack()},
                             {text,done->model.sendGroupText(id,text,done)},
-                            {device->model.inviteToGroup(id,device)})
+                            {device->model.inviteToGroup(id,device)},
+                            {device->nav.navigate("conversation/$device")})
                     }
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable

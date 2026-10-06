@@ -26,6 +26,36 @@ import org.junit.Test
 class GroupInvitationScreenTest {
     @get:Rule val compose=createComposeRule()
 
+    @Test fun createGroupExplainsMissingAuthenticatedPeerSupportAndOpensChat() {
+        val contact=ContactStatus(Contact("local","account","Peer","device"),null,SessionLifecycle.ACTIVE)
+        var opened="";var created=""
+        compose.setContent {GhostCloakTheme {
+            ContactsScreen(AppState(loading=false,contacts=listOf(contact)),{},{opened=it},
+                createGroup={created=it})
+        }}
+        compose.onNodeWithContentDescription("Chat options").performClick()
+        compose.onNodeWithText("Create group").performClick()
+        compose.onNodeWithText("Waiting for group support confirmation").assertExists()
+        compose.onNodeWithText("No contacts are ready yet.",substring=true).assertExists()
+        compose.onNodeWithText("Open chat").performClick()
+        assertEquals("device",opened)
+        assertEquals("",created)
+    }
+
+    @Test fun createGroupOffersAuthenticatedCapableContact() {
+        val contact=ContactStatus(Contact("local","account","Peer","device"),null,
+            SessionLifecycle.ACTIVE,groupCapable=true)
+        var created=""
+        compose.setContent {GhostCloakTheme {
+            ContactsScreen(AppState(loading=false,contacts=listOf(contact)),{},{},
+                createGroup={created=it})
+        }}
+        compose.onNodeWithContentDescription("Chat options").performClick()
+        compose.onNodeWithText("Create group").performClick()
+        compose.onNodeWithText("Invite").performClick()
+        assertEquals("device",created)
+    }
+
     @Test fun validatedInvitationShowsSafeDetailsAndExplicitActions() {
         val id=GroupIds.create()
         val contact=ContactStatus(Contact("local","account","Peer","device",localAlias="Friend"),

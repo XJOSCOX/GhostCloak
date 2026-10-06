@@ -351,6 +351,33 @@ class PostgresTest {
         p.state.save(grant.token);p.state.markRegistered(grant.ghostCloakId)
     }
     private fun call(s:MailboxService,p:Person,r:ApiRequest)=s.execute(r,p.state.read())
+    @Test fun expiringSubmissionFitsExistingSchemaAndExpiredRetryCannotRecreate()=runBlocking {
+        Fixture().use {f->
+            var now=System.currentTimeMillis()
+            val clock=object:Clock() {
+                override fun getZone()=ZoneOffset.UTC
+                override fun withZone(zone:java.time.ZoneId)=this
+                override fun instant()=Instant.ofEpochMilli(now)
+                override fun millis()=now
+            }
+            val server=MailboxService(f.db,clock,rate=RateLimiter{_,_,_->true})
+            val a=register(server,"alice");val b=register(server,"bob")
+            a.engine.establishSession(b.registration.bundles.single().remote())
+            val wire=EnvelopeCodec.encode(a.engine.encrypt(b.registration.deviceId,"fixture".toByteArray()))
+            val id=SubmissionIds.create(now+60_000)
+            val request=ApiRequest.Send(id,b.registration.routingId,wire)
+            val serverId=call(server,a,request).serverMessageId!!
+            assertEquals(70,a.registration.deviceId.length+1+id.length)
+            assertEquals(serverId,call(server,a,request).serverMessageId)
+            call(server,b,ApiRequest.Ack(listOf(serverId)))
+            now+=60_001
+            f.db.transaction {f.db.submissions.remove(a.registration.deviceId+"/"+id)}
+            val before=f.db.transaction {f.db.mailbox.size() to f.db.submissions.size()}
+            try {call(server,a,request);fail("expired retry accepted")}
+            catch(e:ApiFailure) {assertEquals(410,e.status)}
+            assertEquals(before,f.db.transaction {f.db.mailbox.size() to f.db.submissions.size()})
+        }
+    }
     @Test fun postgresHttpDeliveryRestartDedupeAckAndDump()=runBlocking {
         Fixture().use {f->
             var service=f.service()

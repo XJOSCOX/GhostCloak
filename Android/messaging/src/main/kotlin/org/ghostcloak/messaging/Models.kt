@@ -19,7 +19,7 @@ data class Contact(val contactId: String, val publicUserId: String, val displayN
 data class ContactStatus(val contact: Contact, val identity: RemoteIdentityStatus?, val session: SessionLifecycle?,
     val sharedAbout:String?=null, val sharedPhoto:ByteArray?=null, val groupCapable:Boolean=false)
 @Serializable enum class Direction { INCOMING, OUTGOING }
-@Serializable enum class MessageState { PENDING, ENCRYPTED, SENT_TO_TRANSPORT, DELIVERED_LOCAL_SIMULATION, FAILED, SERVER_ACCEPTED, RECEIVED, DELIVERED, EXPIRED_UNDELIVERED }
+@Serializable enum class MessageState { PENDING, ENCRYPTED, SENT_TO_TRANSPORT, DELIVERED_LOCAL_SIMULATION, FAILED, SERVER_ACCEPTED, RECEIVED, DELIVERED, EXPIRED_UNDELIVERED, SUBMISSION_EXPIRED, STATUS_UNAVAILABLE }
 @Serializable enum class ViewOnceKind { TEXT, PHOTO }
 @Serializable enum class ViewOnceState { AVAILABLE, REVEALING, CONSUMED }
 @Serializable enum class ReplyKind { TEXT, ATTACHMENT, VIEW_ONCE, DISAPPEARING }
@@ -40,6 +40,7 @@ data class Message(val localId: String, val conversationId: String, val directio
     val deleteSubmissionId: String? = null,
     val editRevision: Long = 0, val editStatus: EditRequestStatus? = null,
     val editSubmissionId: String? = null,
+    val transportSubmissionId: String? = null,
     @kotlinx.serialization.Transient val reactions: List<ReactionBadge> = emptyList()) {
     val activeExpiry: ExpiryDeadline? get() = if (direction == Direction.OUTGOING && state != MessageState.DELIVERED) null else expiry
     override fun toString() = "Message(redacted)"

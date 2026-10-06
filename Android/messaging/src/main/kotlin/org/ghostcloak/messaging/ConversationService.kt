@@ -152,8 +152,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             finally {bytes.fill(0)}
         val result=try {outbox.process(submission) {repository.finishEditSubmission(submission,true)}}
             catch (_:ApiFailure) {return@action EditRequestStatus.PENDING}
-        if(result.state==OutboxState.FAILED) repository.finishEditSubmission(submission,false)
-        if(result.state in setOf(OutboxState.FAILED,OutboxState.SERVER_ACCEPTED)) outbox.removeFinished(submission)
+        if(result.state in setOf(OutboxState.FAILED,OutboxState.SUBMISSION_EXPIRED)) repository.finishEditSubmission(submission,false)
+        if(result.state in setOf(OutboxState.FAILED,OutboxState.SERVER_ACCEPTED,OutboxState.SUBMISSION_EXPIRED)) outbox.removeFinished(submission)
         if(result.state==OutboxState.SERVER_ACCEPTED) EditRequestStatus.SENT else EditRequestStatus.FAILED
     }
     suspend fun deleteForEveryone(id:String,localId:String,outbox:DurableOutbox)=action {
@@ -165,8 +165,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             finally {bytes.fill(0)}
         val result=try {outbox.process(submission) {repository.finishDeleteSubmission(submission,true)}}
             catch (_:ApiFailure) {return@action DeleteRequestStatus.PENDING}
-        if(result.state==OutboxState.FAILED) repository.finishDeleteSubmission(submission,false)
-        if(result.state in setOf(OutboxState.FAILED,OutboxState.SERVER_ACCEPTED)) outbox.removeFinished(submission)
+        if(result.state in setOf(OutboxState.FAILED,OutboxState.SUBMISSION_EXPIRED)) repository.finishDeleteSubmission(submission,false)
+        if(result.state in setOf(OutboxState.FAILED,OutboxState.SERVER_ACCEPTED,OutboxState.SUBMISSION_EXPIRED)) outbox.removeFinished(submission)
         if(result.state==OutboxState.SERVER_ACCEPTED) DeleteRequestStatus.SENT else DeleteRequestStatus.FAILED
     }
     suspend fun react(id:String,target:String,emoji:String?,outbox:DurableOutbox)=action {
@@ -179,7 +179,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         val submission=try {outbox.enqueue(id,bytes) {repository.applyReaction(id,update,true)}}
             finally {bytes.fill(0)}
         try {outbox.process(submission)} catch (_:ApiFailure) {return@action}
-        outbox.removeFinished(submission)
+        if(outbox.get(submission).state in setOf(OutboxState.SERVER_ACCEPTED,OutboxState.FAILED,OutboxState.SUBMISSION_EXPIRED))
+            outbox.removeFinished(submission)
     }
     /** Only a retained nonterminal outbox entry is retryable; it keeps its submission ID/ciphertext. */
     suspend fun retrySubmission(id:String,localId:String,outbox:DurableOutbox)=action {
@@ -188,10 +189,11 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
         require(message.state in setOf(MessageState.PENDING,MessageState.ENCRYPTED,MessageState.SENT_TO_TRANSPORT))
         val entry=outbox.get(localId)
-        require(entry.deviceId==id && entry.state !in setOf(OutboxState.FAILED,OutboxState.SERVER_ACCEPTED))
-        val result=outbox.process(localId) {repository.acceptedOutgoing(id,it.submissionId,it.envelopeId)}
+        require(entry.deviceId==id && entry.state !in setOf(OutboxState.FAILED,OutboxState.SERVER_ACCEPTED,OutboxState.SUBMISSION_EXPIRED))
+        val result=outbox.process(localId) {repository.acceptedOutgoing(id,it.submissionId,it.envelopeId,it.transportSubmissionId)}
         if(result.state==OutboxState.FAILED) repository.save(message.copy(state=MessageState.FAILED))
-        if(result.state in setOf(OutboxState.FAILED,OutboxState.SERVER_ACCEPTED)) outbox.removeFinished(localId)
+        if(result.state==OutboxState.SUBMISSION_EXPIRED) repository.save(message.copy(state=MessageState.SUBMISSION_EXPIRED))
+        if(result.state in setOf(OutboxState.FAILED,OutboxState.SERVER_ACCEPTED,OutboxState.SUBMISSION_EXPIRED)) outbox.removeFinished(localId)
     }
     suspend fun directoryCapability(entry: DirectoryEntry, time: Long, valid: Boolean) = action {
         val contact=repository.contact(entry.deviceId)
@@ -226,9 +228,11 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             try { repository.attachment(id,localId,encoded) } finally { encoded.fill(0) }
             onEnqueued(message)
         } } finally { bytes.fill(0) }
-        try { outbox.process(submission) { repository.acceptedOutgoing(id,it.submissionId,it.envelopeId) } }
+        try { outbox.process(submission) { repository.acceptedOutgoing(id,it.submissionId,it.envelopeId,it.transportSubmissionId) } }
         catch (_:ApiFailure) { return@action message }
-        outbox.removeFinished(submission)
+        val attachmentResult=outbox.get(submission)
+        if(attachmentResult.state==OutboxState.SUBMISSION_EXPIRED) repository.save(message.copy(state=MessageState.SUBMISSION_EXPIRED))
+        if(attachmentResult.state in setOf(OutboxState.SERVER_ACCEPTED,OutboxState.FAILED,OutboxState.SUBMISSION_EXPIRED)) outbox.removeFinished(submission)
         repository.messages(id).firstOrNull {it.localId==submission} ?: message
     }
     suspend fun attachment(id:String,localId:String)=action {
@@ -271,10 +275,11 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             repository.save(message)
             if (control) {repository.policy(id, seconds);repository.clearPendingDefaultTimer(id)}
         } } finally { bytes.fill(0) }
-        val result = try { outbox.process(submission) { repository.acceptedOutgoing(id, it.submissionId,it.envelopeId) } }
+        val result = try { outbox.process(submission) { repository.acceptedOutgoing(id, it.submissionId,it.envelopeId,it.transportSubmissionId) } }
             catch (_: org.ghostcloak.protocol.ApiFailure) { return message }
         if (result.state == OutboxState.FAILED) repository.save(message.copy(state = MessageState.FAILED))
-        outbox.removeFinished(submission)
+        if (result.state == OutboxState.SUBMISSION_EXPIRED) repository.save(message.copy(state = MessageState.SUBMISSION_EXPIRED))
+        if(result.state in setOf(OutboxState.SERVER_ACCEPTED,OutboxState.FAILED,OutboxState.SUBMISSION_EXPIRED)) outbox.removeFinished(submission)
         return repository.messages(id).firstOrNull { it.localId == submission } ?: message
     }
     private suspend fun networkAllowed(id:String) {
@@ -287,7 +292,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         for(id in repository.profileCancellations()) {
             val entry=if(id in existing) outbox.get(id) else null
             if(entry!=null) {
-                if(entry.state==OutboxState.SERVER_ACCEPTED || entry.state==OutboxState.FAILED) outbox.removeFinished(id)
+                if(entry.state in setOf(OutboxState.SERVER_ACCEPTED,OutboxState.FAILED,OutboxState.SUBMISSION_EXPIRED)) outbox.removeFinished(id)
                 else outbox.cancelSupersededProfile(id)
             }
             repository.profileCancellationDone(id)
@@ -304,17 +309,22 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 throw e
             }
             val result=outbox.process(id) {
-                repository.acceptedOutgoing(entry.deviceId, it.submissionId,it.envelopeId)
+                repository.acceptedOutgoing(entry.deviceId, it.submissionId,it.envelopeId,it.transportSubmissionId)
                 repository.profileSynced(entry.deviceId,it.submissionId)
                 repository.finishDeleteSubmission(it.submissionId,true)
                 repository.finishEditSubmission(it.submissionId,true)
             }
-            if(result.state==OutboxState.FAILED) repository.finishDeleteSubmission(id,false)
-            if(result.state==OutboxState.FAILED) repository.finishEditSubmission(id,false)
+            if(result.state in setOf(OutboxState.FAILED,OutboxState.SUBMISSION_EXPIRED)) repository.finishDeleteSubmission(id,false)
+            if(result.state in setOf(OutboxState.FAILED,OutboxState.SUBMISSION_EXPIRED)) repository.finishEditSubmission(id,false)
+            if(result.state==OutboxState.SUBMISSION_EXPIRED) repository.profileSynced(entry.deviceId,id)
             repository.messages(entry.deviceId).firstOrNull {it.localId==id}?.let { message ->
-                repository.save(message.copy(state=if(result.state==OutboxState.SERVER_ACCEPTED) MessageState.SERVER_ACCEPTED else MessageState.FAILED))
+                repository.save(message.copy(state=when(result.state) {
+                    OutboxState.SERVER_ACCEPTED -> MessageState.SERVER_ACCEPTED
+                    OutboxState.SUBMISSION_EXPIRED -> MessageState.SUBMISSION_EXPIRED
+                    else -> MessageState.FAILED
+                }, transportSubmissionId=if(result.state==OutboxState.SERVER_ACCEPTED) result.transportSubmissionId else message.transportSubmissionId))
             }
-            if(result.state in setOf(OutboxState.SERVER_ACCEPTED,OutboxState.FAILED)) outbox.removeFinished(id)
+            if(result.state in setOf(OutboxState.SERVER_ACCEPTED,OutboxState.FAILED,OutboxState.SUBMISSION_EXPIRED)) outbox.removeFinished(id)
         }
         // A failed pre-upload encryption or an interrupted enqueue retains the durable
         // acceptance intent. A new submission is safe only when its old entry is absent.
@@ -496,18 +506,31 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     }
     suspend fun markRead(id: String) = action { if(!repository.contact(id).request) repository.markRead(id) }
     suspend fun queuedSubmissions() = action {
+        val serverNow=repository.serverNow()
         repository.contacts().flatMap { repository.messages(it.remoteDeviceId) }
             .filter { it.state == MessageState.SERVER_ACCEPTED }
-            .map { it.localId }
+            .onEach { message ->
+                val expiry=(message.transportSubmissionId?.let(SubmissionIds::parse) as? SubmissionIds.Parsed.ExpiringV3)?.expiresAt
+                if(expiry!=null && serverNow!=null && serverNow>expiry)
+                    repository.unavailableOutgoing(message.conversationId,message.localId)
+            }
+            .filter { message ->
+                val expiry=(message.transportSubmissionId?.let(SubmissionIds::parse) as? SubmissionIds.Parsed.ExpiringV3)?.expiresAt
+                expiry==null || serverNow==null || serverNow<=expiry
+            }
+            .map { it.transportSubmissionId ?: it.localId }
     }
     suspend fun deliveryStatuses(statuses: List<DeliveryStatus>) = action {
         val delivered = statuses.filter { it.acknowledged }.map { it.submissionId }.toSet()
-        require(statuses.none {it.acknowledged && it.expired})
+        require(statuses.none {it.acknowledged && (it.expired || it.unavailable) || it.expired && it.unavailable})
         val expired=statuses.filter {it.expired}.map {it.submissionId}.toSet()
+        val unavailable=statuses.filter {it.unavailable}.map {it.submissionId}.toSet()
         repository.contacts().forEach { contact -> repository.messages(contact.remoteDeviceId)
-            .filter {it.localId in expired}.forEach {repository.expiredOutgoing(it.conversationId,it.localId)} }
+            .filter {(it.transportSubmissionId ?: it.localId) in expired}.forEach {repository.expiredOutgoing(it.conversationId,it.localId)} }
         repository.contacts().forEach { contact -> repository.messages(contact.remoteDeviceId)
-            .filter { it.direction == Direction.OUTGOING && it.state == MessageState.SERVER_ACCEPTED && it.localId in delivered }
+            .filter {(it.transportSubmissionId ?: it.localId) in unavailable}.forEach {repository.unavailableOutgoing(it.conversationId,it.localId)} }
+        repository.contacts().forEach { contact -> repository.messages(contact.remoteDeviceId)
+            .filter { it.direction == Direction.OUTGOING && it.state == MessageState.SERVER_ACCEPTED && (it.transportSubmissionId ?: it.localId) in delivered }
             .forEach { repository.deliveredOutgoing(it.conversationId, it.localId) } }
     }
     suspend fun fingerprint(id: String, pending: Boolean = false) = action {

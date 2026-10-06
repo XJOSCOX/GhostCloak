@@ -20,6 +20,7 @@ class NetworkController(
     private val cooldown: FetchCooldown = FetchCooldown(),
     private val requireNormal: () -> Unit = {},
     private val stateAccess: org.ghostcloak.storage.LocalStateAccess? = null,
+    private val expiryClock: ExpiryClock,
 ) {
     val configured get() = origin.isNotEmpty()
     private val state by lazy { EndpointNetworkState(records, URI(origin).host, KeystoreDeviceAuth(stateAccess)) }
@@ -33,7 +34,12 @@ class NetworkController(
         }) }
     private val account: NetworkAccount by lazy { NetworkAccount(client, state) }
     private val transport by lazy { NetworkMailboxTransport(client, state) }
-    private val outbox by lazy { DurableOutbox(records, engine, transport) }
+    private val timeRepository by lazy { LocalRepository(records, expiryClock) }
+    private val outbox by lazy { DurableOutbox(records, engine, transport, expiringIds = true, trustedTime = {
+        timeRepository.freshServerNow() ?: client.call(ApiRequest.Fetch(retention=true)).serverTime?.also {
+            timeRepository.serverReference(it)
+        }
+    }) }
     private val groups by lazy { GroupMembershipTransport(records,LocalRepository(records),engine,state,
         GroupAuthorityResolver(LocalRepository(records),engine,client,records),outbox) }
     private val prekeyRefill by lazy { PrekeyRefill(records, engine, URI(origin).host, ::device,
@@ -286,6 +292,9 @@ class NetworkController(
                 service.deliveryStatuses(response.statuses)
                 if (response.deliveries.size < NetworkLimits.BATCH) break
             }
+            // A 404 fallback may be the first fresh server-time sample after a reboot.
+            // Finalize any V3 status window that closed during this exchange now.
+            service.queuedSubmissions()
         }
         exchange()
         groups.processPending()

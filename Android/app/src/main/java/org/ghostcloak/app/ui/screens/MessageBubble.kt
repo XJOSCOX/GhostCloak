@@ -76,6 +76,8 @@ import java.time.format.DateTimeFormatter
             MessageState.FAILED -> "Not delivered"; MessageState.SERVER_ACCEPTED -> "Encrypting, Waiting…"
             MessageState.DELIVERED -> "Delivered"; MessageState.RECEIVED -> "Received"
             MessageState.EXPIRED_UNDELIVERED -> "Expired before delivery"
+            MessageState.SUBMISSION_EXPIRED -> "Send attempt expired; create a new message if needed"
+            MessageState.STATUS_UNAVAILABLE -> "Delivery status unavailable"
         },Modifier.padding(top=GhostDimensions.tiny,end=GhostDimensions.tiny),style=MaterialTheme.typography.labelSmall,
             color=if(message.state==MessageState.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
     }

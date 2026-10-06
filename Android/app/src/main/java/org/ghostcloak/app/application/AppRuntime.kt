@@ -182,7 +182,7 @@ class AppRuntime internal constructor(
                         val cooldown = if (networkConfigured) storedFetchCooldown(records, java.net.URI(apiOrigin).host,
                             android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0))
                             else org.ghostcloak.transport.FetchCooldown()
-                        network=NetworkController(records,engine,apiOrigin,connection,cooldown, ::requireNormal, operationGate)
+                        network=NetworkController(records,engine,apiOrigin,connection,cooldown, ::requireNormal, operationGate, expiryClock)
                         local = ConversationService(engine, LocalRepository(records, expiryClock),
                             org.ghostcloak.app.attachments.ProfilePhotoPreparation::valid)
                         notificationLedger = NotificationLedger(records, expiryClock)

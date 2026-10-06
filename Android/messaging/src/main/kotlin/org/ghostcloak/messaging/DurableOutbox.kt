@@ -1,3 +1,4 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 package org.ghostcloak.messaging
 
 import kotlinx.coroutines.Dispatchers
@@ -10,12 +11,14 @@ import org.ghostcloak.identity.RandomIdentifiers
 import org.ghostcloak.protocol.*
 import org.ghostcloak.transport.IdempotentMessageTransport
 
-enum class OutboxState { LOCAL, ENCRYPTION_PENDING, CIPHERTEXT_READY, UPLOAD_PENDING, SERVER_ACCEPTED, FAILED }
+enum class OutboxState { LOCAL, ENCRYPTION_PENDING, CIPHERTEXT_READY, UPLOAD_PENDING, SERVER_ACCEPTED, FAILED, SUBMISSION_EXPIRED }
 enum class CrashPoint { AFTER_LOCAL, AFTER_ENCRYPTION, AFTER_CIPHERTEXT, AFTER_SERVER_ACCEPTANCE }
 @Serializable
 class OutboxEntry(val submissionId: String, val deviceId: String, val state: OutboxState,
     val plaintext: ByteArray = byteArrayOf(), val ciphertext: ByteArray = byteArrayOf(),
-    val createdAt: Long, val serverId: String? = null, val envelopeId: String? = null) {
+    val createdAt: Long, val serverId: String? = null, val envelopeId: String? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val transportSubmissionId: String? = null) {
     override fun toString() = "OutboxEntry(state=$state)"
 }
 /** One process-owned worker per endpoint, just like the existing ConversationService.
@@ -24,7 +27,10 @@ class OutboxEntry(val submissionId: String, val deviceId: String, val state: Out
  */
 class DurableOutbox(private val records: EndpointRecords, private val engine: SecureSessionEngine,
     private val transport: IdempotentMessageTransport, private val crash: (CrashPoint) -> Unit = {},
-    private val time: () -> Long = System::currentTimeMillis) {
+    private val time: () -> Long = System::currentTimeMillis,
+    // False retains legacy fixture/old-client semantics. Android production explicitly enables V3.
+    private val expiringIds: Boolean = false,
+    private val trustedTime: suspend () -> Long? = { null }) {
     private val mutex = Mutex()
     private fun key(id: String): String { require(RandomIdentifiers.valid(id)); return "outbox/$id" }
     private fun put(e: OutboxEntry) = records.write(key(e.submissionId), NetworkCodec.encode(e))
@@ -48,8 +54,9 @@ class DurableOutbox(private val records: EndpointRecords, private val engine: Se
     suspend fun process(id: String, accepted: (OutboxEntry) -> Unit = {}): OutboxEntry = withContext(Dispatchers.IO) { mutex.withLock {
         var entry = get(id)
         if (entry.state == OutboxState.SERVER_ACCEPTED) { records.transaction { accepted(entry) }; return@withLock entry }
-        if (entry.state == OutboxState.FAILED) return@withLock entry
-        if (entry.state == OutboxState.ENCRYPTION_PENDING || time() - entry.createdAt >= 86400000) {
+        if (entry.state in setOf(OutboxState.FAILED, OutboxState.SUBMISSION_EXPIRED)) return@withLock entry
+        if (entry.state == OutboxState.ENCRYPTION_PENDING ||
+            entry.transportSubmissionId == null && time() - entry.createdAt >= 86400000) {
             // No crypto rollback or automatic resend of an ambiguous/too-old operation.
             entry = OutboxEntry(id, entry.deviceId, OutboxState.FAILED, createdAt = entry.createdAt)
             records.transaction { put(entry) }; return@withLock entry
@@ -62,13 +69,37 @@ class DurableOutbox(private val records: EndpointRecords, private val engine: Se
             records.transaction { put(entry) }
             crash(CrashPoint.AFTER_CIPHERTEXT)
         }
+        // An upgraded v2 UPLOAD_PENDING row may already have reached the server with its UUID.
+        val legacyAttempt = !expiringIds || entry.transportSubmissionId == null && entry.state == OutboxState.UPLOAD_PENDING
+        val networkId = if (legacyAttempt)
+            entry.transportSubmissionId ?: id
+        else entry.transportSubmissionId ?: run {
+            val serverNow = trustedTime() ?: throw ApiFailure(503, "server_time_unavailable")
+            SubmissionIds.create(Math.addExact(serverNow, SubmissionIds.MAX_LIFETIME_MILLIS - 60 * 60 * 1000L))
+        }
+        if (networkId != id && (SubmissionIds.parse(networkId) as? SubmissionIds.Parsed.ExpiringV3)?.let { parsed ->
+                val serverNow = trustedTime() ?: throw ApiFailure(503, "server_time_unavailable")
+                serverNow > parsed.expiresAt
+            } == true) {
+            entry = OutboxEntry(id, entry.deviceId, OutboxState.SUBMISSION_EXPIRED, createdAt = entry.createdAt,
+                transportSubmissionId = networkId)
+            records.transaction { put(entry) }; return@withLock entry
+        }
         entry = OutboxEntry(id, entry.deviceId, OutboxState.UPLOAD_PENDING, ciphertext = entry.ciphertext, createdAt = entry.createdAt,
-            envelopeId=entry.envelopeId ?: EnvelopeCodec.decode(entry.ciphertext).envelopeId)
+            envelopeId=entry.envelopeId ?: EnvelopeCodec.decode(entry.ciphertext).envelopeId,
+            transportSubmissionId=networkId)
         records.transaction { put(entry) }
-        val serverId = transport.submit(id, entry.deviceId, EnvelopeCodec.decode(entry.ciphertext))
+        val serverId = try { transport.submit(networkId, entry.deviceId, EnvelopeCodec.decode(entry.ciphertext)) }
+        catch (e:ApiFailure) {
+            if(e.status != 410) throw e
+            entry = OutboxEntry(id, entry.deviceId, OutboxState.SUBMISSION_EXPIRED, createdAt = entry.createdAt,
+                transportSubmissionId=networkId)
+            records.transaction { put(entry) }; return@withLock entry
+        }
         crash(CrashPoint.AFTER_SERVER_ACCEPTANCE)
-        entry = OutboxEntry(id, entry.deviceId, OutboxState.SERVER_ACCEPTED, createdAt = entry.createdAt, serverId = serverId, envelopeId=entry.envelopeId)
+        entry = OutboxEntry(id, entry.deviceId, OutboxState.SERVER_ACCEPTED, createdAt = entry.createdAt, serverId = serverId,
+            envelopeId=entry.envelopeId, transportSubmissionId=networkId)
         records.transaction { put(entry); accepted(entry) }; entry
     } }
-    fun removeFinished(id: String) = records.transaction { val entry = get(id); require(entry.state in setOf(OutboxState.SERVER_ACCEPTED, OutboxState.FAILED)); records.remove(key(id)) }
+    fun removeFinished(id: String) = records.transaction { val entry = get(id); require(entry.state in setOf(OutboxState.SERVER_ACCEPTED, OutboxState.FAILED, OutboxState.SUBMISSION_EXPIRED)); records.remove(key(id)) }
 }

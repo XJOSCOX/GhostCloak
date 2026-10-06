@@ -64,7 +64,8 @@ class DeviceBinding(val version:Int = 1, val accountId:String, val deviceId:Stri
 }
 @Serializable
 class DeliveryStatus(val submissionId: String, val acknowledged: Boolean,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) val expired: Boolean = false)
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val expired: Boolean = false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val unavailable: Boolean = false)
 @Serializable
 class Delivery(val serverMessageId: String, val encryptedEnvelope: ByteArray, val receivedAt: Long, val expiresAt: Long, @EncodeDefault(EncodeDefault.Mode.NEVER) val sender: SenderProfile? = null) {
     override fun toString() = "Delivery(<opaque>)"

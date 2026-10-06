@@ -51,6 +51,13 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun serverNow():Long?=records.transaction {
         projectedServerTime(clock.now())
     }
+    /** A same-boot, recent authenticated server sample; device wall time is never consulted. */
+    fun freshServerNow(maxAgeMillis:Long = 10 * 60 * 1000L):Long?=records.transaction {
+        val now=clock.now()
+        val ref=read<ServerReference>("app/server-reference") ?: return@transaction null
+        if(ref.boot!=now.boot || now.elapsed<ref.elapsed || now.elapsed-ref.elapsed>maxAgeMillis) null
+        else ref.time+now.elapsed-ref.elapsed
+    }
     private fun projectedServerTime(now:ExpiryMoment):Long? {
         val ref=read<ServerReference>("app/server-reference")
         return ref?.takeIf {it.boot==now.boot && now.elapsed>=it.elapsed}?.let {it.time+now.elapsed-it.elapsed}
@@ -477,11 +484,13 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         expired.forEach { delete(it.conversationId, it.localId) }
         expired.size + expireRequests()
     }
-    fun acceptedOutgoing(id: String, localId: String, envelopeId: String? = null) = records.transaction {
+    fun acceptedOutgoing(id: String, localId: String, envelopeId: String? = null,
+        transportSubmissionId: String? = null) = records.transaction {
         val message = read<Message>("app/message/$id/$localId") ?: return@transaction
         if (message.direction != Direction.OUTGOING || message.state in setOf(MessageState.DELIVERED,MessageState.EXPIRED_UNDELIVERED)) return@transaction
         save(message.copy(state = MessageState.SERVER_ACCEPTED, expiry = null,
             envelopeId = envelopeId ?: message.envelopeId,
+            transportSubmissionId = transportSubmissionId ?: message.transportSubmissionId,
             body=if(message.viewOnceKind!=null) "" else message.body))
         if(message.viewOnceKind==ViewOnceKind.PHOTO) records.remove("app/attachment/$id/$localId")
     }
@@ -504,6 +513,11 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun unreadMessages(id: String): List<Message> = records.transaction {
         val seen = read<List<String>>("app/read/$id").orEmpty().toSet()
         messages(id).filter { it.direction == Direction.INCOMING && !it.deleted && !it.policyEvent && it.localId !in seen }
+    }
+    fun unavailableOutgoing(id:String,localId:String)=records.transaction {
+        val message=read<Message>("app/message/$id/$localId") ?: return@transaction
+        if(message.direction==Direction.OUTGOING && message.state==MessageState.SERVER_ACCEPTED)
+            save(message.copy(state=MessageState.STATUS_UNAVAILABLE,expiry=null))
     }
     fun unreadMessageIds(id: String): Set<String> = unreadMessages(id).map { it.localId }.toSet()
     fun markRead(id: String) = records.transaction {

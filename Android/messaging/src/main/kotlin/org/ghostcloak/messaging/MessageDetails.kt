@@ -17,6 +17,8 @@ object MessageDetails {
             MessageState.DELIVERED,MessageState.DELIVERED_LOCAL_SIMULATION -> "Delivered"
             MessageState.RECEIVED -> "Received"
             MessageState.EXPIRED_UNDELIVERED -> "Expired before delivery"
+            MessageState.SUBMISSION_EXPIRED -> "Send attempt expired · create a new message if needed"
+            MessageState.STATUS_UNAVAILABLE -> "Delivery status unavailable"
         })
         add("Disappearing" to if(message.disappearingSeconds>0)
             "On · ${DisappearingTimer.from(message.disappearingSeconds).label}" else "Off")

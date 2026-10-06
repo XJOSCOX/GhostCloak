@@ -293,11 +293,16 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
             }
             is ApiRequest.Send -> send(device, r)
             is ApiRequest.Fetch -> {
-                requireApi(r.submissionIds.size <= NetworkLimits.BATCH && r.submissionIds.all(RandomIdentifiers::valid))
+                requireApi(r.submissionIds.size <= NetworkLimits.BATCH && r.submissionIds.all { SubmissionIds.parse(it) != null })
                 // Prefix lookup discloses only the caller's submissions; unknown/foreign IDs fail identically.
                 val statuses = r.submissionIds.map { id ->
-                    val row = db.submissions.get(device.id + "/" + id) ?: throw ApiFailure(404, "not_found")
-                    DeliveryStatus(id, row.acknowledged, r.retention && !row.acknowledged && row.mailboxExpiresAt <= now())
+                    val row = db.submissions.get(device.id + "/" + id)
+                    if (row == null && (SubmissionIds.parse(id) as? SubmissionIds.Parsed.ExpiringV3)?.expiresAt?.let { it < now() } == true)
+                        DeliveryStatus(id, false, unavailable = true)
+                    else {
+                        row ?: throw ApiFailure(404, "not_found")
+                        DeliveryStatus(id, row.acknowledged, r.retention && !row.acknowledged && row.mailboxExpiresAt <= now())
+                    }
                 }
                 requireApi(r.skipMessageIds.size <= 128 && r.skipMessageIds.all(RandomIdentifiers::valid))
                 val owned = db.mailboxForRecipient(device.routingId).filter { it.expiresAt > now() }
@@ -359,7 +364,14 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         return AllocationOutcome(ApiResponse(directory=DirectoryEntry(account.id,target.id,target.routingId,id,bundle),serverTime=time))
     }
     private fun send(sender: DeviceRow, r: ApiRequest.Send): ApiResponse {
-        requireApi(RandomIdentifiers.valid(r.submissionId) && RandomIdentifiers.valid(r.recipientRoutingId))
+        val format = SubmissionIds.parse(r.submissionId) ?: throw ApiFailure(400, "invalid_submission_id")
+        requireApi(RandomIdentifiers.valid(r.recipientRoutingId))
+        val receivedAt = now()
+        if (format is SubmissionIds.Parsed.ExpiringV3) {
+            requireApi(format.expiresAt >= receivedAt, "submission_expired", 410)
+            requireApi(format.expiresAt - receivedAt <= SubmissionIds.MAX_LIFETIME_MILLIS,
+                "submission_expiry_too_far", 400)
+        }
         val target = db.deviceByRoutingId(r.recipientRoutingId) ?: throw ApiFailure(404, "not_found")
         val envelope = try { EnvelopeCodec.decode(r.encryptedEnvelope) } catch (e: IllegalArgumentException) { throw ApiFailure(400, "invalid_envelope") }
         requireApi(envelope.senderDeviceId == sender.id && envelope.recipientDeviceId == target.id, "wrong_route")
@@ -374,9 +386,9 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
         requireApi(db.countSubmissionsForSender(sender.id) < 1024 && db.submissions.size() < 10000, "submission_capacity", 429)
         val serverId = RandomIdentifiers.create()
         // One authoritative millisecond sample/deadline for payload and sender receipt.
-        val receivedAt = now()
         val expiresAt = Math.addExact(receivedAt, policy.mailboxTtl)
-        val dedupeExpiresAt = Math.addExact(receivedAt, policy.dedupeTtl)
+        val dedupeExpiresAt = if (format is SubmissionIds.Parsed.ExpiringV3) format.expiresAt
+            else Math.addExact(receivedAt, policy.dedupeTtl)
         db.mailbox.put(serverId, MailboxRow(serverId, target.routingId, r.encryptedEnvelope.copyOf(), receivedAt, expiresAt))
         db.submissions.put(id, SubmissionRow(id, sender.id, digest, serverId, dedupeExpiresAt,mailboxExpiresAt=expiresAt))
         return ApiResponse(serverMessageId = serverId)

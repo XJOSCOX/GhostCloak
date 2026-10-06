@@ -1,10 +1,14 @@
 package org.ghostcloak.testing
 
+import kotlinx.coroutines.runBlocking
+import org.ghostcloak.crypto.SignalProtocolEngine
 import org.ghostcloak.messaging.ConversationPayload
+import org.ghostcloak.messaging.ConversationService
 import org.ghostcloak.messaging.GroupControl
 import org.ghostcloak.messaging.GroupControlCodec
 import org.ghostcloak.messaging.GroupControlKind
 import org.ghostcloak.messaging.GroupIds
+import org.ghostcloak.messaging.LocalRepository
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -40,5 +44,38 @@ class GroupControlFramingTest {
     @Test fun membershipCapabilityIsAdvertisedInAuthenticatedPadding() {
         val payload=ConversationPayload.decode(ConversationPayload.encode("hello",0))
         assertTrue(payload.supportsGroups)
+    }
+
+    @Test fun sharedDisplayNameDoesNotCrowdOutGroupCapability() {
+        for(name in listOf("JOSCOX","SRosier","A".repeat(32))) {
+            val encoded=ConversationPayload.encode("Hi",0,displayName=name)
+            val payload=ConversationPayload.decode(encoded)
+            assertEquals("Hi",payload.body)
+            assertTrue("group support missing for $name",payload.supportsGroups)
+            assertTrue(payload.supportsAttachments)
+            assertTrue(payload.supportsMedia)
+            assertTrue(payload.supportsReactions)
+            assertTrue(payload.supportsProfiles)
+            assertTrue(payload.supportsDelete)
+            assertTrue(payload.supportsEdit)
+            if(name.length<16) assertEquals(name,payload.displayName)
+        }
+    }
+
+    @Test fun acceptedEncryptedMessagePersistsGroupCapabilityForPicker()=runBlocking {
+        val aliceRecords=MemoryRecords(); val bobRecords=MemoryRecords()
+        val aliceEngine=SignalProtocolEngine(aliceRecords)
+        val bobEngine=SignalProtocolEngine(bobRecords)
+        val alice=ConversationService(aliceEngine,LocalRepository(aliceRecords))
+        val bob=ConversationService(bobEngine,LocalRepository(bobRecords))
+        val aliceId=alice.create("Alice").deviceId
+        bob.create("JOSCOX")
+        alice.importCard(bob.exportCard())
+        bob.importCard(alice.exportCard())
+        assertFalse(alice.contacts().single().groupCapable)
+        alice.acceptNetwork(bobEngine.encrypt(aliceId,ConversationPayload.encode("Hi",0,displayName="JOSCOX")))
+        assertTrue(alice.contacts().single().groupCapable)
+        assertTrue(ConversationService(SignalProtocolEngine(aliceRecords),LocalRepository(aliceRecords))
+            .contacts().single().groupCapable)
     }
 }

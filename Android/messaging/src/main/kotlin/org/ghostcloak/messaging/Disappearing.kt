@@ -26,6 +26,9 @@ object ConversationPayload {
     private val deleteSupport = "GhostCloak/padding/delete/v1!".toByteArray(Charsets.US_ASCII)
     private val editSupport = "GhostCloak/padding/edit/v1!".toByteArray(Charsets.US_ASCII)
     private val groupSupport = "GhostCloak/padding/group-membership/v1!".toByteArray(Charsets.US_ASCII)
+    // The original marker often did not fit after the legacy profile name and other flags.
+    // This authenticated, fixed-position marker fits the existing 256-byte frame.
+    private val compactGroupSupport = "GhostCloak/grp2!".toByteArray(Charsets.US_ASCII)
     val reactionEmoji = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
     private val profileMarker = "GhostCloak/profile/v1!".toByteArray(Charsets.US_ASCII)
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
@@ -172,11 +175,23 @@ object ConversationPayload {
         val text = if (control) { require(body.isEmpty()); byteArrayOf() } else TextRules.encode(body)
         try {
             if (text.size > MAX_TEXT) throw AppFailure(AppError.MESSAGE_TOO_LARGE)
-            val profile=profileBytes(displayName)
+            val requestedProfile=profileBytes(displayName)
             val replyBytes=replyTo?.let { byteArrayOf(it.kind.ordinal.toByte()) + it.envelopeId.toByteArray(Charsets.US_ASCII) } ?: byteArrayOf()
-            val extension=if(16+text.size+replyBytes.size+attachmentSupport.size+profile.size<=16384)
+            val prefixSize=16+text.size+replyBytes.size
+            val extension=if(prefixSize+attachmentSupport.size+requestedProfile.size<=16384)
                 attachmentSupport else byteArrayOf()
-            val size = ((16 + text.size + replyBytes.size + extension.size + profile.size + 255) / 256) * 256
+            fun paddedSize(profileSize:Int)=((prefixSize+extension.size+profileSize+255)/256)*256
+            val earlierFlagsSize=mediaSupport.size+reactionSupport.size+profileSupport.size+
+                deleteSupport.size+editSupport.size
+            fun groupSpace(profileSize:Int)=paddedSize(profileSize)-
+                (prefixSize+extension.size+profileSize+earlierFlagsSize)
+            // Preserve the legacy display-name extension whenever the compact marker fits.
+            // A very long name is already delivered by the separate encrypted profile update;
+            // omit its redundant copy here only if that lets the full group marker fit.
+            val profile=if(extension.isNotEmpty() && requestedProfile.isNotEmpty() &&
+                groupSpace(requestedProfile.size)<compactGroupSupport.size &&
+                groupSpace(0)>=groupSupport.size) byteArrayOf() else requestedProfile
+            val size = paddedSize(profile.size)
             if(size>16384) throw AppFailure(AppError.MESSAGE_TOO_LARGE)
             // Keep the exact legacy padded size. Older clients ignore this marker inside padding.
             val media=extension.isNotEmpty() && 16+text.size+replyBytes.size+extension.size+profile.size+mediaSupport.size<=size
@@ -199,8 +214,10 @@ object ConversationPayload {
             if(extension.isNotEmpty() && editOffset+editSupport.size<=size)
                 editSupport.copyInto(bytes,editOffset)
             val groupOffset=editOffset+(if(extension.isNotEmpty() && editOffset+editSupport.size<=size) editSupport.size else 0)
-            if(extension.isNotEmpty() && groupOffset+groupSupport.size<=size)
-                groupSupport.copyInto(bytes,groupOffset)
+            if(extension.isNotEmpty()) when {
+                groupOffset+groupSupport.size<=size -> groupSupport.copyInto(bytes,groupOffset)
+                groupOffset+compactGroupSupport.size<=size -> compactGroupSupport.copyInto(bytes,groupOffset)
+            }
             return bytes
         } finally { text.fill(0) }
     }
@@ -339,9 +356,12 @@ object ConversationPayload {
         val edits=supports && bytes.size-offset>=editSupport.size &&
             bytes.copyOfRange(offset,offset+editSupport.size).contentEquals(editSupport)
         if(edits) offset+=editSupport.size
-        val groups=supports && bytes.size-offset>=groupSupport.size &&
+        val fullGroups=supports && bytes.size-offset>=groupSupport.size &&
             bytes.copyOfRange(offset,offset+groupSupport.size).contentEquals(groupSupport)
-        if(groups) offset+=groupSupport.size
+        val compactGroups=!fullGroups && supports && bytes.size-offset>=compactGroupSupport.size &&
+            bytes.copyOfRange(offset,offset+compactGroupSupport.size).contentEquals(compactGroupSupport)
+        if(fullGroups) offset+=groupSupport.size
+        else if(compactGroups) offset+=compactGroupSupport.size
         val minimum=offset
         if(((minimum+255)/256)*256!=bytes.size)
             throw AppFailure(AppError.INVALID_TEXT)
@@ -364,7 +384,7 @@ object ConversationPayload {
         return Content(body, seconds, type == 2, supportsAttachments = supports,displayName=name,
             viewOnceKind=if(type==5) ViewOnceKind.TEXT else null,replyTo=reply,supportsMedia=media,
             supportsReactions=reactions,supportsProfiles=profiles,supportsDelete=deletes,supportsEdit=edits,
-            supportsGroups=groups)
+            supportsGroups=fullGroups || compactGroups)
     }
     fun policyText(seconds: Int) = if (seconds == 0) "Disappearing messages turned off"
         else "Disappearing messages set to ${DisappearingTimer.from(seconds).label}"

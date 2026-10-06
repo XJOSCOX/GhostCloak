@@ -463,6 +463,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 repository.deletePeer(contact.remoteDeviceId,content.supportsDelete)
                 repository.editPeer(contact.remoteDeviceId,content.supportsEdit)
                 repository.groupPeer(contact.remoteDeviceId,content.supportsGroups)
+                repository.admissionV2Peer(contact.remoteDeviceId,content.supportsAdmissionV2)
                 val firstProfile=content.supportsProfiles && !repository.profilePeer(contact.remoteDeviceId)
                 repository.profilePeer(contact.remoteDeviceId,content.supportsProfiles)
                 if(firstProfile && !contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId})

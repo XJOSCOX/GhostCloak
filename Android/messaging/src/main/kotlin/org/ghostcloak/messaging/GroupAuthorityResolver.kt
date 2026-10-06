@@ -65,6 +65,24 @@ class GroupAuthorityResolver(private val repository:LocalRepository,private val 
             MessageDigest.isEqual(binding.authPublicKey,member.authPublicKey) &&
             MessageDigest.isEqual(binding.identityDigest,member.signalIdentityDigest)
     }
+    /** Admission-scoped check: no direct or global group-authority record is written. */
+    suspend fun verifyAdmissionCandidate(candidate:GroupMember):Boolean {
+        if(!repository.isActiveContact(candidate.deviceId) ||
+            repository.contact(candidate.deviceId).publicUserId!=candidate.accountId) return false
+        val pinned=engine.trustedRemoteIdentityDigest(candidate.deviceId) ?: return false
+        if(!MessageDigest.isEqual(pinned,candidate.signalIdentityDigest)) return false
+        val response=client.call(ApiRequest.CapabilityLookup(candidate.deviceId,
+            expectedAccountId=candidate.accountId,expectedIdentityDigest=pinned),
+            reportTransientFailure=false)
+        val binding=response.deviceBinding ?: return false
+        val after=engine.trustedRemoteIdentityDigest(candidate.deviceId) ?: return false
+        return repository.isActiveContact(candidate.deviceId) &&
+            repository.contact(candidate.deviceId).publicUserId==candidate.accountId &&
+            MessageDigest.isEqual(after,pinned) && binding.version==1 &&
+            binding.accountId==candidate.accountId && binding.deviceId==candidate.deviceId &&
+            MessageDigest.isEqual(binding.identityDigest,candidate.signalIdentityDigest) &&
+            MessageDigest.isEqual(binding.authPublicKey,candidate.authPublicKey)
+    }
     /** Group-only current binding check. Never records or restores direct-contact acceptance. */
     suspend fun matchesCurrentGroupMember(groupId:String,member:GroupMember):Boolean {
         val digest=engine.trustedRemoteIdentityDigest(member.deviceId) ?: return false

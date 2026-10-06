@@ -13,6 +13,46 @@ import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 
 class GroupStateTest {
+    @Test fun preP134CanonicalBytesAndLedgerRemainReadable() {
+        // Literal fixture captured with the P13.3 encoder before governance formats exist.
+        val fixture=javaClass.getResourceAsStream("/p133-group-golden.txt")!!.bufferedReader().use {reader ->
+            reader.readLines().associate {line -> line.substringBefore('=') to line.substringAfter('=')}
+        }
+        val base64=java.util.Base64.getDecoder()
+        val stateBytes=base64.decode(fixture.getValue("STATE"))
+        val transitionBytes=base64.decode(fixture.getValue("TRANSITION"))
+        val ledgerBytes=base64.decode(fixture.getValue("LEDGER"))
+        val state=GroupStatements.decodeState(stateBytes)
+        assertArrayEquals(stateBytes,GroupStatements.bytes(state))
+        assertArrayEquals(base64.decode(fixture.getValue("STATE_DIGEST")),GroupStatements.digest(state))
+        val transition=GroupStatements.decodeTransition(transitionBytes)
+        assertArrayEquals(transitionBytes,NetworkCodec.encode(transition))
+        assertArrayEquals(GroupStatements.digest(state),transition.next.previousDigest)
+        val changeBytes=base64.decode(fixture.getValue("CHANGE"))
+        assertArrayEquals(changeBytes,NetworkCodec.encode(transition.change))
+        val genesisBytes=base64.decode(fixture.getValue("GENESIS"))
+        val signedGenesis=NetworkCodec.decode<GroupGenesis>(genesisBytes,GroupStatements.MAX_STATE_BYTES)
+        assertArrayEquals(genesisBytes,NetworkCodec.encode(signedGenesis))
+        assertEquals(GroupApply.ACCEPTED,GroupLedger(MemoryRecords(),trust,signedGenesis.state.ownerId)
+            .acceptGenesis(signedGenesis))
+        val admissionBytes=base64.decode(fixture.getValue("ADMISSION"))
+        val signedAdmission=NetworkCodec.decode<GroupAdmission>(admissionBytes,GroupStatements.MAX_STATE_BYTES)
+        assertArrayEquals(admissionBytes,NetworkCodec.encode(signedAdmission))
+        assertTrue(GroupStatements.verifyAdmission(signedAdmission,trust))
+        assertEquals(GroupApply.ACCEPTED,GroupLedger(MemoryRecords(),trust,signedAdmission.target.memberId)
+            .acceptAdmission(signedAdmission))
+        val textBytes=base64.decode(fixture.getValue("GROUP_TEXT"))
+        assertArrayEquals(textBytes,GroupTextCodec.encode(GroupTextCodec.decode(textBytes)))
+        for(name in listOf("TRANSITION","CHANGE","GENESIS","ADMISSION","LEDGER","GROUP_TEXT")) {
+            assertArrayEquals(base64.decode(fixture.getValue("${name}_DIGEST")),
+                DeviceAuth.digest(base64.decode(fixture.getValue(name))))
+        }
+        val records=MemoryRecords()
+        records.write("group/state/v1/${state.groupId}",ledgerBytes)
+        val opened=GroupLedger(records,trust,state.ownerId).state(state.groupId)!!
+        assertEquals(2L,opened.revision)
+        assertArrayEquals(GroupStatements.digest(transition.next),GroupStatements.digest(opened))
+    }
     @Test fun fiveMemberMembershipControlFitsEncryptedBodyWithHeadroom() {
         val owner=person(GroupRole.OWNER)
         var state=genesis(owner).state
@@ -98,6 +138,29 @@ class GroupStateTest {
         assertEquals(GroupApply.ACCEPTED,ledger.apply(g.state.groupId,signedProfile))
         assertEquals(GroupApply.FORKED,ledger.apply(g.state.groupId,signedAlt))
         assertTrue(GroupLedger(store,trust,owner.member.memberId).isForked(g.state.groupId))
+    }
+    @Test fun offlineMemberCannotInventDepartedSignersMissingAuthority() {
+        val owner=person(GroupRole.OWNER)
+        val offline=person(GroupRole.MEMBER,2)
+        val departed=person(GroupRole.MEMBER,3)
+        val genesis=genesis(owner)
+        val joined=add(genesis.state,owner,offline)
+        val store=MemoryRecords()
+        val before=GroupLedger(store,trust,offline.member.memberId)
+        assertEquals(GroupApply.ACCEPTED,before.acceptGenesis(genesis))
+        assertEquals(GroupApply.ACCEPTED,before.apply(genesis.state.groupId,joined))
+        val admitted=add(joined.next,owner,departed)
+        val leaveChange=GroupChange(GroupIds.create(),GroupAction.LEAVE,departed.member.memberId,
+            targetId=departed.member.memberId)
+        val left=event(admitted.next,leaveChange,
+            GroupRules.derive(admitted.next,leaveChange,emptySet(),trust),departed,owner)
+        // C was offline for admission, B's contact was later deleted, and C has no
+        // previously authenticated B binding. The signed ADD alone is insufficient.
+        val currentOnly=GroupTrustedPeer {it.memberId!=departed.member.memberId}
+        val resumed=GroupLedger(store,currentOnly,offline.member.memberId)
+        assertEquals(GroupApply.REJECTED,resumed.applySnapshot(genesis.state.groupId,
+            GroupSnapshot(left.next,listOf(admitted,left))))
+        assertEquals(joined.next.revision,resumed.state(genesis.state.groupId)!!.revision)
     }
     @Test fun invalidSignaturesRolesAndBounds() {
         val owner=person(GroupRole.OWNER);val guest=person(GroupRole.MEMBER,2);val g=genesis(owner)

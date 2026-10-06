@@ -27,6 +27,8 @@ class GroupMembershipTransport(
     private val textMutex = Mutex()
     private val chats=GroupChatStore(records)
     private val currentAuthority=GroupCurrentAuthority(records)
+    private val admissionV2=AdmissionV2Store(records)
+    private val historicalAuthority=HistoricalGroupAuthority(records)
     data class Conversation(val groupId:String,val status:GroupLocalStatus,val memberCount:Int,
         val memberDevices:Map<String,String>,val messages:List<GroupChatMessage>,val invitationPending:Boolean=false)
     // Retry scheduling is only a transport throttle. The durable marker, not this clock,
@@ -59,7 +61,8 @@ class GroupMembershipTransport(
         return GroupMember(memberId,identity.first,identity.second,network.registeredGroupPublicKey(),
             DeviceAuth.digest(signal),role,epoch)
     }
-    private suspend fun trusted(members:Collection<GroupMember>,groupId:String?=null):GroupTrustedPeer {
+    private suspend fun trusted(members:Collection<GroupMember>,groupId:String?=null,
+        historicalOnly:Boolean=false):GroupTrustedPeer {
         val ownAccount=network.accountId();val ownDevice=network.ownDevice()
         val ownKey=network.registeredGroupPublicKey()
         val ownIdentity=engine.createIdentity("Local")
@@ -70,13 +73,16 @@ class GroupMembershipTransport(
                 MessageDigest.isEqual(member.authPublicKey,ownKey) &&
                 MessageDigest.isEqual(member.signalIdentityDigest,ownDigest)
             else {
-                if(repository.isActiveContact(member.deviceId)) authority.resolveTrustedGroupAuthority(member.deviceId).let {binding ->
+                val current=if(repository.isActiveContact(member.deviceId))
+                    try {authority.resolveTrustedGroupAuthority(member.deviceId).let {binding ->
                     binding.accountId==member.accountId && binding.deviceId==member.deviceId &&
                         MessageDigest.isEqual(binding.authPublicKey,member.authPublicKey) &&
                         MessageDigest.isEqual(binding.identityDigest,member.signalIdentityDigest)
-                }
-                else groupId!=null &&
-                    authority.matchesCurrentGroupMember(groupId,member)
+                    }} catch(e:CancellationException) {throw e}
+                    catch(_:ApiFailure) {false}
+                else false
+                current || (historicalOnly && groupId!=null && historicalAuthority.matches(groupId,member)) ||
+                    (groupId!=null && authority.matchesCurrentGroupMember(groupId,member))
             }
             if(!matches) throw ApiFailure(409,"group_binding_unavailable")
             valid[member.memberId]=member
@@ -106,6 +112,103 @@ class GroupMembershipTransport(
         }} finally {plaintext.fill(0)}
     }
 
+    private fun allAdmissionV2Peers(state:GroupState,target:String,localId:String):Boolean =
+        repository.admissionV2Peer(target) && state.members.all {member ->
+            member.memberId==localId || repository.admissionV2Peer(member.deviceId)
+        }
+
+    /** A separate durable protocol; never mutate the frozen v1 GroupAdmission/Invite bytes. */
+    private suspend fun beginAdmissionV2(offer:GroupControl,initialize:()->Unit = {}) {
+        val state=offer.state ?: throw ApiFailure(409,"group_invalid")
+        val invite=offer.invite ?: throw ApiFailure(409,"group_invalid")
+        val localId=localMember(state.groupId) ?: state.coordinatorId
+        val otherInvitation=records.transaction {
+            records.keys("app/group/outgoing/").any {key ->
+                records.read(key)?.let {NetworkCodec.decode<Outgoing>(it,16_384)}?.let {
+                    it.offer.groupId==state.groupId && !it.used
+                }==true
+            }
+        }
+        if(state.coordinatorId!=localId || admissionV2.pending(state.groupId)!=null ||
+            otherInvitation ||
+            !allAdmissionV2Peers(state,invite.target.deviceId,localId) ||
+            !authority.verifyAdmissionCandidate(invite.target))
+            throw ApiFailure(409,"group_invalid")
+        val unsigned=AdmissionProposalV2(groupId=state.groupId,parent=state,
+            parentDigest=GroupStatements.digest(state),inviteId=invite.inviteId,
+            inviterId=localId,candidate=invite.target,
+            candidateDigest=AdmissionV2.candidateDigest(invite.target),eventId=GroupIds.create(),
+            inviterSignature=byteArrayOf())
+        val proposal=unsigned.copy(inviterSignature=network.signGroupStatement(
+            AdmissionV2.proposalStatement(unsigned)))
+        if(!AdmissionV2.verifyProposal(proposal,state)) throw ApiFailure(409,"group_invalid")
+        val approvalUnsigned=AdmissionV2.approval(proposal,localId,byteArrayOf())
+        val approval=approvalUnsigned.copy(signature=network.signGroupStatement(
+            AdmissionV2.approvalStatement(approvalUnsigned)))
+        if(!AdmissionV2.verifyApproval(approval,proposal)) throw ApiFailure(409,"group_invalid")
+        records.transaction {
+            initialize()
+            admissionV2.saveOwn(state.groupId,OwnAdmissionApprovalV2(
+                AdmissionV2.proposalDigest(proposal),proposal.parentDigest,state.revision,
+                proposal.inviteId,proposal.candidateDigest,localId,approval=approval))
+            admissionV2.savePending(state.groupId,PendingAdmissionV2(offer,proposal,listOf(approval)))
+        }
+        flushAdmissionsV2()
+    }
+
+    private suspend fun flushAdmissionsV2() {
+        for(groupId in admissionV2.pendingGroups()) {
+            val pending=admissionV2.pending(groupId) ?: continue
+            val proposal=pending.proposal
+            val localId=localMember(groupId) ?: continue
+            val current=state(groupId) ?: continue
+            if(localId!=current.coordinatorId ||
+                !MessageDigest.isEqual(GroupStatements.digest(current),proposal.parentDigest)) {
+                admissionV2.clearPending(groupId)
+                admissionV2.removeOwn(groupId,proposal.inviteId)
+                continue
+            }
+            if(pending.approvals.size==current.members.size) {
+                if(pending.invitationQueued) continue
+                val certificate=AdmissionV2.certificate(proposal,pending.approvals)
+                if(!AdmissionV2.verifyCertificate(certificate,current)) throw ApiFailure(409,"group_invalid")
+                val offered=pending.offer.copy(certificateV2=certificate)
+                try {send(proposal.candidate.deviceId,offered) {
+                        records.write(outgoingKey(proposal.inviteId),
+                            NetworkCodec.encode(Outgoing(proposal.candidate.deviceId,offered)))
+                        admissionV2.savePending(groupId,pending.copy(invitationQueued=true))
+                    }} catch(e:CancellationException) {throw e}
+                    catch(_:ApiFailure) { /* Retain exact signed evidence and retry. */ }
+            } else {
+                for(member in current.members.filter {it.memberId!=localId}) {
+                    if(admissionV2.queued(groupId,proposal.inviteId,member.deviceId)) continue
+                    try {send(member.deviceId,GroupControl(kind=GroupControlKind.ADMISSION_V2_PROPOSAL,
+                        groupId=groupId,inviteId=proposal.inviteId,proposalV2=proposal)) {id ->
+                        admissionV2.markQueued(groupId,proposal.inviteId,member.deviceId,id)
+                    }} catch(e:CancellationException) {throw e}
+                    catch(_:ApiFailure) { /* Durable pending proposal retries after reconnect. */ }
+                }
+            }
+        }
+    }
+    private suspend fun retryOwnApprovalsV2() {
+        for((groupId,inviteId) in admissionV2.ownKeys()) {
+            val approval=admissionV2.own(groupId,inviteId) ?: continue
+            val current=state(groupId) ?: continue
+            if(!MessageDigest.isEqual(GroupStatements.digest(current),approval.parentDigest)) {
+                admissionV2.removeOwn(groupId,inviteId)
+                continue
+            }
+            val coordinator=current.members.single {it.memberId==current.coordinatorId}.deviceId
+            if(coordinator==network.ownDevice() || admissionV2.queued(groupId,inviteId,coordinator)) continue
+            try {send(coordinator,GroupControl(kind=GroupControlKind.ADMISSION_V2_APPROVAL,
+                groupId=groupId,inviteId=inviteId,approvalV2=approval.approval)) {id ->
+                admissionV2.markQueued(groupId,inviteId,coordinator,id)
+            }} catch(e:CancellationException) {throw e}
+            catch(_:ApiFailure) { /* Retry the same signature; never sign a new approval. */ }
+        }
+    }
+
     /** Creates a group with a one-member genesis, then offers the first one-use invitation. */
     suspend fun createAndInvite(targetDeviceId:String):String {
         if(targetDeviceId==network.ownDevice() || !repository.isActiveContact(targetDeviceId) ||
@@ -128,6 +231,14 @@ class GroupMembershipTransport(
         check(GroupStatements.verifyAdmission(proof,trusted) && GroupStatements.verifyOffer(offer,group,trusted))
         val control=GroupControl(kind=GroupControlKind.INVITE,groupId=group.groupId,inviteId=inviteId,
             state=group,admission=proof,invite=offer)
+        if(allAdmissionV2Peers(group,targetDeviceId,owner.memberId)) {
+            beginAdmissionV2(control) {
+                check(records.keys("app/group/member/").size<64)
+                records.write(memberKey(group.groupId),owner.memberId.toByteArray())
+                check(GroupLedger(records,trusted,owner.memberId).acceptGenesis(genesis)==GroupApply.ACCEPTED)
+            }
+            return group.groupId
+        }
         send(targetDeviceId,control) {
             check(records.keys("app/group/member/").size<64 && records.keys("app/group/outgoing/").size<128)
             records.write(memberKey(group.groupId),owner.memberId.toByteArray())
@@ -170,6 +281,10 @@ class GroupMembershipTransport(
             groupId=groupId,inviteId=inviteId,
             state=state,admission=proof,invite=offer)
         val recipient=if(coSign) state.members.single {it.memberId==state.ownerId}.deviceId else targetDeviceId
+        if(!coSign && allAdmissionV2Peers(state,targetDeviceId,localId)) {
+            beginAdmissionV2(control.copy(kind=GroupControlKind.INVITE))
+            return inviteId
+        }
         send(recipient,control) {
             check(records.keys("app/group/outgoing/").size<128)
             if(coSign) records.write(admissionKey(inviteId),NetworkCodec.encode(Outgoing(targetDeviceId,control)))
@@ -289,6 +404,12 @@ class GroupMembershipTransport(
             throw ApiFailure(409,"group_invite_unavailable")
         val trusted=trusted(state.members+invite.target,state.groupId)
         if(!GroupStatements.verifyOffer(invite,state,trusted)) throw ApiFailure(409,"group_invite_unavailable")
+        offer.certificateV2?.let {certificate ->
+            if(!AdmissionV2.verifyCertificate(certificate,state) ||
+                certificate.proposal.inviteId!=invite.inviteId ||
+                !MessageDigest.isEqual(certificate.proposal.candidateDigest,
+                    GroupStatements.digestMember(invite.target))) throw ApiFailure(409,"group_invite_unavailable")
+        }
         val signed=invite.copy(targetAcceptance=network.signGroupStatement(GroupStatements.acceptance(invite)))
         val control=GroupControl(kind=GroupControlKind.ACCEPT,groupId=state.groupId,inviteId=inviteId,invite=signed)
         send(incoming.sender,control) {
@@ -329,6 +450,10 @@ class GroupMembershipTransport(
                     GroupControlKind.RESYNC_RESPONSE -> receiveResyncResponse(pending.senderDeviceId,pending.control)
                     GroupControlKind.ADMISSION_REQUEST -> receiveAdmissionRequest(pending.senderDeviceId,pending.control)
                     GroupControlKind.ADMISSION_RESPONSE -> receiveAdmissionResponse(pending.senderDeviceId,pending.control)
+                    GroupControlKind.ADMISSION_V2_PROPOSAL -> receiveProposalV2(pending.senderDeviceId,pending.control)
+                    GroupControlKind.ADMISSION_V2_APPROVAL -> receiveApprovalV2(pending.senderDeviceId,pending.control)
+                    GroupControlKind.ADMISSION_V2_EVIDENCE_REQUEST -> receiveEvidenceRequestV2(pending.senderDeviceId,pending.control)
+                    GroupControlKind.ADMISSION_V2_EVIDENCE_RESPONSE -> receiveEvidenceResponseV2(pending.senderDeviceId,pending.control)
                 }
                 repository.finishGroupControl(id)
             } catch(e:CancellationException) {throw e}
@@ -340,10 +465,129 @@ class GroupMembershipTransport(
             } catch(_:IllegalArgumentException) {repository.finishGroupControl(id)}
         }
         flushFanout()
+        flushAdmissionsV2()
+        retryOwnApprovalsV2()
         processSystemOutbox()
         retryMarkedResync()
         processPendingTexts()
         flushTexts()
+    }
+    private suspend fun receiveProposalV2(sender:String,control:GroupControl) {
+        val proposal=control.proposalV2 ?: throw ApiFailure(400,"group_invalid")
+        val localId=localMember(proposal.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+        val current=ledger.state(proposal.groupId) ?: throw ApiFailure(409,"group_invalid")
+        if(ledger.isForked(proposal.groupId) || ledger.status(proposal.groupId)!=GroupLocalStatus.ACTIVE ||
+            current.members.singleOrNull {it.memberId==current.coordinatorId}?.deviceId!=sender ||
+            !AdmissionV2.verifyProposal(proposal,current) ||
+            !repository.admissionV2Peer(sender)) throw ApiFailure(409,"group_invalid")
+        for((group,invite) in admissionV2.ownKeys().filter {it.first==proposal.groupId && it.second!=proposal.inviteId}) {
+            val previous=admissionV2.own(group,invite) ?: continue
+            if(MessageDigest.isEqual(previous.parentDigest,proposal.parentDigest))
+                throw ApiFailure(409,"group_admission_pending")
+            admissionV2.removeOwn(group,invite)
+        }
+        val existing=admissionV2.own(proposal.groupId,proposal.inviteId)
+        if(existing!=null && !MessageDigest.isEqual(existing.proposalDigest,AdmissionV2.proposalDigest(proposal)))
+            throw ApiFailure(409,"group_invalid")
+        val ownApproval=if(existing!=null) existing.approval else {
+            if(!authority.verifyAdmissionCandidate(proposal.candidate)) throw ApiFailure(409,"group_binding_unavailable")
+            val unsigned=AdmissionV2.approval(proposal,localId,byteArrayOf())
+            val approval=unsigned.copy(signature=network.signGroupStatement(
+                AdmissionV2.approvalStatement(unsigned)))
+            if(!AdmissionV2.verifyApproval(approval,proposal)) throw ApiFailure(409,"group_invalid")
+            admissionV2.saveOwn(proposal.groupId,OwnAdmissionApprovalV2(
+                AdmissionV2.proposalDigest(proposal),proposal.parentDigest,current.revision,
+                proposal.inviteId,proposal.candidateDigest,localId,approval=approval))
+            approval
+        }
+        if(!admissionV2.queued(proposal.groupId,proposal.inviteId,sender))
+            send(sender,GroupControl(kind=GroupControlKind.ADMISSION_V2_APPROVAL,
+                groupId=proposal.groupId,inviteId=proposal.inviteId,approvalV2=ownApproval)) {id ->
+                admissionV2.markQueued(proposal.groupId,proposal.inviteId,sender,id)
+            }
+    }
+
+    private suspend fun receiveApprovalV2(sender:String,control:GroupControl) {
+        val approval=control.approvalV2 ?: throw ApiFailure(400,"group_invalid")
+        val pending=admissionV2.pending(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val proposal=pending.proposal
+        val localId=localMember(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val current=state(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        if(current.coordinatorId!=localId ||
+            !AdmissionV2.verifyProposal(proposal,current) ||
+            current.members.singleOrNull {it.memberId==approval.approverId}?.deviceId!=sender ||
+            !AdmissionV2.verifyApproval(approval,proposal)) throw ApiFailure(409,"group_invalid")
+        val prior=pending.approvals.singleOrNull {it.approverId==approval.approverId}
+        if(prior!=null && !NetworkCodec.encode(prior).contentEquals(NetworkCodec.encode(approval)))
+            throw ApiFailure(409,"group_invalid")
+        if(prior==null) admissionV2.savePending(control.groupId,
+            pending.copy(approvals=pending.approvals+approval))
+        flushAdmissionsV2()
+    }
+    private suspend fun requestEvidenceV2(parent:GroupState,eventId:String) {
+        val recipient=parent.members.single {it.memberId==parent.coordinatorId}.deviceId
+        if(admissionV2.queued(parent.groupId,eventId,recipient)) return
+        send(recipient,GroupControl(kind=GroupControlKind.ADMISSION_V2_EVIDENCE_REQUEST,
+            groupId=parent.groupId,evidenceEventId=eventId)) {id ->
+            admissionV2.markQueued(parent.groupId,eventId,recipient,id)
+        }
+    }
+    private suspend fun receiveEvidenceRequestV2(sender:String,control:GroupControl) {
+        val eventId=control.evidenceEventId ?: throw ApiFailure(400,"group_invalid")
+        val localId=localMember(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+        val current=ledger.state(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        if(ledger.status(control.groupId)!=GroupLocalStatus.ACTIVE ||
+            current.members.none {it.deviceId==sender})
+            throw ApiFailure(409,"group_invalid")
+        val cert=admissionV2.evidence(control.groupId,eventId) ?: throw ApiFailure(409,"group_invalid")
+        val anchor=ledger.anchorRevision(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val event=ledger.transitionsAfter(control.groupId,anchor)?.singleOrNull {
+            it.change.eventId==eventId && it.change.action==GroupAction.ADD
+        } ?: throw ApiFailure(409,"group_invalid")
+        if(event.change.invite?.inviteId!=cert.proposal.inviteId ||
+            !MessageDigest.isEqual(GroupStatements.digestMember(event.change.added!!),
+                cert.proposal.candidateDigest)) throw ApiFailure(409,"group_invalid")
+        send(sender,GroupControl(kind=GroupControlKind.ADMISSION_V2_EVIDENCE_RESPONSE,
+            groupId=control.groupId,inviteId=cert.proposal.inviteId,
+            evidenceEventId=eventId,certificateV2=cert))
+    }
+    private suspend fun receiveEvidenceResponseV2(sender:String,control:GroupControl) {
+        val cert=control.certificateV2 ?: throw ApiFailure(400,"group_invalid")
+        val eventId=control.evidenceEventId ?: throw ApiFailure(400,"group_invalid")
+        val localId=localMember(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val prior=state(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        if(prior.members.none {it.deviceId==sender} ||
+            cert.proposal.eventId!=eventId) throw ApiFailure(409,"group_invalid")
+        var matchedParent:GroupState?=null
+        for((_,pending) in repository.pendingGroupControls()) {
+            val value=pending.control
+            if(value.groupId!=control.groupId) continue
+            var parent=prior
+            val events=when(value.kind) {
+                GroupControlKind.STATE_UPDATE -> listOfNotNull(value.transition)
+                GroupControlKind.RESYNC_RESPONSE -> value.chain
+                else -> emptyList()
+            }
+            for(event in events) {
+                if(event.change.eventId==eventId && event.change.action==GroupAction.ADD &&
+                    event.change.invite?.inviteId==cert.proposal.inviteId &&
+                    event.next.revision==parent.revision+1 &&
+                    MessageDigest.isEqual(GroupStatements.digestMember(event.change.added!!),
+                        cert.proposal.candidateDigest)) matchedParent=parent
+                parent=event.next
+            }
+        }
+        if(matchedParent==null || !AdmissionV2.verifyCertificate(cert,matchedParent))
+            throw ApiFailure(409,"group_invalid")
+        if(matchedParent.members.any {it.memberId==localId} &&
+            !admissionV2.matchesOwnApproval(matchedParent,cert,localId))
+            throw ApiFailure(503,"group_admission_evidence_pending")
+        records.transaction {
+            admissionV2.saveEvidence(control.groupId,eventId,cert)
+            admissionV2.clearQueued(control.groupId,eventId)
+        }
     }
     private suspend fun processPendingTexts() {
         for((envelopeId,pending) in chats.pending()) {
@@ -479,6 +723,10 @@ class GroupMembershipTransport(
         if(!GroupStatements.verifyAdmission(proof,trusted) || !GroupStatements.verifyOffer(invite,state,trusted))
             throw ApiFailure(409,"group_invalid")
         val finished=control.copy(kind=GroupControlKind.INVITE)
+        if(allAdmissionV2Peers(state,pending.target,localId)) {
+            beginAdmissionV2(finished) {records.remove(admissionKey(id))}
+            return
+        }
         send(pending.target,finished) {
             records.remove(admissionKey(id))
             records.write(outgoingKey(id),NetworkCodec.encode(Outgoing(pending.target,finished)))
@@ -496,6 +744,12 @@ class GroupMembershipTransport(
         val trusted=trusted(state.members+invite.target,state.groupId)
         if(!GroupStatements.verifyAdmission(proof,trusted) || !GroupStatements.verifyOffer(invite,state,trusted))
             throw ApiFailure(409,"group_invalid")
+        control.certificateV2?.let {certificate ->
+            if(!AdmissionV2.verifyCertificate(certificate,state) ||
+                certificate.proposal.inviteId!=invite.inviteId ||
+                !MessageDigest.isEqual(certificate.proposal.candidateDigest,
+                    GroupStatements.digestMember(invite.target))) throw ApiFailure(409,"group_invalid")
+        }
         records.transaction {
             val prior=records.read(incomingKey(invite.inviteId))
             if(prior!=null) return@transaction
@@ -509,7 +763,11 @@ class GroupMembershipTransport(
             if(GroupLedger(records,trusted,own.memberId).acceptAdmission(proof)!=GroupApply.ACCEPTED)
                 throw ApiFailure(409,"group_invalid")
             val admissionDigest=DeviceAuth.digest(NetworkCodec.encode(proof))
-            state.members.forEach {currentAuthority.anchor(state,it,admissionDigest)}
+            state.members.forEach {member ->
+                currentAuthority.anchor(state,member,admissionDigest)
+                if(control.certificateV2!=null) historicalAuthority.anchorBaseline(proof,member)
+            }
+            control.certificateV2?.let {admissionV2.saveEvidence(state.groupId,it.proposal.eventId,it)}
             records.write(incomingKey(invite.inviteId),NetworkCodec.encode(Incoming(sender,control,InviteState.OFFERED)))
         }
     }
@@ -549,18 +807,34 @@ class GroupMembershipTransport(
             }
             return
         }
-        val change=GroupChange(GroupIds.create(),GroupAction.ADD,localId,added=invite.target,invite=invite)
+        val certificate=outgoing.offer.certificateV2
+        if(allAdmissionV2Peers(current,invite.target.deviceId,localId) && certificate==null)
+            throw ApiFailure(409,"group_admission_evidence_required")
+        if(certificate!=null && (!AdmissionV2.verifyCertificate(certificate,current) ||
+            certificate.proposal.inviteId!=invite.inviteId ||
+            certificate.proposal.inviterId!=localId ||
+            !admissionV2.matchesOwnApproval(current,certificate,localId) ||
+            !MessageDigest.isEqual(certificate.proposal.candidateDigest,
+                GroupStatements.digestMember(invite.target)))) throw ApiFailure(409,"group_invalid")
+        val change=GroupChange(certificate?.proposal?.eventId ?: GroupIds.create(),
+            GroupAction.ADD,localId,added=invite.target,invite=invite)
         val next=GroupRules.derive(current,change,emptySet(),trusted)
         val event=GroupTransition(change,next,network.signGroupStatement(GroupStatements.actor(current,change,next)),
             network.signGroupStatement(GroupStatements.coordinator(current,change,next)))
         val result=GroupLedger(records,trusted,localId).apply(control.groupId,event) {
             currentAuthority.anchor(next,invite.target,DeviceAuth.digest(NetworkCodec.encode(event)))
+            if(certificate!=null) {
+                admissionV2.saveEvidence(control.groupId,event.change.eventId,certificate)
+                historicalAuthority.record(current,event,certificate)
+                admissionV2.clearPending(control.groupId)
+                admissionV2.removeOwn(control.groupId,certificate.proposal.inviteId)
+            }
             chats.cancelStale(control.groupId,next.epoch)
             records.write(outgoingKey(invite.inviteId),NetworkCodec.encode(outgoing.copy(used=true)))
             for(member in next.members.filter {it.memberId!=localId})
                 records.write(fanoutKey(next.groupId,next.revision,member.deviceId),
                     GroupControlCodec.encode(GroupControl(kind=GroupControlKind.STATE_UPDATE,
-                        groupId=next.groupId,transition=event)))
+                        groupId=next.groupId,transition=event,certificateV2=certificate)))
         }
         if(result!=GroupApply.ACCEPTED) throw ApiFailure(409,"group_invalid")
     }
@@ -571,11 +845,39 @@ class GroupMembershipTransport(
         val prior=local.state(control.groupId) ?: throw ApiFailure(409,"group_invalid")
         if(prior.members.none {it.memberId==prior.coordinatorId && it.deviceId==sender})
             throw ApiFailure(409,"group_invalid")
-        val candidates=prior.members+listOfNotNull(event.change.added)
-        val trusted=trusted(candidates,control.groupId)
+        val candidate=event.change.added
+        val certificate=if(candidate!=null) control.certificateV2 ?:
+            admissionV2.evidence(control.groupId,event.change.eventId) else null
+        if(candidate!=null && certificate==null &&
+            (allAdmissionV2Peers(prior,candidate.deviceId,localId) ||
+                event.change.invite?.inviteId?.let {admissionV2.own(control.groupId,it)!=null}==true)) {
+            requestEvidenceV2(prior,event.change.eventId)
+            throw ApiFailure(503,"group_admission_evidence_pending")
+        }
+        if(certificate!=null && (candidate==null ||
+            !AdmissionV2.verifyCertificate(certificate,prior) ||
+            certificate.proposal.eventId!=event.change.eventId ||
+            certificate.proposal.inviteId!=event.change.invite?.inviteId ||
+            !MessageDigest.isEqual(certificate.proposal.candidateDigest,
+                GroupStatements.digestMember(candidate)))) throw ApiFailure(409,"group_invalid")
+        if(certificate!=null && prior.members.any {it.memberId==localId} &&
+            !admissionV2.matchesOwnApproval(prior,certificate,localId))
+            throw ApiFailure(503,"group_admission_evidence_pending")
+        val base=trusted(prior.members,control.groupId)
+        val trusted=if(certificate==null) trusted(prior.members+listOfNotNull(candidate),control.groupId)
+            else GroupTrustedPeer {member -> base.matches(member) ||
+                (candidate!=null && member.memberId==candidate.memberId &&
+                    MessageDigest.isEqual(GroupStatements.digestMember(member),
+                        GroupStatements.digestMember(candidate))) }
         val result=GroupLedger(records,trusted,localId).apply(control.groupId,event) {
-            event.change.added?.let {currentAuthority.anchor(event.next,it,
-                DeviceAuth.digest(NetworkCodec.encode(event)))}
+            event.change.added?.let {added ->
+                currentAuthority.anchor(event.next,added,DeviceAuth.digest(NetworkCodec.encode(event)))
+                if(certificate!=null) {
+                    admissionV2.saveEvidence(control.groupId,event.change.eventId,certificate)
+                    historicalAuthority.record(prior,event,certificate)
+                    admissionV2.removeOwn(control.groupId,certificate.proposal.inviteId)
+                }
+            }
             currentAuthority.removeDeparted(event.next)
             chats.cancelStale(control.groupId,event.next.epoch)
         }
@@ -639,17 +941,57 @@ class GroupMembershipTransport(
             ?: throw ApiFailure(409,"group_invalid")
         if(prior.members.none {it.memberId==prior.coordinatorId && it.deviceId==sender})
             throw ApiFailure(409,"group_invalid")
-        val members=prior.members+control.chain.flatMap {it.next.members}
-        val trusted=trusted(members,control.groupId)
+        val certificates=HashMap<String,Pair<GroupState,AdmissionCertificateV2>>()
+        var parent=prior
+        for(event in control.chain) {
+            if(event.change.action==GroupAction.ADD) {
+                val added=event.change.added ?: throw ApiFailure(409,"group_invalid")
+                val certificate=admissionV2.evidence(control.groupId,event.change.eventId)
+                if(certificate==null && (allAdmissionV2Peers(parent,added.deviceId,localId) ||
+                    event.change.invite?.inviteId?.let {admissionV2.own(control.groupId,it)!=null}==true)) {
+                    requestEvidenceV2(prior,event.change.eventId)
+                    throw ApiFailure(503,"group_admission_evidence_pending")
+                }
+                if(certificate!=null) {
+                    if(!AdmissionV2.verifyCertificate(certificate,parent) ||
+                        certificate.proposal.eventId!=event.change.eventId ||
+                        certificate.proposal.inviteId!=event.change.invite?.inviteId ||
+                        !MessageDigest.isEqual(certificate.proposal.candidateDigest,
+                            GroupStatements.digestMember(added))) throw ApiFailure(409,"group_invalid")
+                    if(parent.members.any {it.memberId==localId} &&
+                        !admissionV2.matchesOwnApproval(parent,certificate,localId))
+                        throw ApiFailure(503,"group_admission_evidence_pending")
+                    certificates[event.change.eventId]=parent to certificate
+                }
+            }
+            parent=event.next
+        }
+        val candidates=control.chain.mapNotNull {it.change.added}.filter {added ->
+            control.chain.any {it.change.added?.memberId==added.memberId &&
+                certificates.containsKey(it.change.eventId)}
+        }
+        val members=(prior.members+control.chain.flatMap {it.next.members })
+            .filter {member -> candidates.none {it.memberId==member.memberId}}
+        val base=trusted(members,control.groupId,historicalOnly=true)
+        val trusted=GroupTrustedPeer {member -> base.matches(member) || candidates.any {candidate ->
+            candidate.memberId==member.memberId &&
+                MessageDigest.isEqual(GroupStatements.digestMember(candidate),
+                    GroupStatements.digestMember(member))
+        }}
         val ledger=GroupLedger(records,trusted,localId)
         val result=ledger.applySnapshot(control.groupId,GroupSnapshot(control.state!!,control.chain)) {final,chain ->
             chain.forEach {event -> event.change.added?.let {added ->
+                certificates[event.change.eventId]?.let {(old,certificate) ->
+                    historicalAuthority.record(old,event,certificate)
+                    admissionV2.removeOwn(control.groupId,certificate.proposal.inviteId)
+                }
                 final.members.singleOrNull {it.memberId==added.memberId}?.let {
                     currentAuthority.anchor(final,it,DeviceAuth.digest(NetworkCodec.encode(event)))
                 }
             }}
             currentAuthority.removeDeparted(final)
         }
+        if(result==GroupApply.REMOVED) return
         if(result!=GroupApply.ACCEPTED) throw ApiFailure(409,"group_invalid")
         chats.cancelStale(control.groupId,control.state.epoch)
         if(control.state.revision<control.headRevision!!) requestResync(control.groupId,control.state)

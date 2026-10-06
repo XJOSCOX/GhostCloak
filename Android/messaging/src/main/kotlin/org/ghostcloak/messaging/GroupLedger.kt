@@ -127,6 +127,7 @@ class GroupLedger(
         if (record.forked) return@transaction GroupApply.FORKED
         if (snapshot.chain.size !in 1..GroupStatements.MAX_EVENTS ||
             snapshot.finalState.groupId!=id) return@transaction GroupApply.REJECTED
+        val accepted=ArrayList<GroupTransition>(snapshot.chain.size)
         for (event in snapshot.chain) {
             val (result,next)=applyInTransaction(record,event,false)
             if (result==GroupApply.FORKED) {
@@ -135,8 +136,12 @@ class GroupLedger(
             }
             if ((result!=GroupApply.ACCEPTED && result!=GroupApply.REMOVED) || next==null) return@transaction result
             record=next
+            accepted.add(event)
             if (record.state.members.none {it.memberId==localMemberId}) {
                 save(record)
+                // An admission before local removal must commit its historical authority
+                // in the same transaction as the replayed membership state.
+                onAccepted(record.state,accepted)
                 return@transaction GroupApply.REMOVED
             }
         }
@@ -144,7 +149,7 @@ class GroupLedger(
                 GroupStatements.digest(snapshot.finalState))}.getOrDefault(false))
             return@transaction GroupApply.REJECTED
         save(record)
-        onAccepted(record.state,snapshot.chain)
+        onAccepted(record.state,accepted)
         GroupApply.ACCEPTED
     }
 

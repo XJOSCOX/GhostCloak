@@ -29,6 +29,7 @@ object ConversationPayload {
     // The original marker often did not fit after the legacy profile name and other flags.
     // This authenticated, fixed-position marker fits the existing 256-byte frame.
     private val compactGroupSupport = "GhostCloak/grp2!".toByteArray(Charsets.US_ASCII)
+    private val admissionV2Support = "GC/admission-v2!".toByteArray(Charsets.US_ASCII)
     val reactionEmoji = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
     private val profileMarker = "GhostCloak/profile/v1!".toByteArray(Charsets.US_ASCII)
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
@@ -42,7 +43,8 @@ object ConversationPayload {
         val supportsProfiles:Boolean=false,val profile:ProfileUpdate?=null,
         val supportsDelete:Boolean=false,val deleteTargetId:String?=null,
         val supportsEdit:Boolean=false,val edit:EditUpdate?=null,
-        val supportsGroups:Boolean=false,val groupControl:GroupControl?=null,
+        val supportsGroups:Boolean=false,val supportsAdmissionV2:Boolean=false,
+        val groupControl:GroupControl?=null,
         val groupText:GroupText?=null) {
         override fun toString() = "Content(redacted)"
     }
@@ -214,10 +216,13 @@ object ConversationPayload {
             if(extension.isNotEmpty() && editOffset+editSupport.size<=size)
                 editSupport.copyInto(bytes,editOffset)
             val groupOffset=editOffset+(if(extension.isNotEmpty() && editOffset+editSupport.size<=size) editSupport.size else 0)
-            if(extension.isNotEmpty()) when {
-                groupOffset+groupSupport.size<=size -> groupSupport.copyInto(bytes,groupOffset)
-                groupOffset+compactGroupSupport.size<=size -> compactGroupSupport.copyInto(bytes,groupOffset)
-            }
+            val groupSize=if(extension.isNotEmpty()) when {
+                groupOffset+groupSupport.size<=size -> groupSupport.also {it.copyInto(bytes,groupOffset)}.size
+                groupOffset+compactGroupSupport.size<=size -> compactGroupSupport.also {it.copyInto(bytes,groupOffset)}.size
+                else -> 0
+            } else 0
+            if(groupSize>0 && groupOffset+groupSize+admissionV2Support.size<=size)
+                admissionV2Support.copyInto(bytes,groupOffset+groupSize)
             return bytes
         } finally { text.fill(0) }
     }
@@ -368,6 +373,9 @@ object ConversationPayload {
             bytes.copyOfRange(offset,offset+compactGroupSupport.size).contentEquals(compactGroupSupport)
         if(fullGroups) offset+=groupSupport.size
         else if(compactGroups) offset+=compactGroupSupport.size
+        val admissionV2=(fullGroups || compactGroups) && bytes.size-offset>=admissionV2Support.size &&
+            bytes.copyOfRange(offset,offset+admissionV2Support.size).contentEquals(admissionV2Support)
+        if(admissionV2) offset+=admissionV2Support.size
         val minimum=offset
         if(((minimum+255)/256)*256!=bytes.size)
             throw AppFailure(AppError.INVALID_TEXT)
@@ -390,7 +398,7 @@ object ConversationPayload {
         return Content(body, seconds, type == 2, supportsAttachments = supports,displayName=name,
             viewOnceKind=if(type==5) ViewOnceKind.TEXT else null,replyTo=reply,supportsMedia=media,
             supportsReactions=reactions,supportsProfiles=profiles,supportsDelete=deletes,supportsEdit=edits,
-            supportsGroups=fullGroups || compactGroups)
+            supportsGroups=fullGroups || compactGroups,supportsAdmissionV2=admissionV2)
     }
     fun policyText(seconds: Int) = if (seconds == 0) "Disappearing messages turned off"
         else "Disappearing messages set to ${DisappearingTimer.from(seconds).label}"

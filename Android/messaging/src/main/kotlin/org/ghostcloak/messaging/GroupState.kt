@@ -98,8 +98,11 @@ object GroupStatements {
     private const val COORDINATOR_DOMAIN="GhostCloak.GroupCoordinator.v1"
     private const val TRANSFER_DOMAIN="GhostCloak.GroupOwnerTransfer.v1"
     private const val ADMISSION_DOMAIN="GhostCloak.GroupAdmission.v1"
+    private const val ADMISSION_PROPOSAL_V2_DOMAIN="GhostCloak.GroupAdmissionProposal.v2"
+    private const val ADMISSION_APPROVAL_V2_DOMAIN="GhostCloak.GroupAdmissionApproval.v2"
     private val SIGNING_DOMAINS=setOf(GENESIS_DOMAIN,INVITE_DOMAIN,ACCEPT_DOMAIN,ACTOR_DOMAIN,
-        COORDINATOR_DOMAIN,TRANSFER_DOMAIN,ADMISSION_DOMAIN)
+        COORDINATOR_DOMAIN,TRANSFER_DOMAIN,ADMISSION_DOMAIN,ADMISSION_PROPOSAL_V2_DOMAIN,
+        ADMISSION_APPROVAL_V2_DOMAIN)
     private val zero=ByteArray(32)
 
     fun digest(state:GroupState):ByteArray=DeviceAuth.digest(bytes(state))
@@ -177,6 +180,14 @@ object GroupStatements {
     }.toByteArray()
     private fun number(value:Long)=ByteBuffer.allocate(8).putLong(value).array()
     private fun text(value:String)=value.toByteArray(Charsets.UTF_8)
+    fun admissionProposalV2(groupId:String,parentDigest:ByteArray,revision:Long,inviteId:String,
+        inviterId:String,candidateDigest:ByteArray,eventId:String):ByteArray =
+        statement(ADMISSION_PROPOSAL_V2_DOMAIN,text(groupId),parentDigest,number(revision),text(inviteId),
+            text(inviterId),candidateDigest,text(eventId))
+    fun admissionApprovalV2(proposalDigest:ByteArray,parentDigest:ByteArray,
+        approverId:String,candidateDigest:ByteArray,inviteId:String):ByteArray =
+        statement(ADMISSION_APPROVAL_V2_DOMAIN,proposalDigest,parentDigest,text(approverId),
+            candidateDigest,text(inviteId))
     fun isGroupSigningStatement(bytes:ByteArray):Boolean {
         if(bytes.size !in 16..MAX_EVENT_BYTES) return false
         val header=ByteBuffer.wrap(bytes)

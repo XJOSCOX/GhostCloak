@@ -8,6 +8,7 @@ class MemoryRecords : EndpointRecords {
     private var transactionDepth = 0
     var failCommit = false
     var storageFailureAtCommit = false
+    var failWritePrefix: String? = null
     var inspectCommitBuffer = false
     var commitBuffer: ByteArray? = null
     @Synchronized override fun <T> transaction(block: () -> T): T {
@@ -32,7 +33,11 @@ class MemoryRecords : EndpointRecords {
         } finally { transactionDepth = 0 }
     }
     override fun read(key: String) = data[key]?.copyOf()
-    override fun write(key: String, value: ByteArray) { data.put(key, value.copyOf())?.fill(0) }
+    override fun write(key: String, value: ByteArray) {
+        if(failWritePrefix?.let(key::startsWith)==true)
+            throw org.ghostcloak.crypto.EndpointStorageFailure()
+        data.put(key, value.copyOf())?.fill(0)
+    }
     override fun remove(key: String) { data.remove(key)?.fill(0) }
     override fun keys(prefix: String) = data.keys.filter { it.startsWith(prefix) }
 }

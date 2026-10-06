@@ -358,6 +358,14 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         if(supported && isActiveContact(id)) records.write("app/group-peer/$id",byteArrayOf(1))
         else records.remove("app/group-peer/$id")
     }
+    /** Authenticated v2 claim survives a local Block only for current group maintenance. */
+    fun admissionV2Peer(id:String):Boolean=records.transaction {
+        records.read("app/group-admission-v2-peer/$id")?.contentEquals(byteArrayOf(1))==true
+    }
+    fun admissionV2Peer(id:String,supported:Boolean)=records.transaction {
+        if(supported && isActiveContact(id)) records.write("app/group-admission-v2-peer/$id",byteArrayOf(1))
+        else records.remove("app/group-admission-v2-peer/$id")
+    }
     fun queueGroupControl(senderId:String,envelopeId:String,control:GroupControl)=records.transaction {
         require(isActiveContact(senderId) && RandomIdentifiers.valid(envelopeId))
         val keys=records.keys("app/group-control/pending/")

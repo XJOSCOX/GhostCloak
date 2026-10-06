@@ -153,7 +153,20 @@ class GroupInvitationScreenTest {
         compose.onNodeWithText("Hello group").assertExists()
         compose.onNodeWithText("Sent to 0 of 1; 1 unavailable").assertExists()
         compose.onNodeWithText("Message group").performTextInput("next")
-        compose.onNodeWithText("Send").performClick()
+        compose.onNodeWithContentDescription("Send").performClick()
         assertEquals("next",sent)
+    }
+
+    @Test fun groupComposerRemainsVisibleWhileTyping() {
+        val groupId=GroupIds.create();val own=GroupIds.create();val peer=GroupIds.create()
+        val group=GroupMembershipTransport.Conversation(groupId,GroupLocalStatus.ACTIVE,2,
+            mapOf(own to "own-device",peer to "device"),emptyList())
+        compose.setContent {GhostCloakTheme {
+            GroupConversationScreen(AppState(loading=false),group,{},{_,_->},{})
+        }}
+        compose.onNodeWithTag("group-composer").performClick()
+        compose.onNodeWithTag("group-composer").performTextInput("Hello")
+        compose.onNodeWithTag("group-composer").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Send").assertIsEnabled()
     }
 }

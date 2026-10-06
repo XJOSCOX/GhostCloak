@@ -35,6 +35,8 @@ interface SecureSessionEngine {
     suspend fun getRemoteFingerprint(remoteDeviceId: String): String
     suspend fun destroySession(remoteDeviceId: String)
     suspend fun getRemoteIdentityStatus(remoteDeviceId: String): RemoteIdentityStatus?
+    /** Null unless the existing accepted Signal pin is usable for a group authority lookup. */
+    suspend fun trustedRemoteIdentityDigest(remoteDeviceId:String):ByteArray? = null
     suspend fun verifyRemoteIdentity(remoteDeviceId: String, expectedFingerprint: String)
     suspend fun getPendingFingerprint(remoteDeviceId: String): String
     suspend fun trustNewIdentity(remoteDeviceId: String, expectedFingerprint: String)

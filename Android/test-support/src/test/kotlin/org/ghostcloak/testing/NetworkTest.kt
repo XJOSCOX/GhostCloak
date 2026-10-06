@@ -49,6 +49,88 @@ class NetworkTest {
     private suspend fun rejectAsync(block: suspend () -> Unit) {
         try { block(); fail("Expected rejection") } catch (_: ApiFailure) { }
     }
+    @Test fun registeredDeviceBindingIsAuthenticatedExactAndNonConsuming() = runBlocking {
+        Fixture().use { f ->
+            val a=f.person("alice");val b=f.person("bob")
+            val id=b.registration.deviceId
+            val digest=DeviceAuth.digest(b.registration.bundles.first().identity)
+            val request=ApiRequest.CapabilityLookup(id,expectedAccountId=b.registration.accountId,
+                expectedIdentityDigest=digest)
+            reject(401) { f.service.execute(request) }
+            val before=f.database.transaction {f.database.prekeys.get(id)!!.pool.map {it.preKeyId}}
+            val binding=f.call(a,request).deviceBinding!!
+            assertEquals(1,binding.version)
+            assertEquals(b.registration.accountId,binding.accountId)
+            assertEquals(id,binding.deviceId)
+            assertArrayEquals(b.registration.authPublicKey,binding.authPublicKey)
+            assertArrayEquals(digest,binding.identityDigest)
+            assertEquals(before,f.database.transaction {f.database.prekeys.get(id)!!.pool.map {it.preKeyId}})
+            assertNull(f.call(a,ApiRequest.CapabilityLookup(id)).deviceBinding)
+            reject(404) {f.call(a,ApiRequest.CapabilityLookup(RandomIdentifiers.create(),
+                expectedAccountId=b.registration.accountId,expectedIdentityDigest=digest))}
+            reject(404) {f.call(a,ApiRequest.CapabilityLookup(id,
+                expectedAccountId=a.registration.accountId,expectedIdentityDigest=digest))}
+            reject(404) {f.call(a,ApiRequest.CapabilityLookup(id,
+                expectedAccountId=b.registration.accountId,expectedIdentityDigest=ByteArray(32)))}
+            reject(400) {f.call(a,ApiRequest.CapabilityLookup("bad",
+                expectedAccountId=b.registration.accountId,expectedIdentityDigest=digest))}
+            reject(400) {f.call(a,ApiRequest.CapabilityLookup(id,
+                expectedAccountId=b.registration.accountId,expectedIdentityDigest=ByteArray(1024)))}
+            assertEquals(ServerOperation.LOOKUP,f.service.operation(request))
+        }
+    }
+    @Test fun groupAuthorityRequiresAcceptedCurrentSignalPinAndStableRegisteredKey() = runBlocking {
+        Fixture().use { f ->
+            val a=f.person("alice");val b=f.person("bob")
+            val repo=LocalRepository(a.records)
+            a.engine.establishSession(b.engine.publicBundle())
+            val contact=Contact(RandomIdentifiers.create(),b.registration.accountId,"Bob",b.registration.deviceId)
+            repo.save(contact.copy(request=true))
+            val resolver=GroupAuthorityResolver(repo,a.engine,f.client(a),a.records)
+            rejectAsync {resolver.resolveTrustedGroupAuthority(contact.remoteDeviceId)}
+            repo.save(contact)
+            assertArrayEquals(b.registration.authPublicKey,
+                resolver.resolveTrustedGroupAuthority(contact.remoteDeviceId).authPublicKey)
+            // An otherwise valid replacement auth key under the same Signal pin is rejected.
+            val replacement=java.security.KeyPairGenerator.getInstance("EC").apply {
+                initialize(java.security.spec.ECGenParameterSpec("secp256r1"))
+            }.generateKeyPair().public.encoded
+            val row=f.database.transaction {f.database.devices.get(contact.remoteDeviceId)!!}
+            f.database.transaction {f.database.devices.put(contact.remoteDeviceId,DeviceRow(row.id,row.accountId,row.routingId,
+                replacement,row.identity))}
+            rejectAsync {resolver.resolveTrustedGroupAuthority(contact.remoteDeviceId)}
+            f.database.transaction {f.database.devices.put(contact.remoteDeviceId,row)}
+            a.records.write("trust-state/${contact.remoteDeviceId}","CHANGED".encodeToByteArray())
+            rejectAsync {resolver.resolveTrustedGroupAuthority(contact.remoteDeviceId)}
+            a.records.write("trust-state/${contact.remoteDeviceId}","UNVERIFIED".encodeToByteArray())
+            repo.block(contact.remoteDeviceId,true)
+            rejectAsync {resolver.resolveTrustedGroupAuthority(contact.remoteDeviceId)}
+            assertNull(a.records.read("app/group-authority/${contact.remoteDeviceId}"))
+            val c=f.person("charlie")
+            a.engine.establishSession(c.engine.publicBundle())
+            val removed=Contact(RandomIdentifiers.create(),c.registration.accountId,"Charlie",c.registration.deviceId)
+            repo.save(removed)
+            resolver.resolveTrustedGroupAuthority(removed.remoteDeviceId)
+            repo.removeContact(removed.remoteDeviceId)
+            rejectAsync {resolver.resolveTrustedGroupAuthority(removed.remoteDeviceId)}
+            assertNull(a.records.read("app/group-authority/${removed.remoteDeviceId}"))
+            val d=f.person("dave");val e=f.person("eve")
+            a.engine.establishSession(d.engine.publicBundle())
+            val changed=Contact(RandomIdentifiers.create(),d.registration.accountId,"Dave",d.registration.deviceId)
+            repo.save(changed)
+            resolver.resolveTrustedGroupAuthority(changed.remoteDeviceId)
+            val replacementIdentity=e.engine.publicBundle()
+            try {
+                a.engine.establishSession(RemoteKeyBundle(changed.remoteDeviceId,replacementIdentity.registrationId,
+                    replacementIdentity.identity,replacementIdentity.preKeyId,replacementIdentity.preKey,
+                    replacementIdentity.signedId,replacementIdentity.signedKey,replacementIdentity.signature,
+                    replacementIdentity.kyberId,replacementIdentity.kyberKey,replacementIdentity.kyberSignature))
+                fail("Identity change accepted")
+            } catch (failure:CryptoFailure) {assertEquals(CryptoError.IdentityChanged,failure.error)}
+            assertNull(a.records.read("app/group-authority/${changed.remoteDeviceId}"))
+            rejectAsync {resolver.resolveTrustedGroupAuthority(changed.remoteDeviceId)}
+        }
+    }
     @Test fun realHttpOfflineSignalDeliveryAckAndDatabaseCompromise() = runBlocking {
         Fixture().use { f ->
             val a = f.person("alice"); val b = f.person("bob"); val c = f.person("charlie")

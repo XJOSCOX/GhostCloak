@@ -23,6 +23,7 @@ internal class TrustStore(private val db: EndpointRecords) {
         val previous = status.previousTrustState ?: status.trustState
         db.write("trust-previous/$id", previous.name.encodeToByteArray())
         db.write("trust-candidate/$id", candidate.serialize())
+        db.remove("app/group-authority/$id")
         setState(id, IdentityTrustState.CHANGED)
         return SecurityEvent.RemoteIdentityChanged(id, previous)
     }
@@ -34,6 +35,7 @@ internal class TrustStore(private val db: EndpointRecords) {
         val candidate = candidate(id) ?: throw CryptoFailure(CryptoError.VerificationFailed)
         // The sole replacement path. Approval does not claim independent verification.
         db.write("trust/$id/1", candidate.serialize())
+        db.remove("app/group-authority/$id")
         setState(id, IdentityTrustState.UNVERIFIED)
         db.remove("trust-candidate/$id")
         db.remove("trust-previous/$id")

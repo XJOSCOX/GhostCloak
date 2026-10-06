@@ -254,6 +254,12 @@ class SignalProtocolEngine(private val records: EndpointRecords,
         fingerprint(remoteDeviceId, trust.pin(remoteDeviceId) ?: throw CryptoFailure(CryptoError.UnknownSession))
     }
     override suspend fun getRemoteIdentityStatus(remoteDeviceId: String) = operation { remote(remoteDeviceId); trust.status(remoteDeviceId) }
+    override suspend fun trustedRemoteIdentityDigest(remoteDeviceId:String):ByteArray? = operation {
+        remote(remoteDeviceId)
+        if(lifecycle(remoteDeviceId)!=SessionLifecycle.ACTIVE ||
+            trust.status(remoteDeviceId)?.trustState==IdentityTrustState.CHANGED) null
+        else trust.pin(remoteDeviceId)?.serialize()?.let(DeviceAuth::digest)
+    }
     override suspend fun verifyRemoteIdentity(remoteDeviceId: String, expectedFingerprint: String) = operation {
         validateApproval(remoteDeviceId, expectedFingerprint)
         trust.setState(remoteDeviceId, IdentityTrustState.VERIFIED)
@@ -275,6 +281,7 @@ class SignalProtocolEngine(private val records: EndpointRecords,
     override suspend fun destroySession(remoteDeviceId: String) = operation {
         store.deleteSession(remote(remoteDeviceId))
         setLifecycle(remoteDeviceId, SessionLifecycle.DESTROYED)
+        records.remove("app/group-authority/$remoteDeviceId")
         records.write("admission/$remoteDeviceId", "outbound".encodeToByteArray())
     }
 }

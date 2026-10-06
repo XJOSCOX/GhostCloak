@@ -236,13 +236,28 @@ class MailboxService(private val db: BackendDatabase, private val clock: Clock =
             }
             is ApiRequest.CapabilityLookup -> {
                 requireApi(RandomIdentifiers.valid(r.deviceId))
-                val target = db.devices.get(r.deviceId) ?: throw ApiFailure(404,"contact_unavailable")
-                val account = db.accounts.get(target.accountId)!!
-                // Refresh never consumes/resurrects a one-time key or establishes another session.
-                val bundle = db.prekeys.get(target.id)?.pool?.firstOrNull { it.capability != null }
-                    ?: db.prekeys.get(target.id)?.pool?.firstOrNull()
-                    ?: throw ApiFailure(404,"contact_unavailable")
-                ApiResponse(directory=DirectoryEntry(account.id,target.id,target.routingId,account.ghostCloakId,bundle),serverTime=now())
+                requireApi((r.expectedAccountId==null)==(r.expectedIdentityDigest==null))
+                val expectedAccount=r.expectedAccountId
+                val expectedDigest=r.expectedIdentityDigest
+                if(expectedAccount!=null) {
+                    requireApi(RandomIdentifiers.valid(expectedAccount) && expectedDigest?.size==32)
+                    val target=db.devices.get(r.deviceId)
+                    // All exact-target mismatches have the same response. No prekey is read or consumed.
+                    if(target==null || target.accountId!=expectedAccount ||
+                        !MessageDigest.isEqual(DeviceAuth.digest(target.identity),expectedDigest))
+                        throw ApiFailure(404,"contact_unavailable")
+                    DeviceAuth.publicKey(target.authPublicKey)
+                    ApiResponse(deviceBinding=DeviceBinding(accountId=target.accountId,deviceId=target.id,
+                        authPublicKey=target.authPublicKey,identityDigest=DeviceAuth.digest(target.identity)))
+                } else {
+                    val target = db.devices.get(r.deviceId) ?: throw ApiFailure(404,"contact_unavailable")
+                    val account = db.accounts.get(target.accountId)!!
+                    // Refresh never consumes/resurrects a one-time key or establishes another session.
+                    val bundle = db.prekeys.get(target.id)?.pool?.firstOrNull { it.capability != null }
+                        ?: db.prekeys.get(target.id)?.pool?.firstOrNull()
+                        ?: throw ApiFailure(404,"contact_unavailable")
+                    ApiResponse(directory=DirectoryEntry(account.id,target.id,target.routingId,account.ghostCloakId,bundle),serverTime=now())
+                }
             }
             is ApiRequest.Capabilities -> {
                 requireApi(r.advertisements.size <= NetworkLimits.BUNDLES)

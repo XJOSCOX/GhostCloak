@@ -134,6 +134,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         records.remove("app/reaction-peer/$id")
         records.remove("app/delete-peer/$id")
         records.remove("app/edit-peer/$id")
+        records.remove("app/group-authority/$id")
         records.keys("app/edit/$id/").forEach(records::remove)
         records.remove("app/default-timer-pending/$id")
     }
@@ -171,6 +172,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 records.remove("app/profile/remote/$id")
                 records.remove("app/profile-peer/$id")
                 records.remove("app/profile/ready/$id")
+                records.remove("app/group-authority/$id")
                 if(c.request) finishRequest(id,RequestState.BLOCKED)
                 else put("app/request/$id",RequestRecord(state=RequestState.BLOCKED,grace=requestDeadline(),clockVersion=1))
             }

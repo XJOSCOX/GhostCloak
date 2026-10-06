@@ -19,10 +19,15 @@ import org.ghostcloak.identity.SessionLifecycle
 
 /** P13.3 deliberately exposes only text and sequential invitation management. */
 @Composable fun GroupConversationScreen(state:AppState,group:GroupMembershipTransport.Conversation,
-    back:()->Unit,send:(String,()->Unit)->Unit,invite:(String)->Unit,openChat:(String)->Unit={}) {
+    back:()->Unit,send:(String,()->Unit)->Unit,invite:(String)->Unit,openChat:(String)->Unit={},
+    acceptInvitation:(String)->Unit={},declineInvitation:(String)->Unit={}) {
     var draft by remember(group.groupId) {mutableStateOf("")}
     var inviting by remember {mutableStateOf(false)}
     val active=group.status==GroupLocalStatus.ACTIVE && group.memberCount>=2
+    val invitation=state.groupInvitations.firstOrNull {it.groupId==group.groupId}
+    val inviter=invitation?.let {offer -> state.contacts.firstOrNull {
+        !it.contact.request && !it.contact.blocked && it.contact.remoteDeviceId==offer.senderDeviceId
+    }}
     val candidates=state.contacts.filter {!it.contact.request && !it.contact.blocked &&
         it.contact.remoteDeviceId !in group.memberDevices.values}
     val readyCandidates=candidates.filter {it.groupCapable && it.session==SessionLifecycle.ACTIVE &&
@@ -31,19 +36,36 @@ import org.ghostcloak.identity.SessionLifecycle
         Row(Modifier.fillMaxWidth().padding(16.dp),verticalAlignment=Alignment.CenterVertically) {
             TextButton(onClick=back) {Text("Back")}
             Column(Modifier.weight(1f).padding(start=8.dp)) {
-                Text("Group conversation",style=MaterialTheme.typography.titleLarge)
-                Text("${group.memberCount} of 5 members",style=MaterialTheme.typography.bodySmall,
+                Text(if(invitation!=null) "Group invitation" else "Group conversation",
+                    style=MaterialTheme.typography.titleLarge)
+                Text(if(invitation!=null) "Not a member yet" else "${group.memberCount} of 5 members",style=MaterialTheme.typography.bodySmall,
                     color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if(group.status==GroupLocalStatus.ACTIVE && !group.invitationPending && group.memberCount<5 && candidates.isNotEmpty())
                 TextButton(onClick={inviting=true}) {Text("Invite")}
         }
-        if(!active) Text(when(group.status) {
-            GroupLocalStatus.FORKED -> "Group state conflict. Create a new group to continue."
-            GroupLocalStatus.DISSOLVED -> "This group is dissolved. History is read-only."
-            GroupLocalStatus.REMOVED,GroupLocalStatus.LEFT -> "You are no longer in this group. History is read-only."
-            else -> "Waiting for confirmed group membership."
-        },Modifier.padding(horizontal=16.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
+        if(!active) Column(Modifier.padding(horizontal=16.dp)) {
+            Text(when {
+                group.status==GroupLocalStatus.FORKED -> "Group state conflict. Create a new group to continue."
+                group.status==GroupLocalStatus.DISSOLVED -> "This group is dissolved. History is read-only."
+                group.status==GroupLocalStatus.REMOVED || group.status==GroupLocalStatus.LEFT ->
+                    "You are no longer in this group. History is read-only."
+                invitation?.accepting==true -> "Acceptance sent. Waiting for signed membership confirmation."
+                invitation!=null -> "You were invited to this group. Accept to join."
+                group.invitationPending -> "Invitation sent. Waiting for the contact to accept."
+                else -> "Waiting for confirmed group membership."
+            },color=MaterialTheme.colorScheme.onSurfaceVariant)
+            if(inviter!=null) {
+                Text("From ${inviter.contact.visibleName}",style=MaterialTheme.typography.bodyMedium)
+                Text(if(inviter.identity?.trustState==IdentityTrustState.VERIFIED) "Inviter verified"
+                    else "Inviter unverified",style=MaterialTheme.typography.bodySmall,
+                    color=MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if(invitation!=null && !invitation.accepting) Row {
+                TextButton(onClick={acceptInvitation(invitation.id)},enabled=!state.loading) {Text("Accept invitation")}
+                TextButton(onClick={declineInvitation(invitation.id)},enabled=!state.loading) {Text("Decline")}
+            }
+        }
         LazyColumn(Modifier.weight(1f).fillMaxWidth(),contentPadding=PaddingValues(16.dp),
             verticalArrangement=Arrangement.spacedBy(8.dp)) {
             items(group.messages,key={it.logicalId}) { message ->

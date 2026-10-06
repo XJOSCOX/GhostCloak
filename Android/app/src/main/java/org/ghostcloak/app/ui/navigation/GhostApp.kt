@@ -83,8 +83,7 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                     composable("archived") { ContactsScreen(state, {}, { id -> nav.navigate("conversation/$id") },
                         model::connectNetwork,model::syncNetwork,archived=true,
                         unarchive={model.setArchived(it,false)},back={nav.popBackStack()}) }
-                    composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("security/$id") }, model::connectNetwork, model::syncNetwork, directory=true,
-                        acceptGroupInvite=model::acceptGroupInvite,declineGroupInvite=model::declineGroupInvite) }
+                    composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("security/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
                     composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard,
                         {name->model.addNetwork(name) {nav.popBackStack()}},model::unblock,{nav.navigate("blocked")},
                         { text -> model.importCard(text) { nav.popBackStack() } },
@@ -148,7 +147,11 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                         GroupConversationScreen(state,group,{nav.popBackStack()},
                             {text,done->model.sendGroupText(id,text,done)},
                             {device->model.inviteToGroup(id,device)},
-                            {device->nav.navigate("conversation/$device")})
+                            {device->nav.navigate("conversation/$device")},
+                            model::acceptGroupInvite,{inviteId ->
+                                model.declineGroupInvite(inviteId)
+                                nav.popBackStack()
+                            })
                     }
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable

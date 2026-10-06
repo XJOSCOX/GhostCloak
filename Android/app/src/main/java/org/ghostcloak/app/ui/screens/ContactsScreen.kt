@@ -18,11 +18,9 @@ import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.privacy.noSensitiveCopyCut
 import org.ghostcloak.messaging.ChatOrganization
-import org.ghostcloak.identity.IdentityTrustState
 
 @Composable fun ContactsScreen(state: AppState, add: () -> Unit, open: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, directory: Boolean = false,
     archived:Boolean=false,showArchived:()->Unit={},unarchive:(String)->Unit={},back:()->Unit={},
-    acceptGroupInvite:(String)->Unit={},declineGroupInvite:(String)->Unit={},
     openGroup:(String)->Unit={},showCreateGroup:()->Unit={}) {
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
@@ -63,32 +61,6 @@ import org.ghostcloak.identity.IdentityTrustState
             if(directory && state.forkedGroupCount>0) Text(
                 "Group state conflict — resync required. Start a new group to continue safely.",
                 style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.error)
-            if(directory && state.groupInvitations.isNotEmpty()) {
-                Text("GROUP INVITATIONS",style=MaterialTheme.typography.labelSmall,
-                    color=MaterialTheme.colorScheme.onSurfaceVariant)
-                state.groupInvitations.forEach { invitation ->
-                    val inviter=state.contacts.firstOrNull {
-                        it.contact.remoteDeviceId==invitation.senderDeviceId &&
-                            !it.contact.request && !it.contact.blocked
-                    }
-                    if(inviter!=null) Surface(shape=MaterialTheme.shapes.large,
-                        color=MaterialTheme.colorScheme.surface,modifier=Modifier.fillMaxWidth().padding(vertical=GhostDimensions.small)) {
-                        Column(Modifier.padding(GhostDimensions.regular)) {
-                            Text("Group invitation",style=MaterialTheme.typography.titleMedium)
-                            Text("From ${inviter.contact.visibleName} · ${invitation.memberCount} current members",
-                                style=MaterialTheme.typography.bodyMedium)
-                            Text(if(inviter.identity?.trustState==IdentityTrustState.VERIFIED) "Inviter verified" else "Inviter unverified",
-                                style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                            if(invitation.accepting) Text("Waiting for membership confirmation…",
-                                style=MaterialTheme.typography.bodySmall)
-                            else Row(horizontalArrangement=Arrangement.spacedBy(GhostDimensions.small)) {
-                                TextButton(onClick={acceptGroupInvite(invitation.id)},enabled=!state.loading) {Text("Accept")}
-                                TextButton(onClick={declineGroupInvite(invitation.id)},enabled=!state.loading) {Text("Decline")}
-                            }
-                        }
-                    }
-                }
-            }
             if(chats.isEmpty() && (directory || archived || state.groups.isEmpty())) {
                 Column(Modifier.weight(1f).fillMaxWidth().padding(GhostDimensions.roomy),verticalArrangement=Arrangement.Center,horizontalAlignment=Alignment.CenterHorizontally) {
                     Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer) {
@@ -109,7 +81,11 @@ import org.ghostcloak.identity.IdentityTrustState
                             color=MaterialTheme.colorScheme.surface,
                             modifier=Modifier.fillMaxWidth().padding(bottom=GhostDimensions.micro)) {
                             Column(Modifier.padding(GhostDimensions.regular)) {
-                                Text("Group conversation",style=MaterialTheme.typography.titleMedium)
+                                Text(when {
+                                    group.status==org.ghostcloak.messaging.GroupLocalStatus.INVITED -> "Group invitation"
+                                    group.invitationPending && group.memberCount==1 -> "Group invitation sent"
+                                    else -> "Group conversation"
+                                },style=MaterialTheme.typography.titleMedium)
                                 Text("${group.memberCount} members · ${group.status.name.lowercase().replaceFirstChar(Char::uppercase)}",
                                     style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                                 group.messages.lastOrNull()?.let {Text(it.text,maxLines=1,

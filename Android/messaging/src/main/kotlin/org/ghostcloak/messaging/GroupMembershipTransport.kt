@@ -34,7 +34,8 @@ class GroupMembershipTransport(
     @Serializable private data class Incoming(val sender:String,val offer:GroupControl,val status:InviteState)
     @Serializable private data class Outgoing(val target:String,val offer:GroupControl,val used:Boolean=false)
     private enum class InviteState { OFFERED, ACCEPTING, DECLINED, EXPIRED }
-    data class Invitation(val id:String,val senderDeviceId:String,val memberCount:Int,val accepting:Boolean)
+    data class Invitation(val id:String,val senderDeviceId:String,val memberCount:Int,val accepting:Boolean,
+        val groupId:String)
     private fun memberKey(id:String):String {require(GroupIds.valid(id));return "app/group/member/$id"}
     private fun incomingKey(id:String):String {require(GroupIds.valid(id));return "app/group/incoming/$id"}
     private fun outgoingKey(id:String):String {require(GroupIds.valid(id));return "app/group/outgoing/$id"}
@@ -167,7 +168,8 @@ class GroupMembershipTransport(
         records.keys("app/group/incoming/").mapNotNull {key ->
             val record=NetworkCodec.decode<Incoming>(records.read(key) ?: return@mapNotNull null,16_384)
             if(record.status==InviteState.DECLINED || record.status==InviteState.EXPIRED) null else Invitation(key.removePrefix("app/group/incoming/"),
-                record.sender,record.offer.state!!.members.size,record.status==InviteState.ACCEPTING)
+                record.sender,record.offer.state!!.members.size,record.status==InviteState.ACCEPTING,
+                record.offer.groupId)
         }
     }
     /** 0 = unseen, 1 = reserved before OS publication, 2 = shown or foreground-suppressed. */
@@ -197,9 +199,12 @@ class GroupMembershipTransport(
             GroupLedger(records,GroupTrustedPeer {false},member).isForked(id)
         }
     }
-    fun conversations():List<Conversation> = chats.groups().mapNotNull {id ->
+    fun conversations():List<Conversation> {
+        val visibleInvitations=invitations().map {it.groupId}.toSet()
+        return chats.groups().mapNotNull {id ->
         val current=state(id) ?: return@mapNotNull null
         val status=status(id) ?: return@mapNotNull null
+        if(status==GroupLocalStatus.INVITED && id !in visibleInvitations) return@mapNotNull null
         val pending=records.transaction {
             records.keys("app/group/outgoing/").any { key ->
                 val offer=NetworkCodec.decode<Outgoing>(records.read(key) ?: return@any false,16_384)
@@ -210,6 +215,7 @@ class GroupMembershipTransport(
             }
         }
         Conversation(id,status,current.members.size,current.members.associate {it.memberId to it.deviceId},chats.messages(id),pending)
+        }
     }
     fun conversation(id:String):Conversation?=conversations().firstOrNull {it.groupId==id}
     /** Persist one logical message and its immutable recipient set before any pairwise enqueue. */

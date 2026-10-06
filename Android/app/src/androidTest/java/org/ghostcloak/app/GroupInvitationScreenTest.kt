@@ -69,37 +69,52 @@ class GroupInvitationScreenTest {
         assertEquals("device",created)
     }
 
-    @Test fun validatedInvitationShowsSafeDetailsAndExplicitActions() {
-        val id=GroupIds.create()
+    @Test fun validatedInvitationIsActionableOnItsGroupPage() {
+        val id=GroupIds.create();val groupId=GroupIds.create();val own=GroupIds.create()
         val contact=ContactStatus(Contact("local","account","Peer","device",localAlias="Friend"),
             null,SessionLifecycle.ACTIVE)
+        val group=GroupMembershipTransport.Conversation(groupId,GroupLocalStatus.INVITED,1,
+            mapOf(own to "device"),emptyList())
         var accepted="";var declined=""
         compose.setContent {GhostCloakTheme {
-            ContactsScreen(AppState(loading=false,networkConfigured=true,contacts=listOf(contact),
-                groupInvitations=listOf(GroupMembershipTransport.Invitation(id,"device",2,false))),
-                {},{},directory=true,acceptGroupInvite={accepted=it},declineGroupInvite={declined=it})
+            GroupConversationScreen(AppState(loading=false,networkConfigured=true,contacts=listOf(contact),
+                groupInvitations=listOf(GroupMembershipTransport.Invitation(id,"device",1,false,groupId))),
+                group,{},{_,_->},{},acceptInvitation={accepted=it},declineInvitation={declined=it})
         }}
         compose.onNodeWithText("Group invitation").assertExists()
-        compose.onNodeWithText("From Friend · 2 current members").assertExists()
+        compose.onNodeWithText("Not a member yet").assertExists()
+        compose.onNodeWithText("You were invited to this group. Accept to join.").assertExists()
+        compose.onNodeWithText("From Friend").assertExists()
         compose.onNodeWithText("Inviter unverified").assertExists()
         compose.onNodeWithText("account").assertDoesNotExist()
         compose.onNodeWithText("device").assertDoesNotExist()
-        compose.onNodeWithText("Accept").performClick()
+        compose.onNodeWithText("Accept invitation").performClick()
         assertEquals(id,accepted)
         compose.onNodeWithText("Decline").performClick()
         assertEquals(id,declined)
     }
 
     @Test fun pendingAcceptanceDoesNotOfferSecondAccept() {
-        val id=GroupIds.create()
+        val id=GroupIds.create();val groupId=GroupIds.create();val own=GroupIds.create()
         val contact=ContactStatus(Contact("local","account","Peer","device"),null,SessionLifecycle.ACTIVE)
+        val group=GroupMembershipTransport.Conversation(groupId,GroupLocalStatus.INVITED,1,
+            mapOf(own to "device"),emptyList())
         compose.setContent {GhostCloakTheme {
-            ContactsScreen(AppState(loading=false,networkConfigured=true,contacts=listOf(contact),
-                groupInvitations=listOf(GroupMembershipTransport.Invitation(id,"device",1,true))),
-                {},{},directory=true)
+            GroupConversationScreen(AppState(loading=false,networkConfigured=true,contacts=listOf(contact),
+                groupInvitations=listOf(GroupMembershipTransport.Invitation(id,"device",1,true,groupId))),
+                group,{},{_,_->},{})
         }}
-        compose.onNodeWithText("Waiting for membership confirmation…").assertExists()
-        compose.onNodeWithText("Accept").assertDoesNotExist()
+        compose.onNodeWithText("Acceptance sent. Waiting for signed membership confirmation.").assertExists()
+        compose.onNodeWithText("Accept invitation").assertDoesNotExist()
+    }
+    @Test fun creatorSeesInvitationPendingInsteadOfGenericOneMemberStatus() {
+        val groupId=GroupIds.create();val own=GroupIds.create()
+        val group=GroupMembershipTransport.Conversation(groupId,GroupLocalStatus.ACTIVE,1,
+            mapOf(own to "own-device"),emptyList(),invitationPending=true)
+        compose.setContent {GhostCloakTheme {
+            GroupConversationScreen(AppState(loading=false),group,{},{_,_->},{})
+        }}
+        compose.onNodeWithText("Invitation sent. Waiting for the contact to accept.").assertExists()
     }
     @Test fun invitationNotificationIsAlwaysGenericAndSecret() {
         val context=ApplicationProvider.getApplicationContext<Context>()

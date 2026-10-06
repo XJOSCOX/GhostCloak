@@ -15,6 +15,138 @@ import java.net.URI
 import java.util.concurrent.Executors
 
 class NetworkTest {
+    @Test fun blockedCanonicalPeerExchangesOnlyGroupMaintenanceWithoutRestoringContact() = runBlocking {
+        Fixture().use {f ->
+            val (a,b,c)=listOf(f.person("alice",true),f.person("bob",true),f.person("charlie",true))
+            val people=listOf(a,b,c)
+            val repos=people.associateWith {LocalRepository(it.records)}
+            val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
+                NetworkMailboxTransport(f.client(p),p.state))}
+            val groups=people.associateWith {p ->GroupMembershipTransport(p.records,repos.getValue(p),p.engine,p.state,
+                GroupAuthorityResolver(repos.getValue(p),p.engine,f.client(p),p.records),outboxes.getValue(p))}
+            val conversations=people.associateWith {p ->ConversationService(p.engine,repos.getValue(p)).also {it.open()}}
+            for(p in people) for(q in people) if(p!=q) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repos.getValue(p).save(Contact(RandomIdentifiers.create(),q.registration.accountId,q.name,q.registration.deviceId))
+                repos.getValue(p).groupPeer(q.registration.deviceId,true)
+            }
+            suspend fun push(p:Person) {
+                outboxes.getValue(p).pendingIds().forEach {id ->
+                    if(outboxes.getValue(p).get(id).state!=OutboxState.SERVER_ACCEPTED) outboxes.getValue(p).process(id)
+                }
+            }
+            suspend fun pull(p:Person):List<Delivery> {
+                val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                val deliveries=mailbox.fetch()
+                deliveries.forEach {conversations.getValue(p).acceptNetwork(EnvelopeCodec.decode(it.encryptedEnvelope))}
+                mailbox.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+                return deliveries
+            }
+            val groupId=groups.getValue(a).createAndInvite(b.registration.deviceId)
+            push(a);pull(b);groups.getValue(b).processPending()
+            groups.getValue(b).accept(groups.getValue(b).invitations().single().id)
+            push(b);pull(a);groups.getValue(a).processPending()
+            push(a);pull(b);groups.getValue(b).processPending()
+            val otherGroup=groups.getValue(a).createAndInvite(c.registration.deviceId)
+            push(a);pull(c);groups.getValue(c).processPending()
+            groups.getValue(c).accept(groups.getValue(c).invitations().single().id)
+            push(c);pull(a);groups.getValue(a).processPending()
+            push(a);pull(c);groups.getValue(c).processPending()
+            assertEquals(2,groups.getValue(a).state(otherGroup)!!.members.size)
+            val memberA=groups.getValue(a).state(groupId)!!.members.single {it.deviceId==a.registration.deviceId}
+            val memberB=groups.getValue(a).state(groupId)!!.members.single {it.deviceId==b.registration.deviceId}
+            // Simulate a valid P13.3 group created before group-scoped authority existed.
+            val scopedKey="app/group/current-authority/$groupId/${memberB.memberId}"
+            a.records.transaction {a.records.remove(scopedKey)}
+            conversations.getValue(a).block(b.registration.deviceId,true)
+            assertNotNull(a.records.transaction {a.records.read(scopedKey)})
+            assertEquals(RelationshipState.BLOCKED,repos.getValue(a).relationshipState(b.registration.deviceId))
+            groups.getValue(a).invite(groupId,c.registration.deviceId)
+            push(a);pull(c);groups.getValue(c).processPending()
+            groups.getValue(c).accept(groups.getValue(c).invitations().single().id)
+            push(c);pull(a);groups.getValue(a).processPending()
+            push(a);assertEquals(1,pull(b).size);groups.getValue(b).processPending()
+            pull(c);groups.getValue(c).processPending()
+            assertEquals(3,groups.getValue(a).state(groupId)!!.members.size)
+            assertEquals(3,groups.getValue(b).state(groupId)!!.members.size)
+            val genesisDigest=GroupLedger(a.records,GroupTrustedPeer {false},memberA.memberId)
+                .digestAtRevision(groupId,1)!!
+            val resync=ConversationPayload.encodeGroup(GroupControl(kind=GroupControlKind.RESYNC_REQUEST,
+                groupId=groupId,fromRevision=1,fromDigest=genesisDigest))
+            outboxes.getValue(b).enqueue(a.registration.deviceId,resync)
+            push(b);assertEquals(1,pull(a).size)
+            assertEquals(1,repos.getValue(a).pendingGroupControls().size)
+            assertTrue(conversations.getValue(a).messages(b.registration.deviceId).isEmpty())
+            groups.getValue(a).processPending()
+            assertTrue(repos.getValue(a).pendingGroupControls().isEmpty())
+            // A's response is sent through the group-only outbox even though B is blocked locally.
+            assertEquals(1,pull(b).size)
+            groups.getValue(b).processPending()
+            assertEquals(RelationshipState.BLOCKED,repos.getValue(a).relationshipState(b.registration.deviceId))
+            assertEquals(memberB.memberId,groups.getValue(a).state(groupId)!!.members.single {
+                it.deviceId==b.registration.deviceId
+            }.memberId)
+            val direct=ConversationPayload.encode("blocked private text",0)
+            outboxes.getValue(b).enqueue(a.registration.deviceId,direct)
+            push(b);assertEquals(1,pull(a).size)
+            assertTrue(conversations.getValue(a).messages(b.registration.deviceId).isEmpty())
+            assertTrue(repos.getValue(a).pendingGroupControls().isEmpty())
+            val text=ConversationPayload.encodeGroupText(GroupText(groupId=groupId,epoch=3,
+                senderMemberId=memberB.memberId,logicalId=GroupIds.create(),text="hidden"))
+            outboxes.getValue(b).enqueue(a.registration.deviceId,text)
+            push(b);assertEquals(1,pull(a).size)
+            assertTrue(repos.getValue(a).pendingGroupControls().isEmpty())
+            assertTrue(groups.getValue(a).conversation(groupId)!!.messages.isEmpty())
+            val canonical=groups.getValue(a).state(groupId)!!
+            val revision=canonical.revision
+            val forged=GroupTransition(GroupChange(GroupIds.create(),GroupAction.REMOVE,
+                memberA.memberId,targetId=memberB.memberId),canonical,ByteArray(64),ByteArray(64))
+            outboxes.getValue(b).enqueue(a.registration.deviceId,ConversationPayload.encodeGroup(
+                GroupControl(kind=GroupControlKind.STATE_UPDATE,groupId=groupId,transition=forged)))
+            push(b);assertEquals(1,pull(a).size)
+            groups.getValue(a).processPending()
+            assertEquals(revision,groups.getValue(a).state(groupId)!!.revision)
+            assertTrue(repos.getValue(a).pendingGroupControls().isEmpty())
+            val nonMaintenance=ConversationPayload.encodeGroup(GroupControl(
+                kind=GroupControlKind.INVITE_EXPIRED,groupId=groupId,inviteId=GroupIds.create()))
+            outboxes.getValue(b).enqueue(a.registration.deviceId,nonMaintenance)
+            push(b);pull(a)
+            assertTrue(repos.getValue(a).pendingGroupControls().isEmpty())
+            val wrongGroup=ConversationPayload.encodeGroup(GroupControl(
+                kind=GroupControlKind.RESYNC_REQUEST,groupId=otherGroup,
+                fromRevision=1,fromDigest=genesisDigest))
+            outboxes.getValue(b).enqueue(a.registration.deviceId,wrongGroup)
+            push(b);pull(a)
+            assertTrue(repos.getValue(a).pendingGroupControls().isEmpty())
+            val removedC=groups.getValue(a).state(groupId)!!.members.single {
+                it.deviceId==c.registration.deviceId
+            }
+            groups.getValue(a).removeMember(groupId,removedC.memberId)
+            assertNull(a.records.transaction {a.records.read(
+                "app/group/current-authority/$groupId/${removedC.memberId}")})
+            assertEquals(1,a.records.transaction {a.records.keys("app/group/system-outbox/").size})
+            val restartedA=GroupMembershipTransport(a.records,repos.getValue(a),a.engine,a.state,
+                GroupAuthorityResolver(repos.getValue(a),a.engine,f.client(a),a.records),outboxes.getValue(a))
+            restartedA.processPending()
+            assertEquals(1,pull(b).size)
+            groups.getValue(b).processPending()
+            assertEquals(2,groups.getValue(b).state(groupId)!!.members.size)
+            assertTrue(a.records.transaction {a.records.keys("app/group/system-outbox/").isEmpty()})
+            conversations.getValue(a).unblock(b.registration.deviceId)
+            assertEquals(RelationshipState.DORMANT_UNACCEPTED,
+                repos.getValue(a).relationshipState(b.registration.deviceId))
+            outboxes.getValue(b).enqueue(a.registration.deviceId,resync)
+            push(b);pull(a)
+            assertEquals(1,repos.getValue(a).pendingGroupControls().size)
+            groups.getValue(a).processPending()
+            assertEquals(1,pull(b).size)
+            assertEquals(RelationshipState.DORMANT_UNACCEPTED,
+                repos.getValue(a).relationshipState(b.registration.deviceId))
+        }
+    }
+
     @Test fun groupTextFanoutOfflineCatchupReplayAndRemoval() = runBlocking {
         Fixture().use {f ->
             val people=listOf(f.person("alice",true),f.person("bob",true),f.person("charlie",true))
@@ -179,9 +311,13 @@ class NetworkTest {
                 val memberId=p.records.read("app/group/member/$groupId")!!.decodeToString()
                 assertEquals(GroupApply.ACCEPTED,GroupLedger(p.records,GroupTrustedPeer {true},memberId).apply(groupId,event))
             }
+            // Owner A blocks canonical coordinator B. The signed admission request for C
+            // still reaches A's internal processor, and A's co-signature returns to B.
+            conversations.getValue(a).block(b.registration.deviceId,true)
             groups.getValue(b).invite(groupId,c.registration.deviceId)
             assertTrue(groups.getValue(c).invitations().isEmpty())
             push(b);pull(a)
+            assertEquals(RelationshipState.BLOCKED,repos.getValue(a).relationshipState(b.registration.deviceId))
             assertTrue(groups.getValue(c).invitations().isEmpty())
             push(a);pull(b)
             push(b);pull(c)

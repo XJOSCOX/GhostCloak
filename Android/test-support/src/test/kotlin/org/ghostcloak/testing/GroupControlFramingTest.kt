@@ -8,11 +8,25 @@ import org.ghostcloak.messaging.GroupControl
 import org.ghostcloak.messaging.GroupControlCodec
 import org.ghostcloak.messaging.GroupControlKind
 import org.ghostcloak.messaging.GroupIds
+import org.ghostcloak.messaging.GroupText
+import org.ghostcloak.messaging.AppFailure
 import org.ghostcloak.messaging.LocalRepository
 import org.junit.Assert.*
 import org.junit.Test
 
 class GroupControlFramingTest {
+    @Test fun blockedClassifierNeverDecodesOrdinaryOrGroupUserText() {
+        assertNull(ConversationPayload.decodeBlockedGroupSystem(ConversationPayload.encode("private text",0)))
+        val groupText=ConversationPayload.encodeGroupText(GroupText(groupId=GroupIds.create(),
+            epoch=1,senderMemberId=GroupIds.create(),logicalId=GroupIds.create(),text="secret"))
+        assertNull(ConversationPayload.decodeBlockedGroupSystem(groupText))
+        val control=ConversationPayload.encodeGroup(GroupControl(kind=GroupControlKind.RESYNC_REQUEST,
+            groupId=GroupIds.create(),fromRevision=1,fromDigest=ByteArray(32)))
+        assertEquals(GroupControlKind.RESYNC_REQUEST,
+            ConversationPayload.decodeBlockedGroupSystem(control)?.kind)
+        control[4]=99
+        assertThrows(AppFailure::class.java) {ConversationPayload.decodeBlockedGroupSystem(control)}
+    }
     @Test fun resyncIdentifiersRoundTripInApplicationFrame() {
         val id=GroupIds.create()
         val control=GroupControl(kind=GroupControlKind.RESYNC_REQUEST,groupId=id,

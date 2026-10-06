@@ -130,6 +130,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     private fun endAcceptedRelationship(id:String,state:RequestState,blocked:Boolean) {
         val c=contact(id)
         if(c.request || c.blocked) throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        GroupCurrentAuthority(records).anchorExistingBeforeBlock(id,c.publicUserId)
         retainHistory(id)
         save(c.copy(request=true,blocked=blocked))
         put("app/request/$id",RequestRecord(state=state,grace=requestDeadline(),clockVersion=1))
@@ -364,6 +365,19 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         records.write("app/group-control/pending/$envelopeId",
             NetworkCodec.encode(PendingGroupControl(senderId,control)))
     }
+    /** Called only after Signal authentication, inside its decrypt-and-commit transaction. */
+    fun queueGroupScopedSystem(senderId:String,envelopeId:String,control:GroupControl,
+        signalDigest:ByteArray)=records.transaction {
+        if(isActiveContact(senderId) || !RandomIdentifiers.valid(envelopeId) ||
+            !control.kind.blockSafeMaintenance() ||
+            GroupCurrentAuthority(records).current(control.groupId,senderId,signalDigest)==null)
+            return@transaction false
+        val keys=records.keys("app/group-control/pending/")
+        require(keys.size<128)
+        records.write("app/group-control/pending/$envelopeId",
+            NetworkCodec.encode(PendingGroupControl(senderId,control,groupScoped=true)))
+        true
+    }
     fun pendingGroupControls():List<Pair<String,PendingGroupControl>> = records.transaction {
         records.keys("app/group-control/pending/").sorted().take(16).map {key ->
             key.removePrefix("app/group-control/pending/") to NetworkCodec.decode<PendingGroupControl>(
@@ -379,6 +393,9 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         GroupChatStore(records).queue(senderId,envelopeId,value)
     }
     fun groupOutboxIds():Set<String> = GroupChatStore(records).outboxIds()
+    fun groupSystemOutboxIds():Set<String> = records.transaction {
+        records.keys("app/group/system-outbox/").map {it.substringAfterLast('/')}.toSet()
+    }
     private fun reactionKey(id:String,target:String,mine:Boolean):String {
         require(RandomIdentifiers.valid(id) && RandomIdentifiers.valid(target))
         return "app/reaction/$id/$target/${if(mine) "mine" else "peer"}"

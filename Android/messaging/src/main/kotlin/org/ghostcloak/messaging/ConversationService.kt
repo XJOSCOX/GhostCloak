@@ -299,7 +299,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             repository.profileCancellationDone(id)
         }
         for(id in outbox.pendingIds()) {
-            if(id in groupOutbox) continue // Group fan-out is processed under its membership-change barrier.
+            if(id in groupOutbox || id in repository.groupSystemOutboxIds()) continue // Group controls retain their own canonical-member barrier.
             val entry=outbox.get(id)
             if(repository.messages(entry.deviceId).any {it.localId==id && it.state==MessageState.EXPIRED_UNDELIVERED}) {
                 outbox.removeExpired(id);continue
@@ -377,12 +377,19 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             (contact.ghostCloakId == null || contact.ghostCloakId == sender.ghostCloakId), "sender_mismatch")
         if(contact.blocked) {
             // Authenticate sender/bound envelope and atomically advance the ratchet and replay receipt.
-            // Do not parse content, retain descriptors, create requests or enqueue notifications.
-            engine.decryptAndCommit(envelope) {
+            // Only the authenticated type-13 internal maintenance class is decoded. All user
+            // content remains opaque and discarded; the normal mailbox ACK follows commit.
+            val signalDigest=engine.trustedRemoteIdentityDigest(contact.remoteDeviceId)
+            engine.decryptAndCommit(envelope) { bytes ->
+                val control=ConversationPayload.decodeBlockedGroupSystem(bytes)
+                if(control!=null && signalDigest!=null)
+                    repository.queueGroupScopedSystem(contact.remoteDeviceId,envelope.envelopeId,
+                        control,signalDigest)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
             }
             return@action
         }
+        val scopedDigest=if(contact.request) engine.trustedRemoteIdentityDigest(contact.remoteDeviceId) else null
         engine.decryptAndCommit(envelope) { bytes ->
             val content = ConversationPayload.decode(bytes)
             if(content.groupText!=null) {
@@ -400,6 +407,9 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                     repository.isActiveContact(contact.remoteDeviceId)) {
                     repository.groupPeer(contact.remoteDeviceId,true)
                     repository.queueGroupControl(contact.remoteDeviceId,envelope.envelopeId,content.groupControl)
+                } else if(content.groupControl.kind.blockSafeMaintenance() && scopedDigest!=null) {
+                    repository.queueGroupScopedSystem(contact.remoteDeviceId,envelope.envelopeId,
+                        content.groupControl,scopedDigest)
                 }
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit

@@ -44,6 +44,12 @@ class DurableOutbox(private val records: EndpointRecords, private val engine: Se
         require(entry.state!=OutboxState.SERVER_ACCEPTED)
         records.remove(key(id))
     }
+    /** A queued group-system control must never outlive its canonical recipient relationship. */
+    fun cancelUnsentGroupSystem(id:String) = records.transaction {
+        val entry=get(id)
+        require(entry.state!=OutboxState.SERVER_ACCEPTED)
+        records.remove(key(id))
+    }
     suspend fun enqueue(deviceId: String, plaintext: ByteArray, committed: (String) -> Unit = {}): String = withContext(Dispatchers.IO) { mutex.withLock {
         requireApi(RandomIdentifiers.valid(deviceId) && plaintext.size in 1..EnvelopeCodec.MAX_BODY)
         val id = RandomIdentifiers.create()

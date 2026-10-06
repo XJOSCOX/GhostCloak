@@ -223,6 +223,12 @@ object ConversationPayload {
     }
     fun decode(bytes: ByteArray): Content = try { decodeChecked(bytes) }
         catch (_: java.nio.charset.CharacterCodingException) { throw AppFailure(AppError.INVALID_TEXT) }
+    /** Classify only the authenticated outer type. Never decode blocked user content. */
+    fun decodeBlockedGroupSystem(bytes: ByteArray): GroupControl? {
+        if (bytes.size < 6 || !bytes.copyOfRange(0,4).contentEquals(magic) || bytes[5].toInt()!=13)
+            return null
+        return decode(bytes).groupControl ?: throw AppFailure(AppError.INVALID_TEXT)
+    }
     private fun decodeChecked(bytes: ByteArray): Content {
         if (bytes.isEmpty()) throw AppFailure(AppError.INVALID_TEXT)
         // Old UTF-8 messages are still accepted as ordinary, non-expiring text.

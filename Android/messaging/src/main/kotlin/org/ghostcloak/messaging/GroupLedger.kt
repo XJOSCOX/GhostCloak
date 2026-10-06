@@ -121,7 +121,8 @@ class GroupLedger(
     }
 
     /** A gap requires every signed intermediate event; no unverified snapshot fast-forward. */
-    fun applySnapshot(id:String,snapshot:GroupSnapshot):GroupApply=records.transaction {
+    fun applySnapshot(id:String,snapshot:GroupSnapshot,
+        onAccepted:(GroupState,List<GroupTransition>)->Unit = {_,_->}):GroupApply=records.transaction {
         var record=load(id) ?: return@transaction GroupApply.NEEDS_RESYNC
         if (record.forked) return@transaction GroupApply.FORKED
         if (snapshot.chain.size !in 1..GroupStatements.MAX_EVENTS ||
@@ -143,6 +144,7 @@ class GroupLedger(
                 GroupStatements.digest(snapshot.finalState))}.getOrDefault(false))
             return@transaction GroupApply.REJECTED
         save(record)
+        onAccepted(record.state,snapshot.chain)
         GroupApply.ACCEPTED
     }
 

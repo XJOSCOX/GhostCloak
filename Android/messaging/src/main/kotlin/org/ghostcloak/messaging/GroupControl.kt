@@ -7,6 +7,11 @@ import org.ghostcloak.protocol.NetworkCodec
 enum class GroupControlKind { INVITE, ACCEPT, INVITE_EXPIRED, STATE_UPDATE, RESYNC_REQUEST,
     RESYNC_RESPONSE, ADMISSION_REQUEST, ADMISSION_RESPONSE }
 
+/** Only internal maintenance is permitted through a blocked canonical group relationship. */
+internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
+    GroupControlKind.STATE_UPDATE, GroupControlKind.RESYNC_REQUEST, GroupControlKind.RESYNC_RESPONSE,
+    GroupControlKind.ADMISSION_REQUEST, GroupControlKind.ADMISSION_RESPONSE)
+
 @Serializable data class GroupControl(
     val version: Int = 1,
     val kind: GroupControlKind,
@@ -25,7 +30,8 @@ enum class GroupControlKind { INVITE, ACCEPT, INVITE_EXPIRED, STATE_UPDATE, RESY
     override fun toString() = "GroupControl(redacted)"
 }
 
-@Serializable data class PendingGroupControl(val senderDeviceId: String, val control: GroupControl) {
+@Serializable data class PendingGroupControl(val senderDeviceId: String, val control: GroupControl,
+    val groupScoped: Boolean = false) {
     override fun toString() = "PendingGroupControl(redacted)"
 }
 

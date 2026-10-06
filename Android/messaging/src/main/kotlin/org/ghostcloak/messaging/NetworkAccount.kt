@@ -87,6 +87,17 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
         records.remove("app/new-network-account"); records.remove(prefix+"pending-registration")
         records.remove(prefix+"recovery-required"); records.remove(prefix+"logged-out")
     }
+    /** Dormant P13.1 signer. Reuses the registered non-exportable device-auth key only for
+     * recognized, separately domain-separated group statements. No login/recovery path calls it. */
+    fun signGroupStatement(statement:ByteArray):ByteArray = records.transaction {
+        require(GroupStatements.isGroupSigningStatement(statement))
+        requireApi(credential!=null && records.read(prefix+"registered")!=null,"credential_missing",401)
+        requireApi(records.read(prefix+"auth-private")==null,"platform_credential_required")
+        val alias=records.read(prefix+"auth-alias")?.decodeToString() ?: throw ApiFailure(401,"credential_missing")
+        val pinned=records.read(prefix+"auth-public") ?: throw ApiFailure(401,"credential_missing")
+        requireApi(MessageDigest.isEqual(pinned,credential!!.publicKey(alias,false)),"credential_changed")
+        credential.sign(alias,statement)
+    }
     fun acceptSession(grant:SessionGrant)=records.transaction {
         requireApi(grant.token.matches(Regex("[A-Za-z0-9_-]{43}")) && grant.expiresAt>System.currentTimeMillis() &&
             GhostCloakIds.valid(grant.ghostCloakId),"invalid_response",502)

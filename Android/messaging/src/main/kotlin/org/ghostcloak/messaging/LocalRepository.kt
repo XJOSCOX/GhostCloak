@@ -6,6 +6,7 @@ import kotlinx.serialization.cbor.Cbor
 import org.ghostcloak.crypto.EndpointRecords
 import org.ghostcloak.crypto.EndpointStorageFailure
 import org.ghostcloak.identity.RandomIdentifiers
+import org.ghostcloak.protocol.NetworkCodec
 
 @Serializable private data class PendingEdit(val revision:Long,val text:String)
 
@@ -134,6 +135,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         records.remove("app/reaction-peer/$id")
         records.remove("app/delete-peer/$id")
         records.remove("app/edit-peer/$id")
+        records.remove("app/group-peer/$id")
         records.remove("app/group-authority/$id")
         records.keys("app/edit/$id/").forEach(records::remove)
         records.remove("app/default-timer-pending/$id")
@@ -173,6 +175,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 records.remove("app/profile-peer/$id")
                 records.remove("app/profile/ready/$id")
                 records.remove("app/group-authority/$id")
+                records.remove("app/group-peer/$id")
                 if(c.request) finishRequest(id,RequestState.BLOCKED)
                 else put("app/request/$id",RequestRecord(state=RequestState.BLOCKED,grace=requestDeadline(),clockVersion=1))
             }
@@ -319,6 +322,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         records.remove("app/media-peer/$id")
         records.remove("app/reaction-peer/$id")
         records.remove("app/profile-peer/$id")
+        records.remove("app/group-peer/$id")
     }
     fun attachmentPeer(id: String, supported: Boolean) = records.transaction {
         if (supported) records.write("app/attachment-peer/$id", byteArrayOf(1)) else records.remove("app/attachment-peer/$id")
@@ -338,6 +342,30 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun editPeer(id:String):Boolean=records.transaction {records.read("app/edit-peer/$id")?.contentEquals(byteArrayOf(1))==true}
     fun editPeer(id:String,supported:Boolean)=records.transaction {
         if(supported) records.write("app/edit-peer/$id",byteArrayOf(1)) else records.remove("app/edit-peer/$id")
+    }
+    fun groupPeer(id:String):Boolean=records.transaction {
+        isActiveContact(id) && records.read("app/group-peer/$id")?.contentEquals(byteArrayOf(1))==true
+    }
+    fun groupPeer(id:String,supported:Boolean)=records.transaction {
+        if(supported && isActiveContact(id)) records.write("app/group-peer/$id",byteArrayOf(1))
+        else records.remove("app/group-peer/$id")
+    }
+    fun queueGroupControl(senderId:String,envelopeId:String,control:GroupControl)=records.transaction {
+        require(isActiveContact(senderId) && RandomIdentifiers.valid(envelopeId))
+        val keys=records.keys("app/group-control/pending/")
+        require(keys.size<128)
+        records.write("app/group-control/pending/$envelopeId",
+            NetworkCodec.encode(PendingGroupControl(senderId,control)))
+    }
+    fun pendingGroupControls():List<Pair<String,PendingGroupControl>> = records.transaction {
+        records.keys("app/group-control/pending/").sorted().take(16).map {key ->
+            key.removePrefix("app/group-control/pending/") to NetworkCodec.decode<PendingGroupControl>(
+                records.read(key) ?: throw EndpointStorageFailure(),GroupControlCodec.MAX_BYTES+2048)
+        }
+    }
+    fun finishGroupControl(envelopeId:String)=records.transaction {
+        require(RandomIdentifiers.valid(envelopeId))
+        records.remove("app/group-control/pending/$envelopeId")
     }
     private fun reactionKey(id:String,target:String,mine:Boolean):String {
         require(RandomIdentifiers.valid(id) && RandomIdentifiers.valid(target))

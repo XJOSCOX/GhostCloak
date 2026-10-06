@@ -5,13 +5,19 @@ import org.ghostcloak.crypto.EndpointRecords
 /** Synthetic JVM fixtures only; never packaged in the Android application. */
 class MemoryRecords : EndpointRecords {
     private var data = mutableMapOf<String, ByteArray>()
+    private var transactionDepth = 0
     var failCommit = false
     var storageFailureAtCommit = false
     var inspectCommitBuffer = false
     var commitBuffer: ByteArray? = null
     @Synchronized override fun <T> transaction(block: () -> T): T {
+        if (transactionDepth > 0) {
+            transactionDepth++
+            try { return block() } finally { transactionDepth-- }
+        }
         val previous = data
         data = previous.mapValues { it.value.copyOf() }.toMutableMap()
+        transactionDepth = 1
         try {
             val result = block()
             if (inspectCommitBuffer && result is ByteArray) commitBuffer = result
@@ -23,7 +29,7 @@ class MemoryRecords : EndpointRecords {
             data.values.forEach { it.fill(0) }
             data = previous
             throw e
-        }
+        } finally { transactionDepth = 0 }
     }
     override fun read(key: String) = data[key]?.copyOf()
     override fun write(key: String, value: ByteArray) { data.put(key, value.copyOf())?.fill(0) }

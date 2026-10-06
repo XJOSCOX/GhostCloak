@@ -83,9 +83,21 @@ class AppRuntime internal constructor(
             val ledger = notificationLedger ?: return
             if (inDemo || !canAutoSync) { cancelNotificationSafely(); return }
             val entries = ledger.eligible()
+            val invitationNotices=network?.pendingGroupInvitationNotices().orEmpty()
             val visible = synchronized(notificationGate) { foreground || activityVisible }
-            if (visible) { ledger.suppressAll(); cancelNotificationSafely(); return }
-            if (entries.isEmpty()) { cancelNotificationSafely(); return }
+            if (visible) {
+                ledger.suppressAll()
+                invitationNotices.forEach { (id,_) -> network?.markGroupInvitationNotice(id,true) }
+                cancelNotificationSafely(); return
+            }
+            if(invitationNotices.isNotEmpty() && notifications.allowed()) {
+                // Reserve the notice durably before OS publication. A crash retries silently.
+                invitationNotices.forEach { (id,wasReserved) ->
+                    if(!wasReserved) network?.markGroupInvitationNotice(id,false)
+                    if(notifications.postInvitation(wasReserved)) network?.markGroupInvitationNotice(id,true)
+                }
+            }
+            if (entries.isEmpty()) { notifications.cancelMessage(); return }
             val waiting = entries.filter { it.state != NotificationLedger.ANNOUNCED }
             val candidate = (waiting.ifEmpty { entries }).maxByOrNull { it.presentation.timestamp }?.presentation
             if (waiting.isEmpty()) { notifications.refresh(candidate); return }
@@ -243,6 +255,21 @@ class AppRuntime internal constructor(
     suspend fun acceptRequest(service:ConversationService,id:String) {
         if(networkConfigured && !inDemo) network!!.acceptRequest(service,id)
         else service.acceptRequest(id)
+    }
+    fun groupInvitations():List<org.ghostcloak.messaging.GroupMembershipTransport.Invitation> =
+        if(networkConfigured && !inDemo) network?.groupInvitations().orEmpty() else emptyList()
+    fun forkedGroupCount():Int = if(networkConfigured && !inDemo) network?.forkedGroupCount() ?: 0 else 0
+    suspend fun createGroupAndInvite(id:String):String {
+        check(networkConfigured && !inDemo)
+        return network!!.createGroupAndInvite(id)
+    }
+    suspend fun acceptGroupInvite(id:String) {
+        check(networkConfigured && !inDemo)
+        network!!.acceptGroupInvite(id)
+    }
+    fun declineGroupInvite(id:String) {
+        check(networkConfigured && !inDemo)
+        network!!.declineGroupInvite(id)
     }
     suspend fun connectNetwork(service: ConversationService) { network!!.connect() }
     fun ownGhostCloakId():String?=if(networkConfigured && !inDemo) network?.visibleGhostCloakId() else null

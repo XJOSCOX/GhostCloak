@@ -34,6 +34,8 @@ class NetworkController(
     private val account: NetworkAccount by lazy { NetworkAccount(client, state) }
     private val transport by lazy { NetworkMailboxTransport(client, state) }
     private val outbox by lazy { DurableOutbox(records, engine, transport) }
+    private val groups by lazy { GroupMembershipTransport(records,LocalRepository(records),engine,state,
+        GroupAuthorityResolver(LocalRepository(records),engine,client,records),outbox) }
     private val prekeyRefill by lazy { PrekeyRefill(records, engine, URI(origin).host, ::device,
         { client.call(it, reportTransientFailure=false) }, { canAutoSync && cooldown.remainingMillis == 0L },
         diagnostic = PrekeyDiagnostics::emit) }
@@ -286,10 +288,20 @@ class NetworkController(
             }
         }
         exchange()
+        groups.processPending()
+        service.retryNetwork(outbox)
         status = NetworkStatus.CONNECTED
         prekeyRefill.maintain()
         capabilities.publish()
     }
+    fun groupInvitations()=groups.invitations()
+    fun forkedGroupCount()=groups.forkedCount()
+    fun pendingGroupInvitationNotices()=groups.pendingInvitationNotices()
+    fun markGroupInvitationNotice(id:String,complete:Boolean)=groups.markInvitationNotice(id,complete)
+    suspend fun createGroupAndInvite(id:String)=operation(NetworkOperation.SEND) {groups.createAndInvite(id)}
+    suspend fun inviteToGroup(groupId:String,id:String)=operation(NetworkOperation.SEND) {groups.invite(groupId,id)}
+    suspend fun acceptGroupInvite(inviteId:String)=operation(NetworkOperation.SEND) {groups.accept(inviteId)}
+    fun declineGroupInvite(inviteId:String)=groups.decline(inviteId)
     suspend fun syncBackground(service: ConversationService) {
         backgroundFetches = 0
         try { sync(service) } finally { backgroundFetches = null }

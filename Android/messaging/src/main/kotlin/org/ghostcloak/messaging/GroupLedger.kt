@@ -4,10 +4,11 @@ import kotlinx.serialization.Serializable
 import org.ghostcloak.crypto.EndpointRecords
 import org.ghostcloak.protocol.NetworkCodec
 
-/** Local, encrypted-store-backed, dormant group authority. No transport or UI calls this class. */
+/** Encrypted local group state authority. Transport may only supply validated P13.2 bindings. */
 @Serializable internal data class GroupRecord(
     val state:GroupState,
-    val genesis:GroupGenesis,
+    val genesis:GroupGenesis? = null,
+    val admission:GroupAdmission? = null,
     val events:List<GroupTransition> = emptyList(),
     val usedInvites:List<String> = emptyList(),
     val forked:Boolean = false
@@ -24,9 +25,12 @@ class GroupLedger(
         require(it.size<=GroupStatements.MAX_LEDGER_BYTES)
         NetworkCodec.decode<GroupRecord>(it,GroupStatements.MAX_LEDGER_BYTES).also {record ->
             GroupStatements.validate(record.state)
-            GroupStatements.validate(record.genesis.state)
-            require(record.state.groupId==id && record.genesis.state.groupId==id &&
-                record.genesis.state.revision==1L && record.events.size<GroupStatements.MAX_EVENTS &&
+            record.genesis?.let { GroupStatements.validate(it.state) }
+            record.admission?.let { GroupStatements.validate(it.state) }
+            require((record.genesis==null) != (record.admission==null) &&
+                record.state.groupId==id && (record.genesis?.state?.groupId ?: record.admission?.state?.groupId)==id &&
+                (record.genesis==null || record.genesis.state.revision==1L) &&
+                record.events.size<GroupStatements.MAX_EVENTS &&
                 record.usedInvites.size<=GroupStatements.MAX_INVITES &&
                 record.usedInvites.distinct().size==record.usedInvites.size)
         }
@@ -39,6 +43,26 @@ class GroupLedger(
     fun state(id:String):GroupState?=records.transaction { load(id)?.state }
     fun isForked(id:String):Boolean=records.transaction { load(id)?.forked==true }
     fun lifecycle(id:String):GroupLifecycle?=state(id)?.lifecycle
+    fun anchorRevision(id:String):Long?=records.transaction {
+        load(id)?.let {it.genesis?.state?.revision ?: it.admission?.state?.revision}
+    }
+    fun transitionsAfter(id:String,revision:Long):List<GroupTransition>?=records.transaction {
+        val record=load(id) ?: return@transaction null
+        val anchor=record.genesis?.state?.revision ?: record.admission?.state?.revision ?: return@transaction null
+        if(revision<anchor || revision>record.state.revision) return@transaction null
+        record.events.filter {it.next.revision>revision}
+    }
+    fun digestAtRevision(id:String,revision:Long):ByteArray?=records.transaction {
+        val record=load(id) ?: return@transaction null
+        val anchor=record.genesis?.state ?: record.admission?.state ?: return@transaction null
+        val state=if(revision==anchor.revision) anchor else record.events.firstOrNull {
+            it.next.revision==revision
+        }?.next ?: return@transaction null
+        GroupStatements.digest(state)
+    }
+    fun inviteUsed(id:String,inviteId:String):Boolean=records.transaction {
+        load(id)?.usedInvites?.contains(inviteId)==true
+    }
     fun status(id:String):GroupLocalStatus?=records.transaction {
         val record=load(id) ?: return@transaction null
         when {
@@ -59,17 +83,41 @@ class GroupLedger(
         if (!trustedPeer.matches(owner) || !GroupStatements.verify(owner.authPublicKey,
                 GroupStatements.genesis(state),genesis.ownerSignature)) return@transaction GroupApply.REJECTED
         val old=load(state.groupId)
-        if (old!=null) return@transaction if (GroupStatements.digest(old.genesis.state).contentEquals(
+        if (old!=null) return@transaction if (old.genesis!=null && GroupStatements.digest(old.genesis.state).contentEquals(
                 GroupStatements.digest(state))) GroupApply.DUPLICATE else GroupApply.FORKED.also {
                     save(old.copy(forked=true))
                 }
-        save(GroupRecord(state,genesis))
+        save(GroupRecord(state,genesis=genesis))
         GroupApply.ACCEPTED
     }
 
-    fun apply(id:String,event:GroupTransition):GroupApply=records.transaction {
+    /** New members get a current-state admission proof, never a blind snapshot replacement. */
+    fun acceptAdmission(proof:GroupAdmission):GroupApply=records.transaction {
+        val state=proof.state
+        if(proof.target.memberId!=localMemberId || state.members.any {it.memberId==localMemberId} ||
+            state.members.size>=GroupStatements.MAX_MEMBERS ||
+            !GroupStatements.verifyAdmission(proof,trustedPeer)) return@transaction GroupApply.REJECTED
+        val old=load(state.groupId)
+        if(old!=null) {
+            if(old.admission?.let {it.inviteId==proof.inviteId &&
+                    GroupStatements.digest(it.state).contentEquals(GroupStatements.digest(state))}==true)
+                return@transaction GroupApply.DUPLICATE
+            // A never-joined invitee may accept a fresh dual-signed admission after the old
+            // invitation expired. No signed membership event or active state may be replaced.
+            if(old.admission==null || old.events.isNotEmpty() || old.forked ||
+                old.state.members.any {it.memberId==localMemberId} ||
+                state.revision<old.state.revision ||
+                (state.revision==old.state.revision &&
+                    !GroupStatements.digest(state).contentEquals(GroupStatements.digest(old.state))))
+                return@transaction GroupApply.REJECTED
+        }
+        save(GroupRecord(state,admission=proof))
+        GroupApply.ACCEPTED
+    }
+
+    fun apply(id:String,event:GroupTransition,onAccepted:()->Unit = {}):GroupApply=records.transaction {
         val record=load(id) ?: return@transaction GroupApply.NEEDS_RESYNC
-        applyInTransaction(record,event,true).first
+        applyInTransaction(record,event,true,onAccepted).first
     }
 
     /** A gap requires every signed intermediate event; no unverified snapshot fast-forward. */
@@ -98,7 +146,8 @@ class GroupLedger(
         GroupApply.ACCEPTED
     }
 
-    private fun applyInTransaction(record:GroupRecord,event:GroupTransition,persist:Boolean):Pair<GroupApply,GroupRecord?> {
+    private fun applyInTransaction(record:GroupRecord,event:GroupTransition,persist:Boolean,
+        onAccepted:()->Unit = {}):Pair<GroupApply,GroupRecord?> {
         val previous=record.state
         if (record.forked) return GroupApply.FORKED to null
         if (runCatching {GroupStatements.validateEventShape(event)}.isFailure) return GroupApply.REJECTED to null
@@ -112,7 +161,8 @@ class GroupLedger(
         if (next.revision==previous.revision) {
             if (nextDigest.contentEquals(GroupStatements.digest(previous))) return GroupApply.DUPLICATE to null
             // Check a rival against this revision's original parent, not its accepted child.
-            val parent=if (record.events.size==1) record.genesis.state else record.events.getOrNull(record.events.size-2)?.next
+            val parent=if (record.events.size==1) record.genesis?.state ?: record.admission?.state
+                else record.events.getOrNull(record.events.size-2)?.next
             val usedBeforeLast=record.usedInvites.toMutableSet().also { used ->
                 record.events.lastOrNull()?.change?.invite?.inviteId?.let(used::remove)
             }
@@ -145,7 +195,7 @@ class GroupLedger(
         val used=if(inviteId==null) record.usedInvites else record.usedInvites+inviteId
         if (used.size>GroupStatements.MAX_INVITES) return GroupApply.REJECTED to null
         val updated=record.copy(state=next,events=record.events+event,usedInvites=used)
-        if (persist) save(updated)
+        if (persist) { save(updated); onAccepted() }
         return (if(next.members.none {it.memberId==localMemberId}) GroupApply.REMOVED else GroupApply.ACCEPTED) to updated
     }
 

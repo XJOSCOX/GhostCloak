@@ -18,6 +18,8 @@ interface LocalNotifications {
     fun post(quiet: Boolean): Boolean
     fun post(quiet: Boolean, candidate: NotificationLedger.Presentation?): Boolean = post(quiet)
     fun refresh(candidate: NotificationLedger.Presentation?) = Unit
+    fun postInvitation(quiet:Boolean):Boolean = false
+    fun cancelMessage() = cancel()
     fun cancel()
 }
 
@@ -34,6 +36,7 @@ class AndroidLocalNotifications(private val context: Context,
     companion object {
         const val CHANNEL = "ghostcloak-messages"
         const val ID = 1
+        const val INVITATION_ID = 2
         const val OPEN_CHATS = "org.ghostcloak.app.OPEN_CHATS"
         const val DISMISS = "org.ghostcloak.app.DISMISS_MESSAGES"
         fun rootIntent(context: Context) = Intent(context, MainActivity::class.java).apply {
@@ -72,6 +75,26 @@ class AndroidLocalNotifications(private val context: Context,
         if (gate?.blocked == true) return false
         return if(gate != null) gate.access { postUnlocked(quiet, candidate) } else postUnlocked(quiet, candidate)
     }
+    override fun postInvitation(quiet:Boolean):Boolean {
+        val gate=(context.applicationContext as? GhostApplication)?.localOperationGate
+        val publish={
+            if(!allowed()) false else try {
+                manager.notify(INVITATION_ID,buildInvitation(quiet))
+                true
+            } catch (_:SecurityException) {false}
+        }
+        if(gate?.blocked==true) return false
+        return if(gate!=null) gate.access(publish) else publish()
+    }
+    fun buildInvitation(quiet:Boolean):Notification = NotificationCompat.Builder(context,CHANNEL)
+        .setSmallIcon(R.drawable.ic_notification_message)
+        .setContentTitle("Ghost Cloak").setContentText("New group invitation")
+        .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+        .setLocalOnly(true).setShowWhen(false).setWhen(0)
+        .setOnlyAlertOnce(true).setSilent(quiet).setAutoCancel(true)
+        .setContentIntent(PendingIntent.getActivity(context,1,rootIntent(context),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+        .build()
     private fun postUnlocked(quiet: Boolean, candidate: NotificationLedger.Presentation?): Boolean {
         if (!allowed()) return false
         return try { manager.notify(ID, build(quiet, candidate)); true } catch (_: SecurityException) { false }
@@ -87,7 +110,8 @@ class AndroidLocalNotifications(private val context: Context,
     fun redactActive() {
         try { if (active()) post(true, null) } catch (_: Exception) { }
     }
-    override fun cancel() { manager.cancel(ID) }
+    override fun cancelMessage() { manager.cancel(ID) }
+    override fun cancel() { manager.cancel(ID); manager.cancel(INVITATION_ID) }
 }
 
 class NotificationDismissReceiver : BroadcastReceiver() {

@@ -13,6 +13,22 @@ import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 
 class GroupStateTest {
+    @Test fun fiveMemberMembershipControlFitsEncryptedBodyWithHeadroom() {
+        val owner=person(GroupRole.OWNER)
+        var state=genesis(owner).state
+        var final:GroupTransition?=null
+        for(epoch in 2L..5L) {
+            final=add(state,owner,person(GroupRole.MEMBER,epoch))
+            state=final.next
+        }
+        val control=GroupControl(kind=GroupControlKind.STATE_UPDATE,groupId=state.groupId,transition=final)
+        val encoded=GroupControlCodec.encode(control)
+        val frame=ConversationPayload.encodeGroup(control)
+        println("P13_2_MAX_FIVE_CONTROL=${encoded.size} FRAME=${frame.size} HEADROOM=${org.ghostcloak.protocol.EnvelopeCodec.MAX_BODY-frame.size}")
+        assertTrue(encoded.size<=GroupControlCodec.MAX_BYTES)
+        assertTrue(frame.size<=org.ghostcloak.protocol.EnvelopeCodec.MAX_BODY)
+        assertTrue(org.ghostcloak.protocol.EnvelopeCodec.MAX_BODY-frame.size>=2048)
+    }
     private data class Person(val member:GroupMember,val key:KeyPair) {
         fun sign(bytes:ByteArray)=Signature.getInstance("SHA256withECDSA").run {
             initSign(key.private);update(bytes);sign()
@@ -179,6 +195,36 @@ class GroupStateTest {
         assertEquals(GroupApply.ACCEPTED,ledger.apply(g.state.groupId,event(transferred,dissolve,terminal,a,owner)))
         assertEquals(GroupLifecycle.DISSOLVED,ledger.lifecycle(g.state.groupId))
         assertEquals(GroupApply.REJECTED,ledger.apply(g.state.groupId,event(transferred,dissolve,terminal,a,owner)))
+    }
+    @Test fun voluntaryLeaveNeedsCanonicalCoordinatorSignatureAndAdvancesEpoch() {
+        val owner=person(GroupRole.OWNER);val member=person(GroupRole.MEMBER,2)
+        val genesis=genesis(owner);val joined=add(genesis.state,owner,member)
+        val change=GroupChange(GroupIds.create(),GroupAction.LEAVE,member.member.memberId,
+            targetId=member.member.memberId)
+        val next=GroupRules.derive(joined.next,change,emptySet(),trust)
+        val signed=event(joined.next,change,next,member,owner)
+        val store=MemoryRecords();val ledger=GroupLedger(store,trust,member.member.memberId)
+        assertEquals(GroupApply.ACCEPTED,ledger.acceptGenesis(genesis))
+        assertEquals(GroupApply.ACCEPTED,ledger.apply(genesis.state.groupId,joined))
+        assertEquals(GroupApply.REJECTED,ledger.apply(genesis.state.groupId,
+            signed.copy(coordinatorSignature=member.sign(GroupStatements.coordinator(joined.next,change,next)))))
+        assertEquals(GroupApply.REMOVED,ledger.apply(genesis.state.groupId,signed))
+        assertEquals(GroupLocalStatus.LEFT,ledger.status(genesis.state.groupId))
+        assertEquals(3L,ledger.state(genesis.state.groupId)!!.epoch)
+    }
+    @Test fun finalSlotRaceNeverDerivesSixthMember() {
+        val owner=person(GroupRole.OWNER)
+        var state=genesis(owner).state
+        for(epoch in 2L..4L) state=add(state,owner,person(GroupRole.MEMBER,epoch)).next
+        val first=person(GroupRole.MEMBER,5)
+        val loser=person(GroupRole.MEMBER,5)
+        val stale=GroupChange(GroupIds.create(),GroupAction.ADD,owner.member.memberId,
+            added=loser.member,invite=invite(state,owner,loser))
+        val winner=add(state,owner,first)
+        assertEquals(5,winner.next.members.size)
+        assertThrows(IllegalArgumentException::class.java) {
+            GroupRules.derive(winner.next,stale,emptySet(),trust)
+        }
     }
     @Test fun removedMemberAndTrustChangeFailClosed() {
         val owner=person(GroupRole.OWNER);val guest=person(GroupRole.MEMBER,2)

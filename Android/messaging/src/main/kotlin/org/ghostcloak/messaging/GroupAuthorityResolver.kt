@@ -12,7 +12,7 @@ import org.ghostcloak.protocol.NetworkCodec
 import org.ghostcloak.transport.HttpGhostClient
 import java.security.MessageDigest
 
-/** An internal P13.2 prerequisite; this does not send or accept group controls. */
+/** Resolve a registered group signer only through the active accepted Signal contact. */
 class GroupAuthorityResolver(private val repository:LocalRepository,private val engine:SecureSessionEngine,
     private val client:HttpGhostClient,private val records:EndpointRecords) {
     @Serializable private data class Pin(val accountId:String,val identityDigest:ByteArray,val authPublicKey:ByteArray)
@@ -54,5 +54,13 @@ class GroupAuthorityResolver(private val repository:LocalRepository,private val 
             throw ApiFailure(409,"group_binding_unavailable")
         }
         return binding
+    }
+    suspend fun matchesTrustedMember(member:GroupMember):Boolean {
+        val binding=try { resolveTrustedGroupAuthority(member.deviceId) }
+            catch (e:kotlinx.coroutines.CancellationException) {throw e}
+            catch (_:Exception) {return false}
+        return binding.accountId==member.accountId && binding.deviceId==member.deviceId &&
+            MessageDigest.isEqual(binding.authPublicKey,member.authPublicKey) &&
+            MessageDigest.isEqual(binding.identityDigest,member.signalIdentityDigest)
     }
 }

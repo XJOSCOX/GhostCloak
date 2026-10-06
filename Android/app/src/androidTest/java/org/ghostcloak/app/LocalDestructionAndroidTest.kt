@@ -53,6 +53,11 @@ class LocalDestructionAndroidTest {
             assertTrue(f.own.all {f.real.absent(it)})
             EncryptedEndpointStore.open(f,f.endpoint).use {records ->
                 assertEquals(PrivacyDefaults(),LocalRepository(records).privacyDefaults())
+                records.transaction {
+                    assertTrue(records.keys("app/group/").isEmpty())
+                    assertTrue(records.keys("app/group-authority/").isEmpty())
+                    assertTrue(records.keys("app/group-control/").isEmpty())
+                }
             }
         } finally {f.retireKeys()}
     }
@@ -85,7 +90,15 @@ class LocalDestructionAndroidTest {
         suspend fun seedSimple() {
             EncryptedEndpointStore.open(this,endpoint).use {records ->
                 SignalProtocolEngine(records).createIdentity("fixture")
-                records.transaction {records.write("synthetic",byteArrayOf(1,2,3))}
+                records.transaction {
+                    records.write("synthetic",byteArrayOf(1,2,3))
+                    // Group state shares the same encrypted store and destruction boundary.
+                    listOf("app/group/incoming/", "app/group/outgoing/", "app/group/member/",
+                        "app/group/fanout/", "app/group/resync/", "app/group/notice/",
+                        "app/group-authority/", "app/group-control/pending/").forEach {prefix ->
+                        records.write(prefix+"synthetic",byteArrayOf(1))
+                    }
+                }
                 LocalRepository(records).privacyDefaults(PrivacyDefaults(voiceMask=VoiceMaskPreference.STRONG))
             }
             KeystoreDeviceAuth(gate).publicKey(auth,true)

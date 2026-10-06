@@ -105,7 +105,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             .map { contact ->
                 val profile=repository.remoteProfile(contact.remoteDeviceId)
                 ContactStatus(contact, engine.getRemoteIdentityStatus(contact.remoteDeviceId),
-                    engine.getSessionLifecycle(contact.remoteDeviceId),profile?.about?.takeIf(String::isNotEmpty),profile?.photo)
+                    engine.getSessionLifecycle(contact.remoteDeviceId),profile?.about?.takeIf(String::isNotEmpty),profile?.photo,
+                    !contact.request && repository.groupPeer(contact.remoteDeviceId))
             }
     }
     suspend fun blockedContacts():List<Contact> = action {repository.listBlocked()}
@@ -372,6 +373,18 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         }
         engine.decryptAndCommit(envelope) { bytes ->
             val content = ConversationPayload.decode(bytes)
+            if(content.groupControl!=null) {
+                // Authentication and ratchet/replay receipt commit together. Authority resolution
+                // can require a network request, so the control remains encrypted locally and
+                // invisible to UI until a later trusted-binding pass validates it.
+                if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
+                    repository.isActiveContact(contact.remoteDeviceId)) {
+                    repository.groupPeer(contact.remoteDeviceId,true)
+                    repository.queueGroupControl(contact.remoteDeviceId,envelope.envelopeId,content.groupControl)
+                }
+                repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
+                return@decryptAndCommit
+            }
             if(content.profileUpdate) {
                 // Unknown and still-pending relationships do not learn a profile or
                 // create a conversation. The authenticated receipt permits ACK.
@@ -420,6 +433,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 repository.reactionPeer(contact.remoteDeviceId,content.supportsReactions)
                 repository.deletePeer(contact.remoteDeviceId,content.supportsDelete)
                 repository.editPeer(contact.remoteDeviceId,content.supportsEdit)
+                repository.groupPeer(contact.remoteDeviceId,content.supportsGroups)
                 val firstProfile=content.supportsProfiles && !repository.profilePeer(contact.remoteDeviceId)
                 repository.profilePeer(contact.remoteDeviceId,content.supportsProfiles)
                 if(firstProfile && !contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId})

@@ -20,6 +20,8 @@ data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? =
     val privacyDefaults:PrivacyDefaults=PrivacyDefaults(),
     val requireRequestConfirmation:Boolean=true,
     val blockedContacts:List<Contact> = emptyList(),
+    val groupInvitations:List<GroupMembershipTransport.Invitation> = emptyList(),
+    val forkedGroupCount:Int=0,
     val reactionsAvailable:Boolean=false,
     val deleteAvailable:Boolean=false,
     val editAvailable:Boolean=false,
@@ -94,6 +96,8 @@ class GhostViewModel internal constructor(application: Application, private val 
                         editAvailable=editAvailable,
                         requireRequestConfirmation=active.requireRequestConfirmation(),
                         blockedContacts=if(identity!=null) active.blockedContacts() else emptyList(),
+                        groupInvitations=if(identity!=null) runtime.groupInvitations() else emptyList(),
+                        forkedGroupCount=if(identity!=null) runtime.forkedGroupCount() else 0,
                         cachedAttachments = runtime.cachedAttachments(selected),
                         disappearingPolicies = if (identity != null) active.policies() else emptyMap(),
                         unreadExpiries = if (identity != null) active.unreadExpiries() else emptyMap(),
@@ -160,6 +164,9 @@ class GhostViewModel internal constructor(application: Application, private val 
         null
     }
     fun acceptRequest(id: String) = run { runtime.acceptRequest(it,id); pollingWake.trySend(Unit); null }
+    fun createGroupAndInvite(id:String) = run { runtime.createGroupAndInvite(id); pollingWake.trySend(Unit); null }
+    fun acceptGroupInvite(id:String) = run { runtime.acceptGroupInvite(id); pollingWake.trySend(Unit); null }
+    fun declineGroupInvite(id:String) = run { runtime.declineGroupInvite(id); null }
     fun deleteRequest(id: String) = run { it.deleteRequest(id); null }
     fun refresh() = run()
     fun connectNetwork(): kotlinx.coroutines.Job {

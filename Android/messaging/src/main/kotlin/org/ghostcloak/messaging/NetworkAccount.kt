@@ -77,6 +77,12 @@ class EndpointNetworkState(private val records: EndpointRecords, private val aud
         } finally { secret.fill(0) }
     }
     fun registered():Boolean=records.transaction {records.read(prefix+"registered")!=null}
+    fun registeredGroupPublicKey():ByteArray=records.transaction {
+        requireApi(records.read(prefix+"registered")!=null,"credential_missing",401)
+        val key=records.read(prefix+"auth-public") ?: throw ApiFailure(401,"credential_missing")
+        DeviceAuth.publicKey(key)
+        key
+    }
     fun ghostCloakId():String=records.transaction {records.read(prefix+"ghostcloak-id")?.decodeToString()?.takeIf(GhostCloakIds::valid) ?: throw ApiFailure(401,"credential_missing")}
     fun markRegistered(ghostCloakId:String)=records.transaction {
         requireApi(GhostCloakIds.valid(ghostCloakId),"invalid_ghostcloak_id")

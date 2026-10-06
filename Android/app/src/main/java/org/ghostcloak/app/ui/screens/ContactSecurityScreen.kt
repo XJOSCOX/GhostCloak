@@ -19,7 +19,7 @@ import org.ghostcloak.protocol.GhostCloakIds
 @Composable fun ContactSecurityScreen(state: AppState, contact: ContactStatus, back: () -> Unit,
     load: (Boolean) -> Unit, verify: (String) -> Unit, trust: (String) -> Unit, block: (Boolean) -> Unit,
     clear: () -> Unit = {}, remove: () -> Unit = {}, importUpdatedCard: (() -> Unit)? = null,
-    setAlias:(String?)->Unit={}) {
+    setAlias:(String?)->Unit={},inviteToNewGroup:()->Unit={}) {
     val changed = contact.identity?.trustState == IdentityTrustState.CHANGED
     val verified = contact.identity?.trustState == IdentityTrustState.VERIFIED
     val previouslyVerified = contact.identity?.previousTrustState == IdentityTrustState.VERIFIED
@@ -84,6 +84,13 @@ import org.ghostcloak.protocol.GhostCloakIds
         HorizontalDivider()
         SectionLabel(if(contact.contact.request || contact.contact.blocked) "LOCAL CONTROLS" else "MANAGE CONTACT")
         if(!contact.contact.request && !contact.contact.blocked) {
+            OutlinedButton(onClick=inviteToNewGroup,enabled=!state.loading && state.networkConfigured && !state.demo &&
+                contact.session==SessionLifecycle.ACTIVE && contact.groupCapable && !changed,
+                modifier=Modifier.fillMaxWidth()) {
+                Text("Invite to a new group")
+            }
+            Text("The invitation is for membership only. Group chat is not available yet.",
+                style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedButton(onClick={manageAction="delete"},enabled=!state.loading,modifier=Modifier.fillMaxWidth().heightIn(min=GhostDimensions.avatar)) {
                 Text("Delete conversation")
             }

@@ -76,7 +76,8 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                     composable("archived") { ContactsScreen(state, {}, { id -> nav.navigate("conversation/$id") },
                         model::connectNetwork,model::syncNetwork,archived=true,
                         unarchive={model.setArchived(it,false)},back={nav.popBackStack()}) }
-                    composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("security/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
+                    composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("security/$id") }, model::connectNetwork, model::syncNetwork, directory=true,
+                        acceptGroupInvite=model::acceptGroupInvite,declineGroupInvite=model::declineGroupInvite) }
                     composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard,
                         {name->model.addNetwork(name) {nav.popBackStack()}},model::unblock,{nav.navigate("blocked")},
                         { text -> model.importCard(text) { nav.popBackStack() } },
@@ -147,7 +148,7 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             { model.clearConversation(id) },
                             { model.removeContact(id) { nav.navigate("contacts") { popUpTo("contacts"); launchSingleTop=true } } },
                             { nav.navigate("add") },
-                            { alias -> model.setLocalAlias(id,alias) })
+                            { alias -> model.setLocalAlias(id,alias) },{model.createGroupAndInvite(id)})
                     }
                 }
                 if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))

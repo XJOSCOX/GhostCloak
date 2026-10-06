@@ -59,6 +59,12 @@ enum class GroupApply { ACCEPTED, DUPLICATE, STALE, NEEDS_RESYNC, FORKED, REJECT
     override fun toString()="GroupGenesis(redacted)"
 }
 
+/** A new member's bounded current-state anchor; it conveys no earlier roster history. */
+@Serializable data class GroupAdmission(val state:GroupState,val inviteId:String,
+    val target:GroupMember,val ownerSignature:ByteArray,val coordinatorSignature:ByteArray) {
+    override fun toString()="GroupAdmission(redacted)"
+}
+
 /** A snapshot is useful for transport, but a gap is accepted only with its complete signed chain. */
 @Serializable data class GroupSnapshot(val finalState:GroupState,val chain:List<GroupTransition>) {
     override fun toString()="GroupSnapshot(redacted)"
@@ -91,8 +97,9 @@ object GroupStatements {
     private const val ACTOR_DOMAIN="GhostCloak.GroupActor.v1"
     private const val COORDINATOR_DOMAIN="GhostCloak.GroupCoordinator.v1"
     private const val TRANSFER_DOMAIN="GhostCloak.GroupOwnerTransfer.v1"
+    private const val ADMISSION_DOMAIN="GhostCloak.GroupAdmission.v1"
     private val SIGNING_DOMAINS=setOf(GENESIS_DOMAIN,INVITE_DOMAIN,ACCEPT_DOMAIN,ACTOR_DOMAIN,
-        COORDINATOR_DOMAIN,TRANSFER_DOMAIN)
+        COORDINATOR_DOMAIN,TRANSFER_DOMAIN,ADMISSION_DOMAIN)
     private val zero=ByteArray(32)
 
     fun digest(state:GroupState):ByteArray=DeviceAuth.digest(bytes(state))
@@ -193,6 +200,33 @@ object GroupStatements {
         statement(COORDINATOR_DOMAIN,transition(previous,change,next))
     fun transferAcceptance(previous:GroupState,change:GroupChange,next:GroupState)=
         statement(TRANSFER_DOMAIN,transition(previous,change,next))
+    fun admission(state:GroupState,inviteId:String,target:GroupMember):ByteArray {
+        require(GroupIds.valid(inviteId) && GroupIds.valid(target.memberId))
+        return statement(ADMISSION_DOMAIN,digest(state),text(inviteId),digestMember(target))
+    }
+    fun validateOfferShape(invite:GroupInvite) {
+        require(invite.targetAcceptance.isEmpty() && invite.inviterSignature.size in 8..80)
+        validateInviteShape(invite.copy(targetAcceptance=ByteArray(8)))
+        require(NetworkCodec.encode(invite).size<=MAX_INVITE_BYTES)
+    }
+    fun verifyAdmission(proof:GroupAdmission,trusted:GroupTrustedPeer):Boolean {
+        val state=proof.state
+        if(runCatching {
+                validate(state)
+                require(GroupIds.valid(proof.inviteId) && GroupIds.valid(proof.target.memberId) &&
+                    RandomIdentifiers.valid(proof.target.accountId) && RandomIdentifiers.valid(proof.target.deviceId) &&
+                    proof.target.role==GroupRole.MEMBER && proof.target.joinedEpoch==state.epoch+1 &&
+                    proof.target.signalIdentityDigest.size==32)
+                DeviceAuth.publicKey(proof.target.authPublicKey)
+                require(proof.ownerSignature.size in 8..80 && proof.coordinatorSignature.size in 8..80)
+            }.isFailure) return false
+        val owner=state.members.singleOrNull {it.memberId==state.ownerId} ?: return false
+        val coordinator=state.members.singleOrNull {it.memberId==state.coordinatorId} ?: return false
+        if(!trusted.matches(owner) || !trusted.matches(coordinator)) return false
+        val body=admission(state,proof.inviteId,proof.target)
+        return verify(owner.authPublicKey,body,proof.ownerSignature) &&
+            verify(coordinator.authPublicKey,body,proof.coordinatorSignature)
+    }
     fun invite(invite:GroupInvite):ByteArray=statement(INVITE_DOMAIN,text(invite.inviteId),text(invite.groupId),
         invite.parentDigest,number(invite.revision),number(invite.epoch),text(invite.inviterId),NetworkCodec.encode(invite.target))
     fun acceptance(invite:GroupInvite):ByteArray=statement(ACCEPT_DOMAIN,DeviceAuth.digest(invite(invite)),invite.inviterSignature)
@@ -210,5 +244,13 @@ object GroupStatements {
         val inviter=previous.members.singleOrNull {it.memberId==invite.inviterId && it.role!=GroupRole.MEMBER} ?: return false
         return verify(inviter.authPublicKey,invite(invite),invite.inviterSignature) &&
             verify(invite.target.authPublicKey,acceptance(invite),invite.targetAcceptance)
+    }
+    fun verifyOffer(invite:GroupInvite,previous:GroupState,trusted:GroupTrustedPeer):Boolean {
+        if(runCatching {validateOfferShape(invite)}.isFailure ||
+            invite.groupId!=previous.groupId || invite.revision!=previous.revision ||
+            invite.epoch!=previous.epoch || !invite.parentDigest.contentEquals(digest(previous))) return false
+        val inviter=previous.members.singleOrNull {it.memberId==invite.inviterId && it.role!=GroupRole.MEMBER}
+            ?: return false
+        return trusted.matches(inviter) && verify(inviter.authPublicKey,invite(invite),invite.inviterSignature)
     }
 }

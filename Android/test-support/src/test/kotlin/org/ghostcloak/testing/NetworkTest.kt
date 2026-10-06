@@ -979,6 +979,184 @@ class NetworkTest {
             assertTrue(conversations.getValue(a).messages(b.registration.deviceId).isEmpty())
         }
     }
+    @Test fun activatedGroupInvitesNewMemberThroughGovernedAdd() = runBlocking {
+        Fixture().use {f ->
+            val people=listOf(f.person("alice",true),f.person("bob",true),f.person("charlie",true))
+            val (a,b,c)=people
+            val repos=people.associateWith {LocalRepository(it.records)}
+            val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
+                NetworkMailboxTransport(f.client(p),p.state))}
+            fun group(p:Person)=GroupMembershipTransport(p.records,repos.getValue(p),p.engine,p.state,
+                GroupAuthorityResolver(repos.getValue(p),p.engine,f.client(p),p.records),outboxes.getValue(p))
+            val conversations=people.associateWith {p ->ConversationService(p.engine,
+                repos.getValue(p)).also {it.open()}}
+            for(p in people) for(q in people) if(p!=q) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repos.getValue(p).save(Contact(RandomIdentifiers.create(),q.registration.accountId,
+                    q.name,q.registration.deviceId))
+                repos.getValue(p).groupPeer(q.registration.deviceId,true)
+                repos.getValue(p).admissionV2Peer(q.registration.deviceId,true)
+                repos.getValue(p).baselineV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceV1Peer(q.registration.deviceId,true)
+            }
+            suspend fun push(p:Person) {
+                val outbox=outboxes.getValue(p)
+                outbox.pendingIds().forEach {id ->
+                    if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)
+                }
+            }
+            suspend fun pull(p:Person) {
+                val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                val deliveries=mailbox.fetch()
+                deliveries.forEach {conversations.getValue(p).acceptNetwork(
+                    EnvelopeCodec.decode(it.encryptedEnvelope))}
+                if(deliveries.isNotEmpty()) mailbox.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+                group(p).processPending()
+            }
+            suspend fun settle(rounds:Int=1) { repeat(rounds) {
+                for(p in people) push(p)
+                for(p in people) pull(p)
+            } }
+            val id=group(a).createAndInvite(b.registration.deviceId)
+            settle(2)
+            group(b).accept(group(b).invitations().single().id)
+            settle(4)
+            assertEquals(2,group(a).state(id)!!.members.size)
+            group(a).beginAuthorityBaseline(id)
+            settle(10)
+            group(a).beginGovernanceActivation(id)
+            settle(12)
+            assertNotNull(a.records.read("app/group/governance-v1/ready/$id"))
+            a.records.remove("app/group-governance-v1-peer/${c.registration.deviceId}")
+            rejectAsync {group(a).invite(id,c.registration.deviceId)}
+            repos.getValue(a).governanceV1Peer(c.registration.deviceId,true)
+            conversations.getValue(a).block(b.registration.deviceId,true)
+            group(a).invite(id,c.registration.deviceId)
+            push(a);pull(c)
+            assertTrue(group(c).invitations().isEmpty())
+            settle(6)
+            assertEquals(1,group(c).invitations().size)
+            group(c).accept(group(c).invitations().single().id)
+            push(c);pull(a);push(a)
+            val missedAdd=NetworkMailboxTransport(f.client(b),b.state)
+            val lostAdd=missedAdd.fetch()
+            assertTrue(lostAdd.isNotEmpty())
+            missedAdd.acknowledgeAccepted(lostAdd.map {it.serverMessageId})
+            pull(c)
+            assertEquals(2,group(b).state(id)!!.members.size)
+            group(b).requestGovernanceResync(id)
+            settle(12)
+            for(p in people) assertEquals(3,group(p).state(id)!!.members.size)
+            for(p in people) assertNotNull(p.records.read("app/group/governance-journal-v1/$id/entry/1"))
+            group(a).changeGroupTimerGoverned(id,30)
+            push(a)
+            val missed=NetworkMailboxTransport(f.client(b),b.state)
+            val lost=missed.fetch()
+            assertTrue(lost.isNotEmpty())
+            missed.acknowledgeAccepted(lost.map {it.serverMessageId})
+            pull(c)
+            group(b).requestGovernanceResync(id)
+            assertNotNull(b.records.read("app/group/governance-journal-v1/$id/resync"))
+            settle(6)
+            for(p in people) assertEquals(30,group(p).state(id)!!.disappearingSeconds)
+            assertNull(b.records.read("app/group/governance-journal-v1/$id/resync"))
+            val first=NetworkCodec.decode<GroupGovernanceEntryV1>(
+                a.records.read("app/group/governance-journal-v1/$id/entry/1")!!)
+            val cId=c.records.read("app/group/member/$id")!!.decodeToString()
+            val before=outboxes.getValue(a).pendingIds().size
+            val preJoinRequest=GroupGovernanceResyncRequestV1(groupId=id,
+                activationDigest=first.activationDigest,sequence=0,
+                headDigest=first.activationDigest,stateRevision=first.preRevision,
+                stateDigest=first.preDigest,requesterMemberId=cId)
+            outboxes.getValue(c).process(outboxes.getValue(c).enqueue(a.registration.deviceId,
+                ConversationPayload.encodeGroup(GroupControl(
+                    kind=GroupControlKind.GOVERNANCE_RESYNC_REQUEST_V1,
+                    groupId=id,governanceResyncRequestV1=preJoinRequest))))
+            pull(a)
+            assertEquals(before,outboxes.getValue(a).pendingIds().size)
+        }
+    }
+    @Test fun delegatedCoordinatorWaitsForOwnerCheckpointSignatureBeforeAdd() = runBlocking {
+        Fixture().use {f ->
+            val people=listOf(f.person("alice",true),f.person("bob",true),f.person("charlie",true))
+            val (a,b,c)=people
+            val repos=people.associateWith {LocalRepository(it.records)}
+            val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
+                NetworkMailboxTransport(f.client(p),p.state))}
+            fun group(p:Person)=GroupMembershipTransport(p.records,repos.getValue(p),p.engine,p.state,
+                GroupAuthorityResolver(repos.getValue(p),p.engine,f.client(p),p.records),outboxes.getValue(p))
+            val conversations=people.associateWith {p ->ConversationService(p.engine,
+                repos.getValue(p)).also {it.open()}}
+            for(p in people) for(q in people) if(p!=q) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repos.getValue(p).save(Contact(RandomIdentifiers.create(),q.registration.accountId,
+                    q.name,q.registration.deviceId))
+                repos.getValue(p).groupPeer(q.registration.deviceId,true)
+                repos.getValue(p).admissionV2Peer(q.registration.deviceId,true)
+                repos.getValue(p).baselineV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceV1Peer(q.registration.deviceId,true)
+            }
+            suspend fun settle(rounds:Int=1) {repeat(rounds) {
+                for(p in people) outboxes.getValue(p).pendingIds().forEach {id ->
+                    val outbox=outboxes.getValue(p)
+                    if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)
+                }
+                for(p in people) {
+                    val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                    val deliveries=mailbox.fetch()
+                    deliveries.forEach {conversations.getValue(p).acceptNetwork(
+                        EnvelopeCodec.decode(it.encryptedEnvelope))}
+                    if(deliveries.isNotEmpty()) mailbox.acknowledgeAccepted(
+                        deliveries.map {it.serverMessageId})
+                    group(p).processPending()
+                }
+            }}
+            val id=group(a).createAndInvite(b.registration.deviceId)
+            settle(2)
+            group(b).accept(group(b).invitations().single().id)
+            settle(4)
+            val aId=a.records.read("app/group/member/$id")!!.decodeToString()
+            val bId=b.records.read("app/group/member/$id")!!.decodeToString()
+            for(action in listOf(GroupAction.PROMOTE,GroupAction.DELEGATE_COORDINATOR)) {
+                val prior=group(a).state(id)!!
+                val change=GroupChange(GroupIds.create(),action,aId,targetId=bId)
+                val next=GroupRules.derive(prior,change,emptySet(),GroupTrustedPeer {true})
+                val event=GroupTransition(change,next,
+                    a.state.signGroupStatement(GroupStatements.actor(prior,change,next)),
+                    a.state.signGroupStatement(GroupStatements.coordinator(prior,change,next)))
+                for((p,memberId) in listOf(a to aId,b to bId)) assertEquals(GroupApply.ACCEPTED,
+                    GroupLedger(p.records,GroupTrustedPeer {true},memberId).apply(id,event))
+            }
+            group(b).beginAuthorityBaseline(id)
+            settle(10)
+            group(b).beginGovernanceActivation(id)
+            settle(12)
+            assertNotNull(a.records.read("app/group/governance-v1/ready/$id"))
+            assertNotNull(b.records.read("app/group/governance-v1/ready/$id"))
+            group(b).invite(id,c.registration.deviceId)
+            settle(6)
+            group(c).accept(group(c).invitations().single().id)
+            // C's acceptance reaches B, but B cannot issue ADD without A's real signature.
+            outboxes.getValue(c).pendingIds().forEach {id ->
+                val outbox=outboxes.getValue(c)
+                if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)
+            }
+            val mailbox=NetworkMailboxTransport(f.client(b),b.state)
+            val deliveries=mailbox.fetch()
+            deliveries.forEach {conversations.getValue(b).acceptNetwork(
+                EnvelopeCodec.decode(it.encryptedEnvelope))}
+            if(deliveries.isNotEmpty()) mailbox.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+            group(b).processPending()
+            assertEquals(2,group(b).state(id)!!.members.size)
+            assertNull(b.records.read("app/group/governance-journal-v1/$id/entry/1"))
+            settle(12)
+            for(p in people) assertEquals(3,group(p).state(id)!!.members.size)
+        }
+    }
     private class Person(val name: String,groupCredential:Boolean=false) {
         val records = MemoryRecords(); val engine = SignalProtocolEngine(records)
         val state = EndpointNetworkState(records, "ghostcloak.local",if(groupCredential) RecoveryCredential() else null)

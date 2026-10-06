@@ -105,6 +105,21 @@ class GovernanceFoundationV1Test {
         GroupChange(GroupIds.create(),GroupAction.PROFILE,parent.ownerId,
             newProfileRevision=parent.profileRevision+1,
             newProfileDigest=DeviceAuth.digest(parent.profileDigest+byteArrayOf(parent.revision.toByte()))))
+    private fun governanceEntry(f:Fixture,head:GovernanceHeadFoundationV1,
+        event:GroupTransition):GroupGovernanceEntryV1 {
+        val unsigned=GroupGovernanceEntryV1(groupId=f.state.groupId,
+            activationDigest=head.activationDigest,sequence=head.sequence+1,
+            previousHeadDigest=head.headDigest,eventId=event.change.eventId,
+            preRevision=head.stateRevision,preDigest=head.stateDigest,
+            actorId=event.change.actorId,action=event.change.action,
+            transitionDigest=DeviceAuth.digest(NetworkCodec.encode(event)),
+            postRevision=event.next.revision,postDigest=GroupStatements.digest(event.next),
+            transition=event,actorSignature=byteArrayOf(),coordinatorSignature=byteArrayOf())
+        return unsigned.copy(actorSignature=sign(f.people.single {
+            it.member.memberId==event.change.actorId}.key,
+            GroupGovernanceV1.actorStatement(unsigned)),coordinatorSignature=sign(f.owner.key,
+            GroupGovernanceV1.coordinatorStatement(unsigned)))
+    }
     private fun add(f:Fixture):GroupTransition {
         val targetKey=key()
         val target=GroupMember(GroupIds.create(),RandomIdentifiers.create(),RandomIdentifiers.create(),
@@ -115,6 +130,133 @@ class GovernanceFoundationV1Test {
         val accepted=offered.copy(targetAcceptance=sign(targetKey,GroupStatements.acceptance(offered)))
         return transition(f,f.state,GroupChange(GroupIds.create(),GroupAction.ADD,f.state.ownerId,
             added=target,invite=accepted))
+    }
+
+    @Test fun oneEntryResyncFitsControlCapWhileLongerChainsRequireChunks() {
+        val f=fixture(5,5)
+        var head=install(f)
+        var state=f.state
+        val entries=mutableListOf<GroupGovernanceEntryV1>()
+        repeat(25) {
+            val event=profile(f,state)
+            val entry=governanceEntry(f,head,event)
+            entries+=entry
+            state=event.next
+            head=head.copy(sequence=entry.sequence,
+                headDigest=GroupGovernanceV1.entryDigest(entry),
+                stateRevision=entry.postRevision,stateDigest=entry.postDigest)
+        }
+        for(count in listOf(1,5,10,25)) {
+            val slice=entries.take(count)
+            val response=GroupGovernanceResyncResponseV1(groupId=f.state.groupId,
+                activationDigest=head.activationDigest,requesterSequence=0,
+                requesterHeadDigest=head.activationDigest,startSequence=1,
+                startHeadDigest=head.activationDigest,entries=slice,
+                endSequence=count.toLong(),endHeadDigest=GroupGovernanceV1.entryDigest(slice.last()),
+                more=count<25)
+            val bytes=NetworkCodec.encode(GroupControl(
+                kind=GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V1,
+                groupId=f.state.groupId,governanceResyncResponseV1=response))
+            println("A6.3 five-member resync $count entries: ${bytes.size} bytes")
+            if(count==1) assertTrue(bytes.size<=GroupControlCodec.MAX_BYTES)
+            if(count==25) assertTrue(bytes.size>GroupControlCodec.MAX_BYTES)
+        }
+    }
+
+    @Test fun fiveMemberAdmissionCheckpointControlsStayBounded() {
+        val f=fixture(4,4)
+        val head=install(f)
+        val targetKey=key()
+        val target=GroupMember(GroupIds.create(),RandomIdentifiers.create(),RandomIdentifiers.create(),
+            targetKey.public.encoded,ByteArray(32),GroupRole.MEMBER,f.state.epoch+1)
+        val inviteId=GroupIds.create()
+        val offer=GroupInvite(inviteId,f.state.groupId,GroupStatements.digest(f.state),
+            f.state.revision,f.state.epoch,f.state.ownerId,target,byteArrayOf(),byteArrayOf())
+        val invite=offer.copy(inviterSignature=sign(f.owner.key,GroupStatements.invite(offer)))
+        val accepted=invite.copy(targetAcceptance=sign(targetKey,GroupStatements.acceptance(invite)))
+        val proof=GroupAdmission(f.state,inviteId,target,
+            sign(f.owner.key,GroupStatements.admission(f.state,inviteId,target)),
+            sign(f.owner.key,GroupStatements.admission(f.state,inviteId,target)))
+        val unsigned=AdmissionProposalV2(groupId=f.state.groupId,parent=f.state,
+            parentDigest=GroupStatements.digest(f.state),inviteId=inviteId,
+            inviterId=f.state.ownerId,candidate=target,
+            candidateDigest=GroupStatements.digestMember(target),eventId=GroupIds.create(),
+            inviterSignature=byteArrayOf())
+        val proposal=unsigned.copy(inviterSignature=sign(f.owner.key,
+            AdmissionV2.proposalStatement(unsigned)))
+        val approvals=f.people.map {person ->
+            val approval=AdmissionV2.approval(proposal,person.member.memberId,byteArrayOf())
+            approval.copy(signature=sign(person.key,AdmissionV2.approvalStatement(approval)))
+        }
+        val certificate=AdmissionV2.certificate(proposal,approvals)
+        assertTrue(AdmissionV2.verifyCertificate(certificate,f.state))
+        val bindingUnsigned=GroupGovernedAdmissionV1.unsignedBinding(certificate,head)
+        val binding=bindingUnsigned.copy(coordinatorSignature=sign(f.owner.key,
+            GroupGovernedAdmissionV1.bindingStatement(bindingUnsigned)))
+        val barrier=GovernanceFoundationStore(f.records).barrier(f.state.groupId)!!
+        val checkpointUnsigned=GroupGovernedAdmissionV1.unsignedCheckpoint(binding,proof,
+            barrier,f.state,GroupIds.create())
+        val checkpoint=checkpointUnsigned.copy(ownerSignature=sign(f.owner.key,
+            GroupGovernedAdmissionV1.ownerStatement(checkpointUnsigned)),
+            coordinatorSignature=sign(f.owner.key,
+                GroupGovernedAdmissionV1.coordinatorStatement(checkpointUnsigned)))
+        assertTrue(GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint,f.state,proof,
+            certificate,binding))
+        val evidence=GovernedJoinEvidenceV1(checkpoint,binding,proof,certificate)
+        val add=transition(f,f.state,GroupChange(proposal.eventId,GroupAction.ADD,
+            f.state.ownerId,added=target,invite=accepted))
+        val entry=governanceEntry(f,head,add)
+        assertEquals(GroupApply.REJECTED,f.ledger.acceptGovernedBootstrap(evidence,accepted,entry))
+        val joiningRecords=Records()
+        val joining=GroupLedger(joiningRecords,GroupTrustedPeer {true},target.memberId)
+        joiningRecords.failPrefix="app/group/governance-journal-v1/${f.state.groupId}/entry/"
+        assertThrows(IllegalStateException::class.java) {
+            joining.acceptGovernedBootstrap(evidence,accepted,entry)
+        }
+        joiningRecords.failPrefix=null
+        assertNull(joining.state(f.state.groupId))
+        assertNull(joining.governanceHead(f.state.groupId))
+        assertEquals(GroupApply.ACCEPTED,
+            joining.acceptGovernedBootstrap(evidence,accepted,entry))
+        assertEquals(GovernanceJournalStatus.COMPLETE,
+            GroupLedger(joiningRecords,GroupTrustedPeer {true},target.memberId)
+                .governanceJournalStatus(f.state.groupId))
+        assertEquals(GroupApply.DUPLICATE,
+            joining.acceptGovernedBootstrap(evidence,accepted,entry))
+        assertFalse(GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint.copy(
+            inviteId=GroupIds.create()),f.state,proof,certificate,binding))
+        assertFalse(GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint.copy(
+            candidateDigest=ByteArray(32)),f.state,proof,certificate,binding))
+        assertFalse(GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint.copy(
+            parentHeadDigest=ByteArray(32)),f.state,proof,certificate,binding))
+        assertFalse(GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint.copy(
+            ownerSignature=ByteArray(64)),f.state,proof,certificate,binding))
+        assertFalse(GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint.copy(
+            coordinatorSignature=ByteArray(64)),f.state,proof,certificate,binding))
+        val controls=mapOf(
+            "invitation" to GroupControl(kind=GroupControlKind.INVITE,groupId=f.state.groupId,
+                state=f.state,admission=proof,invite=invite,certificateV2=certificate,
+                governedAdmissionBindingV1=binding),
+            "checkpoint sign" to GroupControl(
+                kind=GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1,
+                groupId=f.state.groupId,inviteId=inviteId,invite=accepted,admission=proof,
+                certificateV2=certificate,governedAdmissionBindingV1=binding,
+                governanceCheckpointV1=checkpoint),
+            "bootstrap" to GroupControl(kind=GroupControlKind.GOVERNANCE_BOOTSTRAP_V1,
+                groupId=f.state.groupId,governanceEntryV1=entry,
+                governanceCheckpointV1=checkpoint),
+            "resync request" to GroupControl(kind=GroupControlKind.GOVERNANCE_RESYNC_REQUEST_V1,
+                groupId=f.state.groupId,governanceResyncRequestV1=GroupGovernanceResyncRequestV1(
+                    groupId=f.state.groupId,activationDigest=head.activationDigest,
+                    sequence=0,headDigest=head.headDigest,stateRevision=f.state.revision,
+                    stateDigest=GroupStatements.digest(f.state),requesterMemberId=f.state.ownerId)))
+        for((name,control) in controls) {
+            val size=NetworkCodec.encode(control).size
+            println("A6.3 five-member $name: $size bytes")
+            assertTrue("$name too large: $size",size<=GroupControlCodec.MAX_BYTES)
+        }
+        println("A6.3 binding: ${NetworkCodec.encode(binding).size} bytes")
+        println("A6.3 checkpoint: ${NetworkCodec.encode(checkpoint).size} bytes")
     }
 
     @Test fun barrierRequiresExactActiveA5AndIsDurableAndIdempotent() {
@@ -328,5 +470,206 @@ class GovernanceFoundationV1Test {
         assertTrue(GovernanceFoundationStore(f.records).matches(head,
             checkNotNull(GovernanceFoundationStore(f.records).head(id))))
         f.records.failPrefix=null
+    }
+    @Test fun missingA62JournalLocksOnlyGovernanceAndRetainedEntriesSurviveRestart() {
+        val old=fixture();val oldHead=install(old)
+        val oldEvent=profile(old,old.state)
+        assertEquals(GovernanceJournalStatus.COMPLETE,
+            old.ledger.governanceJournalStatus(old.state.groupId))
+        assertEquals(GroupApply.ACCEPTED,old.ledger.applyGovernedTransition(old.state.groupId,
+            oldHead,oldEvent,DeviceAuth.digest(byteArrayOf(61))))
+        assertEquals(GovernanceJournalStatus.LEGACY_INCOMPLETE,
+            old.ledger.governanceJournalStatus(old.state.groupId))
+        assertEquals(oldEvent.next.revision,old.ledger.state(old.state.groupId)!!.revision)
+        val oldNext=profile(old,oldEvent.next)
+        assertEquals(GroupApply.REJECTED,old.ledger.applyGovernedTransition(old.state.groupId,
+            checkNotNull(old.ledger.governanceHead(old.state.groupId)),oldNext,
+            DeviceAuth.digest(byteArrayOf(62))))
+        assertNull(GroupLedger(old.records,old.trusted,old.state.ownerId)
+            .governanceJournalStatus(GroupIds.create()))
+
+        val fresh=fixture();val id=fresh.state.groupId;install(fresh)
+        val journal=GroupGovernanceJournalV1(fresh.records)
+        assertEquals(GovernanceJournalStatus.COMPLETE,fresh.ledger.governanceJournalStatus(id))
+        repeat(3) {index ->
+            val head=checkNotNull(fresh.ledger.governanceHead(id))
+            val event=profile(fresh,checkNotNull(fresh.ledger.state(id)))
+            val entry=governanceEntry(fresh,head,event)
+            assertTrue(GroupGovernanceV1.verifyEntry(entry,checkNotNull(fresh.ledger.state(id)),head))
+            assertEquals(GroupApply.ACCEPTED,fresh.ledger.applyGovernedTransition(id,head,event,
+                GroupGovernanceV1.entryDigest(entry)) {
+                journal.append(entry,checkNotNull(fresh.ledger.governanceBarrier(id)),
+                    checkNotNull(fresh.ledger.governanceHead(id)))
+            })
+            assertEquals((index+1).toLong(),checkNotNull(journal.entry(id,index+1L)).sequence)
+            assertEquals(GovernanceJournalStatus.COMPLETE,fresh.ledger.governanceJournalStatus(id))
+        }
+        val restarted=GroupLedger(fresh.records,fresh.trusted,fresh.state.ownerId)
+        assertEquals(GovernanceJournalStatus.COMPLETE,restarted.governanceJournalStatus(id))
+        assertNotNull(journal.entry(id,1))
+        assertNotNull(journal.entry(id,2))
+        assertNotNull(journal.entry(id,3))
+        fresh.records.remove("app/group/governance-journal-v1/$id/entry/2")
+        assertEquals(GovernanceJournalStatus.LEGACY_INCOMPLETE,
+            restarted.governanceJournalStatus(id))
+        assertEquals(4L,restarted.state(id)!!.revision)
+    }
+
+    @Test fun conflictingSignedGovernanceSuccessorForksWithoutReplacingJournal() {
+        val f=fixture();val id=f.state.groupId;val head=install(f)
+        val first=profile(f,f.state)
+        val entry=governanceEntry(f,head,first)
+        val journal=GroupGovernanceJournalV1(f.records)
+        assertEquals(GroupApply.ACCEPTED,f.ledger.applyGovernedTransition(id,head,first,
+            GroupGovernanceV1.entryDigest(entry)) {
+            journal.append(entry,checkNotNull(f.ledger.governanceBarrier(id)),
+                checkNotNull(f.ledger.governanceHead(id)))
+        })
+        val rival=transition(f,f.state,GroupChange(GroupIds.create(),GroupAction.PROFILE,
+            f.state.ownerId,newProfileRevision=1,
+            newProfileDigest=DeviceAuth.digest(byteArrayOf(99))))
+        val rivalEntry=governanceEntry(f,head,rival)
+        assertEquals(GroupApply.FORKED,f.ledger.markGovernanceForkIfValid(rivalEntry))
+        assertTrue(f.ledger.isForked(id))
+        assertArrayEquals(GroupGovernanceV1.entryDigest(entry),
+            GroupGovernanceV1.entryDigest(checkNotNull(journal.entry(id,1))))
+    }
+
+    @Test fun journalWriteFailureRollsBackGovernedStateAndHead() {
+        val f=fixture();val id=f.state.groupId;val head=install(f)
+        val event=profile(f,f.state)
+        val entry=governanceEntry(f,head,event)
+        val before=f.records.read("group/state/v1/$id")!!
+        f.records.failPrefix="app/group/governance-journal-v1/$id/entry/"
+        assertThrows(IllegalStateException::class.java) {
+            f.ledger.applyGovernedTransition(id,head,event,
+                GroupGovernanceV1.entryDigest(entry)) {
+                GroupGovernanceJournalV1(f.records).append(entry,
+                    checkNotNull(f.ledger.governanceBarrier(id)),
+                    checkNotNull(f.ledger.governanceHead(id)))
+            }
+        }
+        f.records.failPrefix=null
+        assertArrayEquals(before,f.records.read("group/state/v1/$id"))
+        assertEquals(0L,checkNotNull(f.ledger.governanceHead(id)).sequence)
+        assertNull(GroupGovernanceJournalV1(f.records).entry(id,1))
+    }
+
+    @Test fun threeEntryReplayResumesAfterRestartWithoutSkippingAHead() {
+        val source=fixture();val id=source.state.groupId;install(source)
+        val targetRecords=Records()
+        source.records.values.forEach {(key,value)->targetRecords.values[key]=value.copyOf()}
+        val entries=mutableListOf<GroupGovernanceEntryV1>()
+        repeat(3) {
+            val head=checkNotNull(source.ledger.governanceHead(id))
+            val event=profile(source,checkNotNull(source.ledger.state(id)))
+            val entry=governanceEntry(source,head,event)
+            assertEquals(GroupApply.ACCEPTED,source.ledger.applyGovernedTransition(id,head,event,
+                GroupGovernanceV1.entryDigest(entry)) {
+                GroupGovernanceJournalV1(source.records).append(entry,
+                    checkNotNull(source.ledger.governanceBarrier(id)),
+                    checkNotNull(source.ledger.governanceHead(id)))
+            })
+            entries+=entry
+        }
+        fun replay(entry:GroupGovernanceEntryV1):Boolean {
+            val ledger=GroupLedger(targetRecords,source.trusted,source.state.ownerId)
+            val head=checkNotNull(ledger.governanceHead(id))
+            val parent=checkNotNull(ledger.state(id))
+            if(!GroupGovernanceV1.verifyEntry(entry,parent,head)) return false
+            return ledger.applyGovernedTransition(id,head,entry.transition,
+                GroupGovernanceV1.entryDigest(entry)) {
+                GroupGovernanceJournalV1(targetRecords).append(entry,
+                    checkNotNull(ledger.governanceBarrier(id)),
+                    checkNotNull(ledger.governanceHead(id)))
+            }==GroupApply.ACCEPTED
+        }
+        assertTrue(replay(entries[0]))
+        assertFalse(replay(entries[0]))
+        assertFalse(replay(entries[2]))
+        val restarted=GroupLedger(targetRecords,source.trusted,source.state.ownerId)
+        assertEquals(GovernanceJournalStatus.COMPLETE,restarted.governanceJournalStatus(id))
+        assertEquals(1L,checkNotNull(restarted.governanceHead(id)).sequence)
+        assertTrue(replay(entries[1]))
+        assertTrue(replay(entries[2]))
+        assertEquals(GovernanceJournalStatus.COMPLETE,
+            GroupLedger(targetRecords,source.trusted,source.state.ownerId).governanceJournalStatus(id))
+        assertEquals(3L,checkNotNull(GroupLedger(targetRecords,source.trusted,
+            source.state.ownerId).governanceHead(id)).sequence)
+    }
+
+    @Test fun historicalAdminSignatureReplaysOnlyBeforeItsRemoval() {
+        val original=fixture();val id=original.state.groupId
+        val added=List(2) {index ->
+            val pair=key()
+            Person(GroupMember(GroupIds.create(),RandomIdentifiers.create(),RandomIdentifiers.create(),
+                pair.public.encoded,DeviceAuth.digest(byteArrayOf(index.toByte())),
+                GroupRole.MEMBER,original.ledger.state(id)!!.epoch+index+1),pair)
+        }
+        for(person in added) {
+            val prior=checkNotNull(original.ledger.state(id))
+            val target=person.member.copy(joinedEpoch=prior.epoch+1)
+            val offer=GroupInvite(GroupIds.create(),id,GroupStatements.digest(prior),
+                prior.revision,prior.epoch,prior.ownerId,target,byteArrayOf(),byteArrayOf())
+            val invited=offer.copy(inviterSignature=sign(original.owner.key,
+                GroupStatements.invite(offer)))
+            val accepted=invited.copy(targetAcceptance=sign(person.key,
+                GroupStatements.acceptance(invited)))
+            val event=transition(original,prior,GroupChange(GroupIds.create(),GroupAction.ADD,
+                prior.ownerId,added=target,invite=accepted))
+            assertEquals(GroupApply.ACCEPTED,original.ledger.apply(id,event))
+        }
+        val beforePromotion=checkNotNull(original.ledger.state(id))
+        assertEquals(GroupApply.ACCEPTED,original.ledger.apply(id,transition(original,
+            beforePromotion,GroupChange(GroupIds.create(),GroupAction.PROMOTE,
+                beforePromotion.ownerId,targetId=added[0].member.memberId))))
+        val start=checkNotNull(original.ledger.state(id))
+        val f=Fixture(original.records,start,original.people+added,original.ledger)
+        install(f)
+        val targetRecords=Records()
+        f.records.values.forEach {(key,value)->targetRecords.values[key]=value.copyOf()}
+        val historicalId=added[0].member.memberId
+        val adminEvent=transition(f,start,GroupChange(GroupIds.create(),GroupAction.PROFILE,
+            historicalId,newProfileRevision=start.profileRevision+1,
+            newProfileDigest=DeviceAuth.digest(byteArrayOf(76))))
+        val removal=transition(f,adminEvent.next,GroupChange(GroupIds.create(),GroupAction.REMOVE,
+            f.state.ownerId,targetId=historicalId))
+        val finalEvent=profile(f,removal.next)
+        val events=listOf(adminEvent,removal,finalEvent)
+        val entries=mutableListOf<GroupGovernanceEntryV1>()
+        for(event in events) {
+            val head=checkNotNull(f.ledger.governanceHead(id))
+            val entry=governanceEntry(f,head,event)
+            assertEquals(GroupApply.ACCEPTED,f.ledger.applyGovernedTransition(id,head,event,
+                GroupGovernanceV1.entryDigest(entry)) {
+                GroupGovernanceJournalV1(f.records).append(entry,
+                    checkNotNull(f.ledger.governanceBarrier(id)),
+                    checkNotNull(f.ledger.governanceHead(id)))
+            })
+            entries+=entry
+        }
+        val currentTrust=GroupTrustedPeer {it.memberId!=historicalId}
+        val historical:(GroupMember,Long)->Boolean={member,revision ->
+            member.memberId==historicalId && revision==start.revision
+        }
+        for(entry in entries) {
+            val ledger=GroupLedger(targetRecords,currentTrust,f.state.ownerId)
+            val head=checkNotNull(ledger.governanceHead(id))
+            assertTrue(GroupGovernanceV1.verifyEntry(entry,checkNotNull(ledger.state(id)),head))
+            assertEquals(GroupApply.ACCEPTED,ledger.applyGovernedTransition(id,head,
+                entry.transition,GroupGovernanceV1.entryDigest(entry),historical) {
+                GroupGovernanceJournalV1(targetRecords).append(entry,
+                    checkNotNull(ledger.governanceBarrier(id)),
+                    checkNotNull(ledger.governanceHead(id)))
+            })
+        }
+        assertEquals(GovernanceJournalStatus.COMPLETE,
+            GroupLedger(targetRecords,currentTrust,f.state.ownerId).governanceJournalStatus(id))
+        assertFalse(historical(added[0].member,removal.next.revision))
+        assertThrows(NoSuchElementException::class.java) {
+            GroupRules.derive(removal.next,GroupChange(GroupIds.create(),GroupAction.PROFILE,
+                historicalId,newProfileRevision=removal.next.profileRevision+1,
+                newProfileDigest=DeviceAuth.digest(byteArrayOf(77))),emptySet(),currentTrust)
+        }
     }
 }

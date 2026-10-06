@@ -15,7 +15,9 @@ enum class GroupControlKind { INVITE, ACCEPT, INVITE_EXPIRED, STATE_UPDATE, RESY
     GOVERNANCE_ACTIVATION_PROPOSAL, GOVERNANCE_ACTIVATION_ACK,
     GOVERNANCE_ACTIVATION_COMMIT, GOVERNANCE_ACTIVATION_INSTALLED_ACK,
     GOVERNANCE_ACTIVATION_READY, GOVERNANCE_ENTRY, GOVERNANCE_ENTRY_APPLIED_ACK,
-    GOVERNANCE_CAPABILITY_ECHO }
+    GOVERNANCE_CAPABILITY_ECHO, GOVERNANCE_RESYNC_REQUEST_V1,
+    GOVERNANCE_RESYNC_RESPONSE_V1, GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1,
+    GOVERNANCE_CHECKPOINT_SIGN_RESPONSE_V1, GOVERNANCE_BOOTSTRAP_V1 }
 
 /** Only internal maintenance is permitted through a blocked canonical group relationship. */
 internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
@@ -29,7 +31,10 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     GroupControlKind.GOVERNANCE_ACTIVATION_PROPOSAL,GroupControlKind.GOVERNANCE_ACTIVATION_ACK,
     GroupControlKind.GOVERNANCE_ACTIVATION_COMMIT,GroupControlKind.GOVERNANCE_ACTIVATION_INSTALLED_ACK,
     GroupControlKind.GOVERNANCE_ACTIVATION_READY,GroupControlKind.GOVERNANCE_ENTRY,
-    GroupControlKind.GOVERNANCE_ENTRY_APPLIED_ACK,GroupControlKind.GOVERNANCE_CAPABILITY_ECHO)
+    GroupControlKind.GOVERNANCE_ENTRY_APPLIED_ACK,GroupControlKind.GOVERNANCE_CAPABILITY_ECHO,
+    GroupControlKind.GOVERNANCE_RESYNC_REQUEST_V1,GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V1,
+    GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1,
+    GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_RESPONSE_V1)
 
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable data class GroupControl(
@@ -60,6 +65,10 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceReadyV1:GroupGovernanceReadyV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceEntryV1:GroupGovernanceEntryV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceEntryAckV1:GroupGovernanceEntryAppliedAckV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceResyncRequestV1:GroupGovernanceResyncRequestV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceResyncResponseV1:GroupGovernanceResyncResponseV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governedAdmissionBindingV1:GovernedAdmissionBindingV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceCheckpointV1:GroupGovernanceInviteeCheckpointV1?=null,
 ) {
     override fun toString() = "GroupControl(redacted)"
 }
@@ -120,11 +129,32 @@ object GroupControlCodec {
             NetworkCodec.encode(it).size<=GroupGovernanceV1.MAX_ENTRY_BYTES)}
         control.governanceEntryAckV1?.let {require(it.groupId==control.groupId &&
             NetworkCodec.encode(it).size<=GroupGovernanceV1.MAX_ACK_BYTES)}
+        control.governanceResyncRequestV1?.let {require(it.version==1 && it.groupId==control.groupId &&
+            it.activationDigest.size==32 && it.sequence in 0..GroupGovernanceJournalV1.MAX_ENTRIES.toLong() &&
+            it.headDigest.size==32 && it.stateDigest.size==32 && GroupIds.valid(it.requesterMemberId) &&
+            it.stateRevision in 1..GroupStatements.MAX_EVENTS.toLong())}
+        control.governanceResyncResponseV1?.let {require(it.version==1 && it.groupId==control.groupId &&
+            it.activationDigest.size==32 && it.requesterHeadDigest.size==32 &&
+            it.startHeadDigest.size==32 && it.endHeadDigest.size==32 &&
+            it.entries.size==1 && it.startSequence==it.requesterSequence+1 &&
+            it.endSequence==it.startSequence && it.entries.single().sequence==it.startSequence &&
+            it.endSequence in 1..GroupGovernanceJournalV1.MAX_ENTRIES.toLong() &&
+            it.entries.single().groupId==control.groupId &&
+            it.entries.single().previousHeadDigest.contentEquals(it.startHeadDigest) &&
+            it.entries.single().activationDigest.contentEquals(it.activationDigest) &&
+            GroupGovernanceV1.entryDigest(it.entries.single()).contentEquals(it.endHeadDigest))}
+        control.governedAdmissionBindingV1?.let {require(it.version==1 && it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupGovernedAdmissionV1.MAX_BINDING_BYTES)}
+        control.governanceCheckpointV1?.let {require(it.version==1 && it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupGovernedAdmissionV1.MAX_CHECKPOINT_BYTES)}
         val governanceCount=listOf(control.governanceProposalV1,control.governanceAckV1,
             control.governanceCommitV1,control.governanceInstalledV1,control.governanceReadyV1,
-            control.governanceEntryV1,control.governanceEntryAckV1).count {it!=null}
+            control.governanceEntryV1,control.governanceEntryAckV1,
+            control.governanceResyncRequestV1,control.governanceResyncResponseV1,
+            control.governanceCheckpointV1).count {it!=null}
         val governanceKind=control.kind.name.startsWith("GOVERNANCE_")
         if(control.kind==GroupControlKind.GOVERNANCE_CAPABILITY_ECHO) require(governanceCount==0)
+        else if(control.kind==GroupControlKind.GOVERNANCE_BOOTSTRAP_V1) require(governanceCount==2)
         else if(governanceKind) require(governanceCount==1)
         else require(governanceCount==0)
         val baselineAbsent=control.baselineProposalV1==null && control.baselineApprovalV1==null &&
@@ -164,7 +194,11 @@ object GroupControlCodec {
                         control.certificateV2.proposal.inviteId==control.inviteId &&
                         control.certificateV2.proposal.candidateDigest.contentEquals(
                             GroupStatements.digestMember(control.invite.target)))) &&
-                runCatching {GroupStatements.validateOfferShape(control.invite)}.isSuccess)
+                runCatching {GroupStatements.validateOfferShape(control.invite)}.isSuccess &&
+                (control.governedAdmissionBindingV1==null ||
+                    (control.certificateV2!=null &&
+                        GroupGovernedAdmissionV1.verifyBinding(control.governedAdmissionBindingV1,
+                            control.state,control.certificateV2))))
             GroupControlKind.ACCEPT -> require(v2Absent && control.invite != null && control.inviteId == control.invite.inviteId &&
                 control.state == null && control.genesis == null && control.admission == null &&
                 control.transition == null && control.fromRevision == null && control.fromDigest == null &&
@@ -228,6 +262,27 @@ object GroupControlCodec {
                     else -> false
                 })
             }
+            GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1 -> require(
+                control.governanceCheckpointV1!=null && control.governedAdmissionBindingV1!=null &&
+                control.certificateV2!=null && control.admission!=null && control.invite!=null &&
+                control.inviteId==control.invite.inviteId && control.state==null &&
+                control.genesis==null && control.transition==null && control.chain.isEmpty() &&
+                control.fromRevision==null && control.fromDigest==null && control.headRevision==null &&
+                GroupGovernedAdmissionV1.verifyCheckpoint(control.governanceCheckpointV1,
+                    control.admission.state,control.admission,control.certificateV2,
+                    control.governedAdmissionBindingV1,requireOwner=false))
+            GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_RESPONSE_V1 -> require(
+                v2Absent && control.governanceCheckpointV1!=null &&
+                control.governedAdmissionBindingV1==null && control.inviteId==null &&
+                control.state==null && control.genesis==null && control.admission==null &&
+                control.invite==null && control.transition==null && control.chain.isEmpty() &&
+                control.fromRevision==null && control.fromDigest==null && control.headRevision==null)
+            GroupControlKind.GOVERNANCE_BOOTSTRAP_V1 -> require(v2Absent &&
+                control.governanceCheckpointV1!=null && control.governanceEntryV1!=null &&
+                control.governedAdmissionBindingV1==null && control.inviteId==null &&
+                control.state==null && control.genesis==null && control.admission==null &&
+                control.invite==null && control.transition==null && control.chain.isEmpty() &&
+                control.fromRevision==null && control.fromDigest==null && control.headRevision==null)
             GroupControlKind.GOVERNANCE_OWNER_SIGN_REQUEST,
             GroupControlKind.GOVERNANCE_OWNER_SIGN_RESPONSE,
             GroupControlKind.GOVERNANCE_ACTIVATION_PROPOSAL,
@@ -237,6 +292,8 @@ object GroupControlCodec {
             GroupControlKind.GOVERNANCE_ACTIVATION_READY,
             GroupControlKind.GOVERNANCE_ENTRY,
             GroupControlKind.GOVERNANCE_ENTRY_APPLIED_ACK,
+            GroupControlKind.GOVERNANCE_RESYNC_REQUEST_V1,
+            GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V1,
             GroupControlKind.GOVERNANCE_CAPABILITY_ECHO -> {
                 require(v2Absent && baselineAbsent && control.inviteId==null && control.state==null &&
                     control.genesis==null && control.admission==null && control.invite==null &&
@@ -252,6 +309,8 @@ object GroupControlCodec {
                     GroupControlKind.GOVERNANCE_ACTIVATION_READY -> control.governanceReadyV1!=null
                     GroupControlKind.GOVERNANCE_ENTRY -> control.governanceEntryV1!=null
                     GroupControlKind.GOVERNANCE_ENTRY_APPLIED_ACK -> control.governanceEntryAckV1!=null
+                    GroupControlKind.GOVERNANCE_RESYNC_REQUEST_V1 -> control.governanceResyncRequestV1!=null
+                    GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V1 -> control.governanceResyncResponseV1!=null
                     GroupControlKind.GOVERNANCE_CAPABILITY_ECHO -> governanceCount==0
                     else -> false
                 })

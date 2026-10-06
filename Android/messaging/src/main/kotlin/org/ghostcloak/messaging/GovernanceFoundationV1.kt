@@ -70,6 +70,19 @@ internal class GovernanceFoundationStore(private val records:EndpointRecords) {
         records.write(key(barrier.groupId,"head"),headBytes)
         records.write(key(barrier.groupId,"barrier"),barrierBytes)
     }
+    /** Invoked only by a verified new-invitee bootstrap in the caller's transaction. */
+    fun installAtJoinPoint(barrier:GovernanceBarrierV1,head:GovernanceHeadFoundationV1) {
+        require(this.barrier(barrier.groupId)==null && this.head(barrier.groupId)==null)
+        require(head.groupId==barrier.groupId && head.sequence>0 &&
+            head.sequence==head.stateRevision-barrier.activationStateRevision &&
+            same(head.activationDigest,barrier.activationDigest) &&
+            barrier.activationStateDigest.size==32 && barrier.baselineCertificateDigest.size==32 &&
+            head.headDigest.size==32 && head.stateDigest.size==32)
+        val barrierBytes=NetworkCodec.encode(barrier);val headBytes=NetworkCodec.encode(head)
+        require(barrierBytes.size<=512 && headBytes.size<=512)
+        records.write(key(barrier.groupId,"head"),headBytes)
+        records.write(key(barrier.groupId,"barrier"),barrierBytes)
+    }
     fun matches(expected:GovernanceHeadFoundationV1,actual:GovernanceHeadFoundationV1):Boolean=
         expected.version==actual.version && expected.groupId==actual.groupId &&
             same(expected.activationDigest,actual.activationDigest) &&

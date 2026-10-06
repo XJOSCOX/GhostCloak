@@ -254,7 +254,8 @@ internal class GroupGovernanceStore(private val records:EndpointRecords) {
     }
     fun clearOutstanding(id:String)=records.transaction {records.remove(key(id,"entry"))}
     fun clearSent(id:String,phase:String)=records.transaction {
-        require((phase.startsWith("entry-") && phase.removePrefix("entry-").toLongOrNull()!=null) ||
+        require((phase.startsWith("checkpoint-") && GroupIds.valid(phase.removePrefix("checkpoint-"))) ||
+            (phase.startsWith("entry-") && phase.removePrefix("entry-").toLongOrNull()!=null) ||
             (phase.startsWith("entry-ack-") && phase.removePrefix("entry-ack-").toLongOrNull()!=null))
         records.keys("app/group/governance-v1/sent/$id/$phase/").forEach(records::remove)
     }
@@ -269,6 +270,7 @@ internal class GroupGovernanceStore(private val records:EndpointRecords) {
     private fun sentKey(id:String,phase:String,recipient:String):String {
         require(phase in setOf("capability","owner-request","owner-response","proposal","ack","commit",
             "installed","ready") ||
+            (phase.startsWith("checkpoint-") && GroupIds.valid(phase.removePrefix("checkpoint-"))) ||
             (phase.startsWith("entry-") && phase.removePrefix("entry-").toLongOrNull()!=null) ||
             (phase.startsWith("entry-ack-") && phase.removePrefix("entry-ack-").toLongOrNull()!=null))
         require(GroupIds.valid(id) && org.ghostcloak.identity.RandomIdentifiers.valid(recipient))

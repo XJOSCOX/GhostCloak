@@ -31,6 +31,8 @@ class GroupMembershipTransport(
     private val historicalAuthority=HistoricalGroupAuthority(records)
     private val baselineV1=GroupAuthorityBaselineStore(records)
     private val governanceV1=GroupGovernanceStore(records)
+    private val governanceJournal=GroupGovernanceJournalV1(records)
+    private val governedAdmission=GovernedAdmissionStore(records)
     data class Conversation(val groupId:String,val status:GroupLocalStatus,val memberCount:Int,
         val memberDevices:Map<String,String>,val messages:List<GroupChatMessage>,val invitationPending:Boolean=false)
     // Retry scheduling is only a transport throttle. The durable marker, not this clock,
@@ -412,11 +414,19 @@ class GroupMembershipTransport(
         val (current,localId)=baselineState(groupId)
         val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
         val barrier=ledger.governanceBarrier(groupId) ?: throw ApiFailure(409,"group_governance_unavailable")
-        val ready=governanceV1.ready(groupId) ?: throw ApiFailure(409,"group_governance_not_ready")
+        if(ledger.governanceJournalStatus(groupId)!=GovernanceJournalStatus.COMPLETE)
+            throw ApiFailure(409,"group_governance_legacy_incomplete")
+        val ready=governanceV1.ready(groupId)
+        val join=governedAdmission.join(groupId)
         if(current.coordinatorId!=localId ||
-            !MessageDigest.isEqual(ready.commit.digest,barrier.activationDigest) ||
-            governanceV1.commit(groupId)==null)
+            ((ready==null || !MessageDigest.isEqual(ready.commit.digest,barrier.activationDigest) ||
+                governanceV1.commit(groupId)==null) &&
+                (join==null || !MessageDigest.isEqual(join.checkpoint.activationDigest,
+                    barrier.activationDigest))))
             throw ApiFailure(409,"group_governance_unavailable")
+        val head=ledger.governanceHead(groupId) ?: throw ApiFailure(409,"group_governance_unavailable")
+        if(head.sequence>=GroupGovernanceJournalV1.MAX_ENTRIES)
+            throw ApiFailure(409,"group_capacity")
         val outstanding=governanceV1.outstanding(groupId)
         if(outstanding!=null && outstanding.applied.map {it.memberId}.sorted()!=
             outstanding.entry.transition.next.members.map {it.memberId}.sorted())
@@ -428,7 +438,6 @@ class GroupMembershipTransport(
                 governanceV1.clearOutstanding(groupId)
             }
         }
-        val head=ledger.governanceHead(groupId) ?: throw ApiFailure(409,"group_governance_unavailable")
         val peers=trusted(current.members,groupId)
         val change=GroupChange(GroupIds.create(),GroupAction.TIMER,localId,newTimer=seconds)
         val next=try {GroupRules.derive(current,change,emptySet(),peers)}
@@ -453,6 +462,8 @@ class GroupMembershipTransport(
         if(!GroupGovernanceV1.verifyApplied(ack,entry)) throw ApiFailure(409,"group_invalid")
         val result=GroupLedger(records,peers,localId).applyGovernedTransition(groupId,head,event,
             GroupGovernanceV1.entryDigest(entry)) {
+            governanceJournal.append(entry,barrier,
+                checkNotNull(GroupLedger(records,peers,localId).governanceHead(groupId)))
             governanceV1.saveOutstanding(PendingGovernanceEntryV1(entry,listOf(ack)))
         }
         if(result!=GroupApply.ACCEPTED) throw ApiFailure(409,"group_invalid")
@@ -463,9 +474,14 @@ class GroupMembershipTransport(
         val localId=localMember(control.groupId) ?: throw ApiFailure(409,"group_unavailable")
         val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
         val current=ledger.state(control.groupId) ?: throw ApiFailure(409,"group_unavailable")
-        val ready=governanceV1.ready(control.groupId) ?: throw ApiFailure(503,"group_evidence_pending")
+        val ready=governanceV1.ready(control.groupId)
+        val join=governedAdmission.join(control.groupId)
         val barrier=ledger.governanceBarrier(control.groupId) ?: throw ApiFailure(503,"group_evidence_pending")
-        if(!MessageDigest.isEqual(ready.commit.digest,barrier.activationDigest))
+        if(ledger.governanceJournalStatus(control.groupId)!=GovernanceJournalStatus.COMPLETE)
+            throw ApiFailure(409,"group_governance_legacy_incomplete")
+        if((ready==null || !MessageDigest.isEqual(ready.commit.digest,barrier.activationDigest)) &&
+            (join==null || !MessageDigest.isEqual(join.checkpoint.activationDigest,
+                barrier.activationDigest)))
             throw ApiFailure(409,"group_invalid")
         val old=governanceV1.outstanding(control.groupId)
         if(old!=null && MessageDigest.isEqual(GroupGovernanceV1.entryDigest(old.entry),
@@ -473,19 +489,167 @@ class GroupMembershipTransport(
             flushGovernanceEntries();return
         }
         val head=ledger.governanceHead(control.groupId) ?: throw ApiFailure(409,"group_invalid")
-        if(current.members.singleOrNull {it.memberId==current.coordinatorId}?.deviceId!=sender ||
-            !GroupGovernanceV1.verifyEntry(entry,current,head))
+        if(entry.sequence<=head.sequence) {
+            val result=ledger.markGovernanceForkIfValid(entry,
+                historicalPeer={member,revision ->
+                    historicalAuthority.matchesAt(control.groupId,member,revision)
+                },admissionEvidence=admissionV2.evidence(control.groupId,entry.eventId))
+            if(result==GroupApply.DUPLICATE) {flushGovernanceEntries();return}
+            if(result==GroupApply.FORKED) throw ApiFailure(409,"group_forked")
             throw ApiFailure(409,"group_invalid")
-        val peers=trusted(current.members,control.groupId)
+        }
+        if(current.members.singleOrNull {it.memberId==current.coordinatorId}?.deviceId!=sender)
+            throw ApiFailure(409,"group_invalid")
+        if(entry.sequence>head.sequence+1) {
+            requestGovernanceResync(control.groupId)
+            return
+        }
+        if(!GroupGovernanceV1.verifyEntry(entry,current,head))
+            throw ApiFailure(409,"group_invalid")
+        val candidate=entry.transition.change.added
+        val certificate=if(entry.action==GroupAction.ADD) {
+            val cert=admissionV2.evidence(control.groupId,entry.eventId)
+            if(cert==null) {
+                send(sender,GroupControl(kind=GroupControlKind.ADMISSION_V2_EVIDENCE_REQUEST,
+                    groupId=control.groupId,evidenceEventId=entry.eventId))
+                throw ApiFailure(503,"group_admission_evidence_pending")
+            }
+            if(candidate==null || !AdmissionV2.verifyCertificate(cert,current) ||
+                cert.proposal.eventId!=entry.eventId ||
+                cert.proposal.inviteId!=entry.transition.change.invite?.inviteId ||
+                !MessageDigest.isEqual(cert.proposal.candidateDigest,
+                    GroupStatements.digestMember(candidate)) ||
+                !admissionV2.matchesOwnApproval(current,cert,localId))
+                throw ApiFailure(409,"group_invalid")
+            cert
+        } else null
+        val peers=trusted(current.members+listOfNotNull(candidate),control.groupId,historicalOnly=true)
         val unsignedAck=GroupGovernanceV1.unsignedApplied(entry,localId)
         val ack=unsignedAck.copy(signature=network.signGroupStatement(
             GroupGovernanceV1.appliedStatement(unsignedAck)))
         val result=GroupLedger(records,peers,localId).applyGovernedTransition(control.groupId,
-            head,entry.transition,GroupGovernanceV1.entryDigest(entry)) {
+            head,entry.transition,GroupGovernanceV1.entryDigest(entry),
+            historicalPeer={member,revision ->
+                historicalAuthority.matchesAt(control.groupId,member,revision)
+            }) {
+            governanceJournal.append(entry,barrier,
+                checkNotNull(GroupLedger(records,peers,localId).governanceHead(control.groupId)))
+            if(candidate!=null && certificate!=null) {
+                currentAuthority.anchor(entry.transition.next,candidate,
+                    DeviceAuth.digest(NetworkCodec.encode(entry.transition)))
+                historicalAuthority.record(current,entry.transition,certificate)
+                admissionV2.saveEvidence(control.groupId,entry.eventId,certificate)
+                admissionV2.removeOwn(control.groupId,certificate.proposal.inviteId)
+            }
+            currentAuthority.removeDeparted(entry.transition.next)
+            chats.cancelStale(control.groupId,entry.transition.next.epoch)
             governanceV1.saveOutstanding(PendingGovernanceEntryV1(entry,listOf(ack)))
         }
         if(result!=GroupApply.ACCEPTED) throw ApiFailure(409,"group_invalid")
         flushGovernanceEntries()
+    }
+    /** Explicit recovery for a missing final entry, including after delivery expiry. */
+    suspend fun requestGovernanceResync(groupId:String) {
+        val localId=localMember(groupId) ?: throw ApiFailure(409,"group_unavailable")
+        val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+        val current=ledger.state(groupId) ?: throw ApiFailure(409,"group_unavailable")
+        val head=ledger.governanceHead(groupId) ?: throw ApiFailure(409,"group_unavailable")
+        if(ledger.isForked(groupId) || ledger.governanceJournalStatus(groupId)!=GovernanceJournalStatus.COMPLETE ||
+            current.members.none {it.memberId==localId}) throw ApiFailure(409,"group_unavailable")
+        val coordinator=governanceCoordinator(current)
+        if(coordinator==network.ownDevice()) return
+        val marker=GovernanceResyncMarkerV1(groupId=groupId,
+            activationDigest=head.activationDigest,sequence=head.sequence,headDigest=head.headDigest,
+            stateRevision=head.stateRevision,stateDigest=head.stateDigest)
+        governanceJournal.saveMarker(marker)
+        send(coordinator,GroupControl(kind=GroupControlKind.GOVERNANCE_RESYNC_REQUEST_V1,
+            groupId=groupId,governanceResyncRequestV1=GroupGovernanceResyncRequestV1(
+                groupId=groupId,activationDigest=head.activationDigest,sequence=head.sequence,
+                headDigest=head.headDigest,stateRevision=head.stateRevision,
+                stateDigest=head.stateDigest,requesterMemberId=localId)))
+    }
+    private suspend fun receiveGovernanceResyncRequest(sender:String,control:GroupControl) {
+        val request=control.governanceResyncRequestV1 ?: throw ApiFailure(400,"group_invalid")
+        val localId=localMember(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+        val current=ledger.state(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val barrier=ledger.governanceBarrier(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val head=ledger.governanceHead(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        if(ledger.isForked(control.groupId) || localId!=current.coordinatorId ||
+            ledger.governanceJournalStatus(control.groupId)!=GovernanceJournalStatus.COMPLETE ||
+            current.members.singleOrNull {it.memberId==request.requesterMemberId}?.deviceId!=sender ||
+            !MessageDigest.isEqual(request.activationDigest,barrier.activationDigest) ||
+            request.sequence>=head.sequence) throw ApiFailure(409,"group_invalid")
+        // A member admitted after activation has no claim to pre-join history.
+        val latestJoin=(1L..head.sequence).mapNotNull {sequence ->
+            governanceJournal.entry(control.groupId,sequence)?.takeIf {
+                it.action==GroupAction.ADD &&
+                    it.transition.change.added?.memberId==request.requesterMemberId
+            }?.sequence
+        }.maxOrNull()
+        if(latestJoin!=null && request.sequence<latestJoin)
+            throw ApiFailure(409,"group_invalid")
+        val parent=if(request.sequence==0L) null else governanceJournal.entry(control.groupId,request.sequence)
+            ?: throw ApiFailure(409,"group_invalid")
+        val parentHead=parent?.let(GroupGovernanceV1::entryDigest) ?: barrier.activationDigest
+        val parentRevision=parent?.postRevision ?: barrier.activationStateRevision
+        val parentState=parent?.postDigest ?: barrier.activationStateDigest
+        if(!MessageDigest.isEqual(parentHead,request.headDigest) ||
+            parentRevision!=request.stateRevision ||
+            !MessageDigest.isEqual(parentState,request.stateDigest))
+            throw ApiFailure(409,"group_invalid")
+        val entry=governanceJournal.entry(control.groupId,request.sequence+1)
+            ?: throw ApiFailure(409,"group_invalid")
+        val response=GroupGovernanceResyncResponseV1(groupId=control.groupId,
+            activationDigest=barrier.activationDigest,requesterSequence=request.sequence,
+            requesterHeadDigest=request.headDigest,startSequence=entry.sequence,
+            startHeadDigest=request.headDigest,entries=listOf(entry),endSequence=entry.sequence,
+            endHeadDigest=GroupGovernanceV1.entryDigest(entry),more=entry.sequence<head.sequence)
+        send(sender,GroupControl(kind=GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V1,
+            groupId=control.groupId,governanceResyncResponseV1=response))
+    }
+    private suspend fun receiveGovernanceResyncResponse(sender:String,control:GroupControl) {
+        val response=control.governanceResyncResponseV1 ?: throw ApiFailure(400,"group_invalid")
+        val localId=localMember(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+        val current=ledger.state(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val head=ledger.governanceHead(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        if(ledger.isForked(control.groupId) || governanceCoordinator(current)!=sender ||
+            !MessageDigest.isEqual(head.activationDigest,response.activationDigest))
+            throw ApiFailure(409,"group_invalid")
+        if(response.startSequence<=head.sequence) {
+            val result=ledger.markGovernanceForkIfValid(response.entries.single(),
+                historicalPeer={member,revision ->
+                    historicalAuthority.matchesAt(control.groupId,member,revision)
+                },admissionEvidence=admissionV2.evidence(control.groupId,
+                    response.entries.single().eventId))
+            if(result==GroupApply.FORKED) throw ApiFailure(409,"group_forked")
+        }
+        val marker=governanceJournal.marker(control.groupId)
+        if(marker==null && head.sequence==response.endSequence &&
+            MessageDigest.isEqual(head.headDigest,response.endHeadDigest)) return
+        if(marker==null || marker.sequence!=response.requesterSequence ||
+            !MessageDigest.isEqual(marker.headDigest,response.requesterHeadDigest) ||
+            head.sequence!=marker.sequence || !MessageDigest.isEqual(head.headDigest,marker.headDigest) ||
+            response.startSequence!=head.sequence+1 ||
+            !MessageDigest.isEqual(response.startHeadDigest,head.headDigest))
+            throw ApiFailure(409,"group_invalid")
+        val entry=response.entries.single()
+        receiveGovernanceEntry(sender,GroupControl(kind=GroupControlKind.GOVERNANCE_ENTRY,
+            groupId=control.groupId,governanceEntryV1=entry))
+        val advanced=checkNotNull(ledger.governanceHead(control.groupId))
+        if(advanced.sequence!=response.endSequence ||
+            !MessageDigest.isEqual(advanced.headDigest,response.endHeadDigest))
+            throw ApiFailure(409,"group_invalid")
+        if(response.more) requestGovernanceResync(control.groupId)
+        else governanceJournal.clearMarker(control.groupId)
+    }
+    private suspend fun retryMarkedGovernanceResync() {
+        for(id in governanceJournal.markedGroups()) {
+            try {requestGovernanceResync(id)}
+            catch(e:CancellationException) {throw e}
+            catch(_:ApiFailure) { /* A durable marker keeps the gap visible. */ }
+        }
     }
     private suspend fun receiveGovernanceEntryAck(sender:String,control:GroupControl) {
         val ack=control.governanceEntryAckV1 ?: throw ApiFailure(400,"group_invalid")
@@ -502,6 +666,186 @@ class GroupMembershipTransport(
             throw ApiFailure(409,"group_invalid")
         if(old==null) governanceV1.saveOutstanding(pending.copy(applied=pending.applied+ack))
     }
+    private suspend fun receiveCheckpointSignRequest(sender:String,control:GroupControl) {
+        val checkpoint=control.governanceCheckpointV1 ?: throw ApiFailure(400,"group_invalid")
+        val binding=control.governedAdmissionBindingV1 ?: throw ApiFailure(400,"group_invalid")
+        val proof=control.admission ?: throw ApiFailure(400,"group_invalid")
+        val certificate=control.certificateV2 ?: throw ApiFailure(400,"group_invalid")
+        val invite=control.invite ?: throw ApiFailure(400,"group_invalid")
+        val (current,localId)=baselineState(control.groupId)
+        val head=activeGovernanceHead(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val barrier=GroupLedger(records,GroupTrustedPeer {false},localId)
+            .governanceBarrier(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        if(localId!=current.ownerId || localId==current.coordinatorId ||
+            governanceCoordinator(current)!=sender ||
+            !GroupGovernedAdmissionV1.verifyBinding(binding,current,certificate,head) ||
+            !admissionV2.matchesOwnApproval(current,certificate,localId) ||
+            !GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint,current,proof,certificate,
+                binding,requireOwner=false) ||
+            !MessageDigest.isEqual(checkpoint.activationStateDigest,barrier.activationStateDigest) ||
+            checkpoint.activationStateRevision!=barrier.activationStateRevision ||
+            !MessageDigest.isEqual(checkpoint.baselineCertificateDigest,
+                barrier.baselineCertificateDigest) ||
+            invite.inviteId!=binding.inviteId ||
+            !GroupStatements.verifyInvite(invite,current,emptySet()))
+            throw ApiFailure(409,"group_invalid")
+        val signed=checkpoint.copy(ownerSignature=network.signGroupStatement(
+            GroupGovernedAdmissionV1.ownerStatement(checkpoint)))
+        if(!GroupGovernedAdmissionV1.verifyCheckpoint(signed,current,proof,certificate,binding))
+            throw ApiFailure(409,"group_invalid")
+        send(sender,GroupControl(kind=GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_RESPONSE_V1,
+            groupId=control.groupId,governanceCheckpointV1=signed))
+    }
+    private suspend fun receiveCheckpointSignResponse(sender:String,control:GroupControl) {
+        val checkpoint=control.governanceCheckpointV1 ?: throw ApiFailure(400,"group_invalid")
+        val pending=governedAdmission.pending(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val (current,localId)=baselineState(control.groupId)
+        val head=activeGovernanceHead(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val expected=pending.checkpoint ?: throw ApiFailure(409,"group_invalid")
+        if(localId!=current.coordinatorId || governanceOwner(current)!=sender ||
+            expected.ownerSignature.isNotEmpty() ||
+            !NetworkCodec.encode(expected).contentEquals(NetworkCodec.encode(
+                checkpoint.copy(ownerSignature=byteArrayOf()))) ||
+            !GroupGovernedAdmissionV1.verifyBinding(pending.binding,current,
+                pending.certificate,head) ||
+            !GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint,current,pending.proof,
+                pending.certificate,pending.binding)) throw ApiFailure(409,"group_invalid")
+        governedAdmission.savePending(pending.copy(checkpoint=checkpoint))
+        flushGovernedAdmission()
+    }
+    private suspend fun receiveGovernanceBootstrap(sender:String,control:GroupControl) {
+        val checkpoint=control.governanceCheckpointV1 ?: throw ApiFailure(400,"group_invalid")
+        val entry=control.governanceEntryV1 ?: throw ApiFailure(400,"group_invalid")
+        val incoming=records.transaction {records.read(incomingKey(checkpoint.inviteId))?.let {
+            NetworkCodec.decode<Incoming>(it,16_384)
+        }} ?: throw ApiFailure(409,"group_invalid")
+        if(incoming.status!=InviteState.ACCEPTING || incoming.sender!=sender ||
+            incoming.offer.groupId!=control.groupId) throw ApiFailure(409,"group_invalid")
+        val proof=incoming.offer.admission ?: throw ApiFailure(409,"group_invalid")
+        val certificate=incoming.offer.certificateV2 ?: throw ApiFailure(409,"group_invalid")
+        val binding=incoming.offer.governedAdmissionBindingV1 ?: throw ApiFailure(409,"group_invalid")
+        val parent=incoming.offer.state ?: throw ApiFailure(409,"group_invalid")
+        val acceptedInvite=entry.transition.change.invite ?: throw ApiFailure(409,"group_invalid")
+        val offered=incoming.offer.invite ?: throw ApiFailure(409,"group_invalid")
+        val localId=localMember(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        if(localId!=proof.target.memberId ||
+            !MessageDigest.isEqual(checkpoint.candidateDigest,
+                GroupStatements.digestMember(proof.target)) ||
+            parent.coordinatorId!=acceptedInvite.inviterId ||
+            parent.members.single {it.memberId==parent.coordinatorId}.deviceId!=sender ||
+            !NetworkCodec.encode(offered).contentEquals(NetworkCodec.encode(
+                acceptedInvite.copy(targetAcceptance=byteArrayOf()))) ||
+            !GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint,parent,proof,
+                certificate,binding)) throw ApiFailure(409,"group_invalid")
+        val trusted=trusted(parent.members+proof.target,control.groupId)
+        val unsignedAck=GroupGovernanceV1.unsignedApplied(entry,localId)
+        val ack=unsignedAck.copy(signature=network.signGroupStatement(
+            GroupGovernanceV1.appliedStatement(unsignedAck)))
+        if(!GroupGovernanceV1.verifyApplied(ack,entry)) throw ApiFailure(409,"group_invalid")
+        val evidence=GovernedJoinEvidenceV1(checkpoint,binding,proof,certificate)
+        val result=GroupLedger(records,trusted,localId).acceptGovernedBootstrap(evidence,
+            acceptedInvite,entry) {
+            val digest=DeviceAuth.digest(NetworkCodec.encode(proof))
+            entry.transition.next.members.forEach {member ->
+                currentAuthority.anchor(entry.transition.next,member,digest)
+            }
+            parent.members.forEach {historicalAuthority.anchorBaseline(proof,it)}
+            historicalAuthority.record(parent,entry.transition,certificate)
+            admissionV2.saveEvidence(control.groupId,entry.eventId,certificate)
+            governanceV1.saveOutstanding(PendingGovernanceEntryV1(entry,listOf(ack)))
+            records.remove(incomingKey(checkpoint.inviteId))
+            chats.cancelStale(control.groupId,entry.transition.next.epoch)
+        }
+        if(result!=GroupApply.ACCEPTED && result!=GroupApply.DUPLICATE)
+            throw ApiFailure(409,"group_invalid")
+        flushGovernanceEntries()
+    }
+    private suspend fun flushGovernedAdmission() {
+        for(groupId in governedAdmission.pendingGroups()) {
+            val pending=governedAdmission.pending(groupId) ?: continue
+            val current=state(groupId) ?: continue
+            val localId=localMember(groupId) ?: continue
+            val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+            val head=runCatching {activeGovernanceHead(groupId)}.getOrNull() ?: continue
+            val barrier=ledger.governanceBarrier(groupId) ?: continue
+            val binding=pending.binding
+            val checkpoint=pending.checkpoint ?: continue
+            if(localId!=current.coordinatorId || ledger.isForked(groupId) ||
+                !GroupGovernedAdmissionV1.verifyBinding(binding,current,pending.certificate,head) ||
+                !MessageDigest.isEqual(checkpoint.activationDigest,barrier.activationDigest)) {
+                discardStaleGovernedAdmission(groupId,binding.inviteId)
+                continue
+            }
+            if(checkpoint.ownerSignature.isEmpty()) {
+                sendGovernanceOnce(groupId,"checkpoint-${binding.inviteId}",
+                    governanceOwner(current),GroupControl(
+                        kind=GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1,
+                        groupId=groupId,inviteId=binding.inviteId,invite=pending.invite,
+                        admission=pending.proof,certificateV2=pending.certificate,
+                        governedAdmissionBindingV1=binding,governanceCheckpointV1=checkpoint))
+                continue
+            }
+            if(!GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint,current,pending.proof,
+                    pending.certificate,binding)) throw ApiFailure(409,"group_invalid")
+            val outstanding=governanceV1.outstanding(groupId)
+            if(outstanding!=null && outstanding.applied.map {it.memberId}.sorted()!=
+                outstanding.entry.transition.next.members.map {it.memberId}.sorted()) continue
+            val candidate=pending.invite.target
+            val peers=trusted(current.members+candidate,groupId)
+            val change=GroupChange(binding.eventId,GroupAction.ADD,localId,
+                added=candidate,invite=pending.invite)
+            val next=try {GroupRules.derive(current,change,emptySet(),peers)}
+                catch(_:IllegalArgumentException) {throw ApiFailure(409,"group_invalid")}
+            val event=GroupTransition(change,next,
+                network.signGroupStatement(GroupStatements.actor(current,change,next)),
+                network.signGroupStatement(GroupStatements.coordinator(current,change,next)))
+            val unsigned=GroupGovernanceEntryV1(groupId=groupId,
+                activationDigest=head.activationDigest,sequence=head.sequence+1,
+                previousHeadDigest=head.headDigest,eventId=change.eventId,
+                preRevision=current.revision,preDigest=GroupStatements.digest(current),
+                actorId=localId,action=GroupAction.ADD,
+                transitionDigest=DeviceAuth.digest(NetworkCodec.encode(event)),
+                postRevision=next.revision,postDigest=GroupStatements.digest(next),
+                transition=event,actorSignature=byteArrayOf(),coordinatorSignature=byteArrayOf())
+            val entry=unsigned.copy(actorSignature=network.signGroupStatement(
+                GroupGovernanceV1.actorStatement(unsigned)),
+                coordinatorSignature=network.signGroupStatement(
+                    GroupGovernanceV1.coordinatorStatement(unsigned)))
+            if(!GroupGovernanceV1.verifyEntry(entry,current,head))
+                throw ApiFailure(409,"group_invalid")
+            val unsignedAck=GroupGovernanceV1.unsignedApplied(entry,localId)
+            val ack=unsignedAck.copy(signature=network.signGroupStatement(
+                GroupGovernanceV1.appliedStatement(unsignedAck)))
+            if(!GroupGovernanceV1.verifyApplied(ack,entry)) throw ApiFailure(409,"group_invalid")
+            val result=GroupLedger(records,peers,localId).applyGovernedTransition(groupId,head,
+                event,GroupGovernanceV1.entryDigest(entry)) {
+                if(outstanding!=null) {
+                    governanceV1.clearSent(groupId,"entry-${outstanding.entry.sequence}")
+                    governanceV1.clearSent(groupId,"entry-ack-${outstanding.entry.sequence}")
+                    governanceV1.clearOutstanding(groupId)
+                }
+                governanceJournal.append(entry,barrier,
+                    checkNotNull(GroupLedger(records,peers,localId).governanceHead(groupId)))
+                currentAuthority.anchor(next,candidate,DeviceAuth.digest(NetworkCodec.encode(event)))
+                historicalAuthority.record(current,event,pending.certificate)
+                admissionV2.saveEvidence(groupId,event.change.eventId,pending.certificate)
+                admissionV2.clearPending(groupId)
+                admissionV2.removeOwn(groupId,binding.inviteId)
+                governedAdmission.clearReservation(groupId)
+                governedAdmission.clearPending(groupId)
+                governedAdmission.saveCheckpoint(checkpoint)
+                governanceV1.saveOutstanding(PendingGovernanceEntryV1(entry,listOf(ack)))
+                records.read(outgoingKey(binding.inviteId))?.let {bytes ->
+                    val outgoing=NetworkCodec.decode<Outgoing>(bytes,16_384)
+                    records.write(outgoingKey(binding.inviteId),
+                        NetworkCodec.encode(outgoing.copy(used=true)))
+                }
+                chats.cancelStale(groupId,next.epoch)
+            }
+            if(result!=GroupApply.ACCEPTED) throw ApiFailure(409,"group_invalid")
+            flushGovernanceEntries()
+        }
+    }
     private suspend fun flushGovernanceEntries() {
         for(groupId in governanceV1.outstandingGroups()) {
             val pending=governanceV1.outstanding(groupId) ?: continue
@@ -513,7 +857,14 @@ class GroupMembershipTransport(
             if(localId==current.coordinatorId) {
                 for(member in current.members.filter {it.memberId!=localId &&
                     pending.applied.none {ack ->ack.memberId==it.memberId}})
-                    sendGovernanceOnce(groupId,"entry-${entry.sequence}",member.deviceId,
+                    if(entry.action==GroupAction.ADD &&
+                        entry.transition.change.added?.memberId==member.memberId) {
+                        val checkpoint=governedAdmission.checkpoint(groupId) ?: continue
+                        sendGovernanceOnce(groupId,"entry-${entry.sequence}",member.deviceId,
+                            GroupControl(kind=GroupControlKind.GOVERNANCE_BOOTSTRAP_V1,
+                                groupId=groupId,governanceEntryV1=entry,
+                                governanceCheckpointV1=checkpoint))
+                    } else sendGovernanceOnce(groupId,"entry-${entry.sequence}",member.deviceId,
                         GroupControl(kind=GroupControlKind.GOVERNANCE_ENTRY,groupId=groupId,
                             governanceEntryV1=entry))
             } else {
@@ -618,12 +969,31 @@ class GroupMembershipTransport(
         repository.admissionV2Peer(target) && state.members.all {member ->
             member.memberId==localId || repository.admissionV2Peer(member.deviceId)
         }
+    private fun activeGovernanceHead(groupId:String):GovernanceHeadFoundationV1? {
+        val localId=localMember(groupId) ?: return null
+        val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+        if(ledger.governanceBarrier(groupId)==null) return null
+        if(ledger.governanceJournalStatus(groupId)!=GovernanceJournalStatus.COMPLETE ||
+            ledger.isForked(groupId) || (governanceV1.ready(groupId)==null &&
+                governedAdmission.checkpoint(groupId)==null &&
+                governedAdmission.join(groupId)==null))
+            throw ApiFailure(409,"group_governance_legacy_incomplete")
+        return ledger.governanceHead(groupId) ?: throw ApiFailure(409,"group_invalid")
+    }
+    private fun discardStaleGovernedAdmission(groupId:String,inviteId:String)=records.transaction {
+        admissionV2.clearPending(groupId)
+        admissionV2.removeOwn(groupId,inviteId)
+        governedAdmission.clearPending(groupId)
+        governedAdmission.clearReservation(groupId)
+        records.remove(outgoingKey(inviteId))
+    }
 
     /** A separate durable protocol; never mutate the frozen v1 GroupAdmission/Invite bytes. */
     private suspend fun beginAdmissionV2(offer:GroupControl,initialize:()->Unit = {}) {
         val state=offer.state ?: throw ApiFailure(409,"group_invalid")
         val invite=offer.invite ?: throw ApiFailure(409,"group_invalid")
         val localId=localMember(state.groupId) ?: state.coordinatorId
+        val governedHead=activeGovernanceHead(state.groupId)
         val otherInvitation=records.transaction {
             records.keys("app/group/outgoing/").any {key ->
                 records.read(key)?.let {NetworkCodec.decode<Outgoing>(it,16_384)}?.let {
@@ -632,10 +1002,17 @@ class GroupMembershipTransport(
             }
         }
         if(state.coordinatorId!=localId || admissionV2.pending(state.groupId)!=null ||
-            governanceV1.pending(state.groupId)!=null ||
+            (governedHead==null && governanceV1.pending(state.groupId)!=null) ||
             otherInvitation ||
             !allAdmissionV2Peers(state,invite.target.deviceId,localId) ||
-            !authority.verifyAdmissionCandidate(invite.target))
+            !authority.verifyAdmissionCandidate(invite.target) ||
+            (governedHead!=null && (governedHead.sequence>=GroupGovernanceJournalV1.MAX_ENTRIES ||
+                !repository.governanceV1Peer(invite.target.deviceId) ||
+                !allGovernancePeers(state,localId) ||
+                governanceV1.outstanding(state.groupId)?.let {out ->
+                    out.applied.map {it.memberId}.sorted()!=
+                        out.entry.transition.next.members.map {it.memberId}.sorted()
+                }==true)))
             throw ApiFailure(409,"group_invalid")
         val unsigned=AdmissionProposalV2(groupId=state.groupId,parent=state,
             parentDigest=GroupStatements.digest(state),inviteId=invite.inviteId,
@@ -650,10 +1027,13 @@ class GroupMembershipTransport(
             AdmissionV2.approvalStatement(approvalUnsigned)))
         if(!AdmissionV2.verifyApproval(approval,proposal)) throw ApiFailure(409,"group_invalid")
         records.transaction {
-            require(governanceV1.pending(state.groupId)==null &&
-                GroupLedger(records,GroupTrustedPeer {false},localId)
-                    .governanceBarrier(state.groupId)==null)
+            val latestHead=activeGovernanceHead(state.groupId)
+            require(if(governedHead==null) latestHead==null &&
+                governanceV1.pending(state.groupId)==null else latestHead!=null &&
+                GovernanceFoundationStore(records).matches(governedHead,latestHead))
             initialize()
+            if(governedHead!=null) governedAdmission.saveReservation(state.groupId,
+                GovernedAdmissionReservationV1(invite.inviteId,governedHead))
             admissionV2.saveOwn(state.groupId,OwnAdmissionApprovalV2(
                 AdmissionV2.proposalDigest(proposal),proposal.parentDigest,state.revision,
                 proposal.inviteId,proposal.candidateDigest,localId,approval=approval))
@@ -670,16 +1050,44 @@ class GroupMembershipTransport(
             val current=state(groupId) ?: continue
             if(localId!=current.coordinatorId ||
                 !MessageDigest.isEqual(GroupStatements.digest(current),proposal.parentDigest)) {
+                if(governedAdmission.reservation(groupId)!=null)
+                    discardStaleGovernedAdmission(groupId,proposal.inviteId)
+                else {
+                    admissionV2.clearPending(groupId)
+                    admissionV2.removeOwn(groupId,proposal.inviteId)
+                }
+                continue
+            }
+            val reservation=governedAdmission.reservation(groupId)
+            if(reservation==null && GroupLedger(records,GroupTrustedPeer {false},localId)
+                    .governanceBarrier(groupId)!=null) {
                 admissionV2.clearPending(groupId)
                 admissionV2.removeOwn(groupId,proposal.inviteId)
                 continue
+            }
+            if(reservation!=null) {
+                val head=runCatching {activeGovernanceHead(groupId)}.getOrNull()
+                if(reservation.inviteId!=proposal.inviteId || head==null ||
+                    !GovernanceFoundationStore(records).matches(reservation.head,head)) {
+                    discardStaleGovernedAdmission(groupId,proposal.inviteId)
+                    continue
+                }
             }
             if(pending.approvals.size==current.members.size) {
                 if(pending.invitationQueued) continue
                 val certificate=AdmissionV2.certificate(proposal,pending.approvals)
                 if(!AdmissionV2.verifyCertificate(certificate,current)) throw ApiFailure(409,"group_invalid")
-                val offered=pending.offer.copy(certificateV2=certificate)
+                val binding=reservation?.let {
+                    val unsigned=GroupGovernedAdmissionV1.unsignedBinding(certificate,it.head)
+                    unsigned.copy(coordinatorSignature=network.signGroupStatement(
+                        GroupGovernedAdmissionV1.bindingStatement(unsigned)))
+                }
+                val offered=pending.offer.copy(certificateV2=certificate,
+                    governedAdmissionBindingV1=binding)
+                if(binding!=null && !GroupGovernedAdmissionV1.verifyBinding(binding,current,
+                        certificate,reservation.head)) throw ApiFailure(409,"group_invalid")
                 try {send(proposal.candidate.deviceId,offered) {
+                        if(binding!=null) governedAdmission.saveBinding(binding)
                         records.write(outgoingKey(proposal.inviteId),
                             NetworkCodec.encode(Outgoing(proposal.candidate.deviceId,offered)))
                         admissionV2.savePending(groupId,pending.copy(invitationQueued=true))
@@ -1004,8 +1412,8 @@ class GroupMembershipTransport(
         val localId=localMember(groupId) ?: throw ApiFailure(404,"group_unavailable")
         val state=GroupLedger(records,GroupTrustedPeer {false},localId).state(groupId)
             ?: throw ApiFailure(404,"group_unavailable")
-        if(governanceV1.pending(groupId)!=null ||
-            GroupLedger(records,GroupTrustedPeer {false},localId).governanceBarrier(groupId)!=null)
+        val governedHead=activeGovernanceHead(groupId)
+        if(governedHead==null && governanceV1.pending(groupId)!=null)
             throw ApiFailure(409,"group_governance_unavailable")
         if(state.members.size>=GroupStatements.MAX_MEMBERS || state.members.any {it.deviceId==targetDeviceId} ||
             state.lifecycle!=GroupLifecycle.ACTIVE ||
@@ -1015,6 +1423,10 @@ class GroupMembershipTransport(
         if(baselineV1.active(groupId)!=null &&
             !allAdmissionV2Peers(state,targetDeviceId,localId))
             throw ApiFailure(409,"group_admission_evidence_required")
+        if(governedHead!=null && (!allAdmissionV2Peers(state,targetDeviceId,localId) ||
+            !repository.governanceV1Peer(targetDeviceId) ||
+            !allGovernancePeers(state,localId)))
+            throw ApiFailure(409,"group_governance_capability_pending")
         val binding=authority.resolveTrustedGroupAuthority(targetDeviceId)
         if(state.members.any {it.accountId==binding.accountId}) throw ApiFailure(409,"group_unavailable")
         val target=GroupMember(GroupIds.create(),binding.accountId,binding.deviceId,binding.authPublicKey,
@@ -1040,8 +1452,11 @@ class GroupMembershipTransport(
             return inviteId
         }
         send(recipient,control) {
-            check(governanceV1.pending(groupId)==null &&
-                GroupLedger(records,GroupTrustedPeer {false},localId).governanceBarrier(groupId)==null)
+            check(if(governedHead==null) governanceV1.pending(groupId)==null &&
+                activeGovernanceHead(groupId)==null else
+                activeGovernanceHead(groupId)?.let {
+                    GovernanceFoundationStore(records).matches(governedHead,it)
+                }==true)
             check(records.keys("app/group/outgoing/").size<128)
             if(coSign) records.write(admissionKey(inviteId),NetworkCodec.encode(Outgoing(targetDeviceId,control)))
             else records.write(outgoingKey(inviteId),NetworkCodec.encode(Outgoing(targetDeviceId,control)))
@@ -1255,6 +1670,11 @@ class GroupMembershipTransport(
                     GroupControlKind.GOVERNANCE_ACTIVATION_READY -> receiveGovernanceReady(pending.senderDeviceId,pending.control)
                     GroupControlKind.GOVERNANCE_ENTRY -> receiveGovernanceEntry(pending.senderDeviceId,pending.control)
                     GroupControlKind.GOVERNANCE_ENTRY_APPLIED_ACK -> receiveGovernanceEntryAck(pending.senderDeviceId,pending.control)
+                    GroupControlKind.GOVERNANCE_RESYNC_REQUEST_V1 -> receiveGovernanceResyncRequest(pending.senderDeviceId,pending.control)
+                    GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V1 -> receiveGovernanceResyncResponse(pending.senderDeviceId,pending.control)
+                    GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1 -> receiveCheckpointSignRequest(pending.senderDeviceId,pending.control)
+                    GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_RESPONSE_V1 -> receiveCheckpointSignResponse(pending.senderDeviceId,pending.control)
+                    GroupControlKind.GOVERNANCE_BOOTSTRAP_V1 -> receiveGovernanceBootstrap(pending.senderDeviceId,pending.control)
                     GroupControlKind.GOVERNANCE_CAPABILITY_ECHO -> Unit
                 }
                 repository.finishGroupControl(id)
@@ -1268,12 +1688,14 @@ class GroupMembershipTransport(
         }
         flushFanout()
         flushAdmissionsV2()
+        flushGovernedAdmission()
         retryOwnApprovalsV2()
         flushBaselineReadiness()
         flushBaselinesV1()
         flushGovernanceV1()
         processSystemOutbox()
         retryMarkedResync()
+        retryMarkedGovernanceResync()
         processPendingTexts()
         flushTexts()
     }
@@ -1282,6 +1704,8 @@ class GroupMembershipTransport(
         val localId=localMember(proposal.groupId) ?: throw ApiFailure(409,"group_invalid")
         val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
         val current=ledger.state(proposal.groupId) ?: throw ApiFailure(409,"group_invalid")
+        if(ledger.governanceBarrier(proposal.groupId)!=null)
+            activeGovernanceHead(proposal.groupId)
         if(ledger.isForked(proposal.groupId) || ledger.status(proposal.groupId)!=GroupLocalStatus.ACTIVE ||
             current.members.singleOrNull {it.memberId==current.coordinatorId}?.deviceId!=sender ||
             !AdmissionV2.verifyProposal(proposal,current) ||
@@ -1319,6 +1743,12 @@ class GroupMembershipTransport(
         val proposal=pending.proposal
         val localId=localMember(control.groupId) ?: throw ApiFailure(409,"group_invalid")
         val current=state(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+        val reservation=governedAdmission.reservation(control.groupId)
+        val head=activeGovernanceHead(control.groupId)
+        if(head!=null &&
+            (reservation==null || !GovernanceFoundationStore(records).matches(
+                reservation.head,head)))
+            throw ApiFailure(409,"group_invalid")
         if(current.coordinatorId!=localId ||
             !AdmissionV2.verifyProposal(proposal,current) ||
             current.members.singleOrNull {it.memberId==approval.approverId}?.deviceId!=sender ||
@@ -1373,6 +1803,10 @@ class GroupMembershipTransport(
             val events=when(value.kind) {
                 GroupControlKind.STATE_UPDATE -> listOfNotNull(value.transition)
                 GroupControlKind.RESYNC_RESPONSE -> value.chain
+                GroupControlKind.GOVERNANCE_ENTRY ->
+                    listOfNotNull(value.governanceEntryV1?.transition)
+                GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V1 ->
+                    value.governanceResyncResponseV1?.entries?.map {it.transition} ?: emptyList()
                 else -> emptyList()
             }
             for(event in events) {
@@ -1488,7 +1922,9 @@ class GroupMembershipTransport(
         val localId=localMember(state.groupId) ?: throw ApiFailure(409,"group_invalid")
         val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
         val current=ledger.state(state.groupId) ?: throw ApiFailure(409,"group_invalid")
-        if(governanceV1.pending(state.groupId)!=null || ledger.governanceBarrier(state.groupId)!=null)
+        val governed=activeGovernanceHead(state.groupId)
+        if((governed==null && governanceV1.pending(state.groupId)!=null) ||
+            (governed!=null && !repository.governanceV1Peer(invite.target.deviceId)))
             throw ApiFailure(409,"group_governance_unavailable")
         if(localId!=current.ownerId || current.coordinatorId==localId ||
             current.members.single {it.memberId==current.coordinatorId}.deviceId!=sender ||
@@ -1519,7 +1955,8 @@ class GroupMembershipTransport(
         val localId=localMember(state.groupId) ?: throw ApiFailure(409,"group_invalid")
         val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
         val current=ledger.state(state.groupId) ?: throw ApiFailure(409,"group_invalid")
-        if(governanceV1.pending(state.groupId)!=null || ledger.governanceBarrier(state.groupId)!=null)
+        val governed=activeGovernanceHead(state.groupId)
+        if(governed==null && governanceV1.pending(state.groupId)!=null)
             throw ApiFailure(409,"group_governance_unavailable")
         if(current.coordinatorId!=localId || ledger.isForked(state.groupId) ||
             current.members.single {it.memberId==current.ownerId}.deviceId!=sender ||
@@ -1536,6 +1973,7 @@ class GroupMembershipTransport(
             beginAdmissionV2(finished) {records.remove(admissionKey(id))}
             return
         }
+        if(governed!=null) throw ApiFailure(409,"group_admission_evidence_required")
         send(pending.target,finished) {
             check(governanceV1.pending(state.groupId)==null &&
                 ledger.governanceBarrier(state.groupId)==null)
@@ -1561,6 +1999,14 @@ class GroupMembershipTransport(
                 !MessageDigest.isEqual(certificate.proposal.candidateDigest,
                     GroupStatements.digestMember(invite.target))) throw ApiFailure(409,"group_invalid")
         }
+        val governedBinding=control.governedAdmissionBindingV1
+        if(governedBinding!=null) {
+            val certificate=control.certificateV2 ?: throw ApiFailure(409,"group_invalid")
+            if(!repository.governanceV1Peer(sender) ||
+                !GroupGovernedAdmissionV1.verifyBinding(governedBinding,state,certificate) ||
+                GroupLedger(records,trusted,own.memberId).state(state.groupId)!=null)
+                throw ApiFailure(409,"group_invalid")
+        }
         records.transaction {
             val prior=records.read(incomingKey(invite.inviteId))
             if(prior!=null) return@transaction
@@ -1571,14 +2017,16 @@ class GroupMembershipTransport(
                 }) throw ApiFailure(409,"group_invalid")
             if(records.keys("app/group/incoming/").size>=128) throw ApiFailure(429,"group_capacity")
             records.write(memberKey(state.groupId),own.memberId.toByteArray())
-            if(GroupLedger(records,trusted,own.memberId).acceptAdmission(proof)!=GroupApply.ACCEPTED)
-                throw ApiFailure(409,"group_invalid")
-            val admissionDigest=DeviceAuth.digest(NetworkCodec.encode(proof))
-            state.members.forEach {member ->
-                currentAuthority.anchor(state,member,admissionDigest)
-                if(control.certificateV2!=null) historicalAuthority.anchorBaseline(proof,member)
+            if(governedBinding==null) {
+                if(GroupLedger(records,trusted,own.memberId).acceptAdmission(proof)!=GroupApply.ACCEPTED)
+                    throw ApiFailure(409,"group_invalid")
+                val admissionDigest=DeviceAuth.digest(NetworkCodec.encode(proof))
+                state.members.forEach {member ->
+                    currentAuthority.anchor(state,member,admissionDigest)
+                    if(control.certificateV2!=null) historicalAuthority.anchorBaseline(proof,member)
+                }
+                control.certificateV2?.let {admissionV2.saveEvidence(state.groupId,it.proposal.eventId,it)}
             }
-            control.certificateV2?.let {admissionV2.saveEvidence(state.groupId,it.proposal.eventId,it)}
             records.write(incomingKey(invite.inviteId),NetworkCodec.encode(Incoming(sender,control,InviteState.OFFERED)))
         }
     }
@@ -1628,6 +2076,36 @@ class GroupMembershipTransport(
             !admissionV2.matchesOwnApproval(current,certificate,localId) ||
             !MessageDigest.isEqual(certificate.proposal.candidateDigest,
                 GroupStatements.digestMember(invite.target)))) throw ApiFailure(409,"group_invalid")
+        val governedBinding=outgoing.offer.governedAdmissionBindingV1
+        if(governedBinding!=null) {
+            val cert=certificate ?: throw ApiFailure(409,"group_invalid")
+            val head=activeGovernanceHead(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+            val barrier=GroupLedger(records,GroupTrustedPeer {false},localId)
+                .governanceBarrier(control.groupId) ?: throw ApiFailure(409,"group_invalid")
+            val proof=outgoing.offer.admission ?: throw ApiFailure(409,"group_invalid")
+            if(!GroupGovernedAdmissionV1.verifyBinding(governedBinding,current,cert,head))
+                throw ApiFailure(409,"group_invalid")
+            val prior=governedAdmission.pending(control.groupId)
+            if(prior!=null) {
+                if(prior.binding.inviteId!=invite.inviteId ||
+                    !NetworkCodec.encode(prior.invite).contentEquals(NetworkCodec.encode(invite)))
+                    throw ApiFailure(409,"group_admission_pending")
+                flushGovernedAdmission();return@withLock
+            }
+            val unsigned=GroupGovernedAdmissionV1.unsignedCheckpoint(governedBinding,
+                proof,barrier,current,GroupIds.create())
+            val coordinatorSigned=unsigned.copy(coordinatorSignature=network.signGroupStatement(
+                GroupGovernedAdmissionV1.coordinatorStatement(unsigned)))
+            val checkpoint=if(current.ownerId==localId) coordinatorSigned.copy(
+                ownerSignature=network.signGroupStatement(
+                    GroupGovernedAdmissionV1.ownerStatement(unsigned))) else coordinatorSigned
+            if(!GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint,current,proof,cert,
+                    governedBinding,requireOwner=current.ownerId==localId))
+                throw ApiFailure(409,"group_invalid")
+            governedAdmission.savePending(GovernedAdmissionPendingV1(governedBinding,invite,
+                proof,cert,checkpoint))
+            flushGovernedAdmission();return@withLock
+        }
         val change=GroupChange(certificate?.proposal?.eventId ?: GroupIds.create(),
             GroupAction.ADD,localId,added=invite.target,invite=invite)
         val next=GroupRules.derive(current,change,emptySet(),trusted)

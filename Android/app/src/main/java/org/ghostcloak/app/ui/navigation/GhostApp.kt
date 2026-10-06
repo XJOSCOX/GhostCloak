@@ -74,7 +74,12 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                     composable("contacts") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") },
                         model::connectNetwork, model::syncNetwork,showArchived={nav.navigate("archived")},
                         openGroup={nav.navigate("group/$it")},
-                        createGroup={id -> model.createGroupAndOpen(id) {nav.navigate("group/$it")} }) }
+                        showCreateGroup={nav.navigate("group-create")}) }
+                    composable("group-create") { CreateGroupScreen(state,{nav.popBackStack()},
+                        {id -> model.createGroupAndOpen(id) {groupId ->
+                            nav.navigate("group/$groupId") {popUpTo("group-create") {inclusive=true}}
+                        }},
+                        {device -> nav.navigate("conversation/$device")}) }
                     composable("archived") { ContactsScreen(state, {}, { id -> nav.navigate("conversation/$id") },
                         model::connectNetwork,model::syncNetwork,archived=true,
                         unarchive={model.setArchived(it,false)},back={nav.popBackStack()}) }

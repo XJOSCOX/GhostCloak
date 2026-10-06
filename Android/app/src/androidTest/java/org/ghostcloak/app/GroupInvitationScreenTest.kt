@@ -8,6 +8,7 @@ import android.content.Context
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.application.AndroidLocalNotifications
 import org.ghostcloak.app.ui.screens.ContactsScreen
+import org.ghostcloak.app.ui.screens.CreateGroupScreen
 import org.ghostcloak.app.ui.screens.GroupConversationScreen
 import org.ghostcloak.app.ui.theme.GhostCloakTheme
 import org.ghostcloak.identity.SessionLifecycle
@@ -26,15 +27,25 @@ import org.junit.Test
 class GroupInvitationScreenTest {
     @get:Rule val compose=createComposeRule()
 
-    @Test fun createGroupExplainsMissingAuthenticatedPeerSupportAndOpensChat() {
-        val contact=ContactStatus(Contact("local","account","Peer","device"),null,SessionLifecycle.ACTIVE)
-        var opened="";var created=""
+    @Test fun createGroupMenuOpensDedicatedPage() {
+        var opened=0
         compose.setContent {GhostCloakTheme {
-            ContactsScreen(AppState(loading=false,contacts=listOf(contact)),{},{opened=it},
-                createGroup={created=it})
+            ContactsScreen(AppState(loading=false),{},{},showCreateGroup={opened++})
         }}
         compose.onNodeWithContentDescription("Chat options").performClick()
         compose.onNodeWithText("Create group").performClick()
+        assertEquals(1,opened)
+        compose.onNodeWithText("Search contacts").assertDoesNotExist()
+    }
+
+    @Test fun createGroupPageExplainsMissingAuthenticatedPeerSupportAndOpensChat() {
+        val contact=ContactStatus(Contact("local","account","Peer","device"),null,SessionLifecycle.ACTIVE)
+        var opened="";var created=""
+        compose.setContent {GhostCloakTheme {
+            CreateGroupScreen(AppState(loading=false,contacts=listOf(contact)),{},
+                {created=it},{opened=it})
+        }}
+        compose.onNodeWithText("Search contacts").assertExists()
         compose.onNodeWithText("Waiting for group support confirmation").assertExists()
         compose.onNodeWithText("No contacts are ready yet.",substring=true).assertExists()
         compose.onNodeWithText("Open chat").performClick()
@@ -42,17 +53,19 @@ class GroupInvitationScreenTest {
         assertEquals("",created)
     }
 
-    @Test fun createGroupOffersAuthenticatedCapableContact() {
+    @Test fun createGroupPageSearchesAndSelectsAuthenticatedCapableContact() {
         val contact=ContactStatus(Contact("local","account","Peer","device"),null,
+            SessionLifecycle.ACTIVE,groupCapable=true)
+        val other=ContactStatus(Contact("other","account-2","Other","device-2"),null,
             SessionLifecycle.ACTIVE,groupCapable=true)
         var created=""
         compose.setContent {GhostCloakTheme {
-            ContactsScreen(AppState(loading=false,contacts=listOf(contact)),{},{},
-                createGroup={created=it})
+            CreateGroupScreen(AppState(loading=false,contacts=listOf(contact,other)),{},
+                {created=it},{})
         }}
-        compose.onNodeWithContentDescription("Chat options").performClick()
-        compose.onNodeWithText("Create group").performClick()
-        compose.onNodeWithText("Invite").performClick()
+        compose.onNodeWithText("Search contacts").performTextInput("pee")
+        compose.onNodeWithText("Other").assertDoesNotExist()
+        compose.onNodeWithText("Peer").performClick()
         assertEquals("device",created)
     }
 

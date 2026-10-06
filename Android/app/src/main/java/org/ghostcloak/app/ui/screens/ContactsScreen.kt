@@ -12,7 +12,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.unit.dp
 import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.app.ui.theme.GhostLayout
 import org.ghostcloak.app.application.AppState
@@ -20,20 +19,14 @@ import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.privacy.noSensitiveCopyCut
 import org.ghostcloak.messaging.ChatOrganization
 import org.ghostcloak.identity.IdentityTrustState
-import org.ghostcloak.identity.SessionLifecycle
 
 @Composable fun ContactsScreen(state: AppState, add: () -> Unit, open: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, directory: Boolean = false,
     archived:Boolean=false,showArchived:()->Unit={},unarchive:(String)->Unit={},back:()->Unit={},
     acceptGroupInvite:(String)->Unit={},declineGroupInvite:(String)->Unit={},
-    openGroup:(String)->Unit={},createGroup:(String)->Unit={}) {
+    openGroup:(String)->Unit={},showCreateGroup:()->Unit={}) {
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
     var chatOptions by remember { mutableStateOf(false) }
-    var groupPicker by remember { mutableStateOf(false) }
-    val groupContacts=state.contacts.filter { !it.contact.request && !it.contact.blocked }
-        .sortedBy {it.contact.visibleName.lowercase()}
-    val readyGroupContacts=groupContacts.filter {it.groupCapable &&
-        it.session==SessionLifecycle.ACTIVE && it.identity?.trustState!=IdentityTrustState.CHANGED}
     val source=when {
         directory -> state.contacts.filter { !it.contact.request && !it.contact.blocked }.sortedBy {it.contact.visibleName.lowercase()}
         archived -> ChatOrganization.archived(state.contacts,state.previews)
@@ -54,7 +47,7 @@ import org.ghostcloak.identity.SessionLifecycle
                     HeaderAction(Glyph.MORE,"Chat options") { chatOptions=true }
                     DropdownMenu(expanded=chatOptions,onDismissRequest={chatOptions=false}) {
                         DropdownMenuItem(text={Text("Archived chats")},onClick={chatOptions=false;showArchived()})
-                        DropdownMenuItem(text={Text("Create group")},onClick={chatOptions=false;groupPicker=true})
+                        DropdownMenuItem(text={Text("Create group")},onClick={chatOptions=false;showCreateGroup()})
                     }
                 }
             }
@@ -142,38 +135,4 @@ import org.ghostcloak.identity.SessionLifecycle
         }
         }
     }
-    if(groupPicker) AlertDialog(onDismissRequest={groupPicker=false},title={Text("Create group")},
-        text={Column {
-            Text("Invite one accepted contact first. Add others after they join.")
-            when {
-                groupContacts.isEmpty() -> Text("Add and accept a contact before creating a group.",
-                    color=MaterialTheme.colorScheme.onSurfaceVariant)
-                readyGroupContacts.isEmpty() -> Text(
-                    "No contacts are ready yet. Ask a contact using the updated app to send you a new encrypted message. Older messages cannot confirm group support.",
-                    color=MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            LazyColumn(Modifier.heightIn(max=320.dp)) {
-                items(groupContacts,key={it.contact.remoteDeviceId}) {contact ->
-                    val ready=contact in readyGroupContacts
-                    val reason=when {
-                        contact.identity?.trustState==IdentityTrustState.CHANGED -> "Identity changed — review contact security"
-                        contact.session!=SessionLifecycle.ACTIVE -> "Secure session unavailable"
-                        !contact.groupCapable -> "Waiting for group support confirmation"
-                        else -> null
-                    }
-                    Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(contact.contact.visibleName)
-                            if(reason!=null) Text(reason,style=MaterialTheme.typography.bodySmall,
-                                color=MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        TextButton(onClick={
-                            groupPicker=false
-                            if(ready) createGroup(contact.contact.remoteDeviceId)
-                            else open(contact.contact.remoteDeviceId)
-                        }) {Text(if(ready) "Invite" else "Open chat")}
-                    }
-                }
-            }
-        }},confirmButton={TextButton(onClick={groupPicker=false}) {Text("Close")}})
 }

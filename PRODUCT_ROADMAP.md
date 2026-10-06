@@ -196,3 +196,9 @@ The existing encrypted profile-sharing switch remains global to name, About and 
 **Future account deletion:** a public deletion API would need fresh authenticated intent, destructive removal of server account/device credentials, prekeys, sessions, mailbox and attachment ownership, plus explicit handling of local identity and recovery consequences. Safe Exit destroys local state, not the server account. P11 does not add account deletion or a server migration.
 
 **Recommended P12 scope:** group architecture design only: group identity, membership and invitation model, admin roles, key management and membership-change rekeying, metadata/privacy boundaries, offline delivery and backward compatibility. Do not implement groups until this design is reviewed.
+
+## P12 — PRIVATE GROUP ARCHITECTURE (DESIGN COMPLETE; NO IMPLEMENTATION)
+
+[GROUP_ARCHITECTURE.md](GROUP_ARCHITECTURE.md) recommends pairwise Signal fan-out for a maximum of five members including the owner, with group state and profile inside E2EE envelopes and no server group roster. A single designated coordinator orders authenticated membership revisions; removal advances the epoch and excludes the removed endpoint from later-epoch fan-out. This is a design proposal with explicit offline, fork, metadata and old-history limits, not a working group feature. The currently pinned libsignal 0.102.1 does contain sender-key APIs, but using them would require a separate cryptographic design/review. Current SEND and submission quotas also block ordinary group use without a separate capacity review.
+
+**Recommended P13.1 scope:** group identity and state foundations only. Finalize actor/coordinator signing and authorization, canonical hash-chain/fork behavior, epochs, offline resync, encoded-size and replay bounds, and state-machine tests. Keep models dormant until the security and capacity gates are resolved; do not launch group messaging in P13.1.

@@ -158,6 +158,7 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                         val info=state.groups.firstOrNull {it.groupId==id}?.info ?: return@composable
                         GroupInfoScreen(state,info,{nav.popBackStack()},GroupInfoActions(
                             setup={model.beginGroupManagementSetup(id)},
+                            retrySetup={model.retryGroupManagementSetup(id)},
                             posting={model.setGroupPostingMode(id,it)},
                             restrict={model.restrictGroupMember(id,it)},
                             unrestrict={model.unrestrictGroupMember(id,it)},

@@ -310,6 +310,9 @@ class NetworkController(
     suspend fun beginGroupManagementSetup(id:String)=operation(NetworkOperation.SEND) {
         groups.beginGroupManagementSetup(id)
     }
+    suspend fun retryGroupManagementSetup(id:String)=operation(NetworkOperation.SEND) {
+        groups.retryGroupManagementSetup(id)
+    }
     suspend fun setGroupPostingMode(id:String,mode:org.ghostcloak.messaging.GroupPostingModeV1)=
         operation(NetworkOperation.SEND) {groups.setPostingModeGoverned(id,mode)}
     suspend fun restrictGroupMember(id:String,memberId:String)=operation(NetworkOperation.SEND) {

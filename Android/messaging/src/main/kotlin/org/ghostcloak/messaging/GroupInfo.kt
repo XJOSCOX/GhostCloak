@@ -16,6 +16,7 @@ data class GroupInfo(
     val managementStatus:GroupManagementStatus, val members:List<GroupInfoMember>,
     val postingMode:GroupPostingModeV1, val pending:Boolean,
     val journalFull:Boolean, val invitationPending:Boolean, val capable:Boolean=true,
+    val waitingForMemberCheck:Boolean=false,
 ) {
     val active get()=status==GroupLocalStatus.ACTIVE
     val ready get()=active && managementStatus==GroupManagementStatus.READY

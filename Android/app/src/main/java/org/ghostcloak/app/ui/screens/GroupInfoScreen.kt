@@ -19,7 +19,7 @@ import org.ghostcloak.identity.IdentityTrustState
 import org.ghostcloak.identity.SessionLifecycle
 
 class GroupInfoActions(
-    val setup:()->Unit, val posting:(GroupPostingModeV1)->Unit,
+    val setup:()->Unit, val retrySetup:()->Unit, val posting:(GroupPostingModeV1)->Unit,
     val restrict:(String)->Unit, val unrestrict:(String)->Unit,
     val remove:(String)->Unit, val promote:(String)->Unit, val demote:(String)->Unit,
     val transfer:(String)->Unit, val transferDecision:(Boolean)->Unit,
@@ -67,8 +67,16 @@ private fun GroupManagementStatus.description()=when(this) {
                 Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surface) {
                     Column(Modifier.fillMaxWidth().padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
                         Text("Group security",style=MaterialTheme.typography.titleMedium)
-                        Text(info.managementStatus.description(),color=MaterialTheme.colorScheme.onSurfaceVariant,
+                        Text(if(info.managementStatus==GroupManagementStatus.SETTING_UP_BASELINE)
+                            if(info.waitingForMemberCheck)
+                                "Waiting for another member to confirm group support. Open the updated app and Sync on both devices."
+                            else "Waiting for the other member's signed group-security approval. Sync both devices."
+                            else info.managementStatus.description(),color=MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier=Modifier.testTag("group-management-status"))
+                        if(info.managementStatus==GroupManagementStatus.SETTING_UP_BASELINE &&
+                            info.members.firstOrNull {it.isLocal}?.isCoordinator==true && info.active)
+                            OutlinedButton(onClick=actions.retrySetup,enabled=!busy,
+                                modifier=Modifier.testTag("group-setup-retry")) {Text("Retry member check")}
                         if(info.ready && !info.capable) Text("Waiting for updated group members.",
                             color=MaterialTheme.colorScheme.onSurfaceVariant)
                         if(info.pending) Text("Group update pending…",color=MaterialTheme.colorScheme.primary)

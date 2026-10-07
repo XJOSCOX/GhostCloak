@@ -173,6 +173,8 @@ internal class GroupAuthorityBaselineStore(private val records:EndpointRecords) 
     fun queued(groupId:String,proposalId:String,phase:String,deviceId:String):Boolean=records.transaction {
         records.read(sentKey(groupId,proposalId,phase,deviceId))!=null
     }
+    fun queuedOutbox(groupId:String,proposalId:String,phase:String,deviceId:String):String?=
+        records.transaction {records.read(sentKey(groupId,proposalId,phase,deviceId))?.decodeToString()}
     fun markQueued(groupId:String,proposalId:String,phase:String,deviceId:String,outboxId:String)=
         records.transaction {
             val key=sentKey(groupId,proposalId,phase,deviceId)

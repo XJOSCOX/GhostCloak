@@ -192,6 +192,7 @@ class GhostViewModel internal constructor(application: Application, private val 
         block();pollingWake.trySend(Unit);null
     }
     fun beginGroupManagementSetup(id:String)=groupManagementAction {runtime.beginGroupManagementSetup(id)}
+    fun retryGroupManagementSetup(id:String)=groupManagementAction {runtime.retryGroupManagementSetup(id)}
     fun setGroupPostingMode(id:String,mode:GroupPostingModeV1)=groupManagementAction {
         runtime.setGroupPostingMode(id,mode)
     }

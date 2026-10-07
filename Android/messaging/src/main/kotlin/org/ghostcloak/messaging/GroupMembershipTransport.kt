@@ -1493,8 +1493,8 @@ class GroupMembershipTransport(
             signed
         }
         val coordinator=current.members.single {it.memberId==current.coordinatorId}.deviceId
-        if(coordinator!=network.ownDevice() &&
-            !baselineV1.queued(control.groupId,proposal.proposalId,"approval",coordinator))
+        if(coordinator!=network.ownDevice() && canRetryControl(
+                baselineV1.queuedOutbox(control.groupId,proposal.proposalId,"approval",coordinator)))
             send(coordinator,GroupControl(kind=GroupControlKind.BASELINE_V1_APPROVAL,
                 groupId=control.groupId,baselineApprovalV1=approval)) {id ->
                 baselineV1.markQueued(control.groupId,proposal.proposalId,"approval",coordinator,id)
@@ -1616,12 +1616,22 @@ class GroupMembershipTransport(
             catch(_:ApiFailure) { /* Keep signed local proof for retry. */ }
         }
     }
+    /** A finished outbox entry proves only server submission, not peer application. */
+    private fun canRetryControl(outboxId:String?):Boolean {
+        if(outboxId==null) return true
+        val state=try {outbox.get(outboxId).state}
+            catch(e:ApiFailure) {if(e.status==404) return true else throw e}
+        return state in setOf(OutboxState.SERVER_ACCEPTED,OutboxState.FAILED,
+            OutboxState.SUBMISSION_EXPIRED)
+    }
     /** A valid legacy resync request advertises A5 only in ignored authenticated frame padding. */
-    private suspend fun sendBaselineReadiness(current:GroupState,member:GroupMember) {
+    private suspend fun sendBaselineReadiness(current:GroupState,member:GroupMember,
+        retryFinished:Boolean=false) {
         val groupId=current.groupId
         val sentKey="app/group/baseline-v1/ready-sent/$groupId/${member.deviceId}"
         val retryKey="app/group/baseline-v1/reply-intent/$groupId/${member.deviceId}"
-        if(records.transaction {records.read(sentKey)}!=null) {
+        val prior=records.transaction {records.read(sentKey)?.decodeToString()}
+        if(prior!=null && (!retryFinished || !canRetryControl(prior))) {
             records.transaction {records.remove(retryKey)}
             return
         }
@@ -1636,6 +1646,38 @@ class GroupMembershipTransport(
                 records.keys("app/group/baseline-v1/reply-intent/").size<256)
             records.write(retryKey,GroupStatements.digest(current))
         }}
+    }
+    /** Repeats only the exact outstanding member check or signed proposal. No approval is waived. */
+    suspend fun retryGroupManagementSetup(groupId:String)=textMutex.withLock {
+        val (current,localId)=baselineState(groupId)
+        if(current.coordinatorId!=localId || baselineV1.active(groupId)!=null)
+            throw ApiFailure(409,"group_baseline_unavailable")
+        val pending=baselineV1.pending(groupId)
+        if(pending!=null) {
+            if(!GroupAuthorityBaselineV1.verifyProposal(pending.proposal,current))
+                throw ApiFailure(409,"group_baseline_unavailable")
+            for(member in current.members.filter {it.memberId!=localId &&
+                pending.approvals.none {approval -> approval.approverId==it.memberId}}) {
+                val prior=baselineV1.queuedOutbox(groupId,pending.proposal.proposalId,
+                    "proposal",member.deviceId)
+                if(canRetryControl(prior)) send(member.deviceId,GroupControl(
+                    kind=GroupControlKind.BASELINE_V1_PROPOSAL,groupId=groupId,
+                    baselineProposalV1=pending.proposal)) {id ->
+                    baselineV1.markQueued(groupId,pending.proposal.proposalId,"proposal",member.deviceId,id)
+                }
+            }
+            return@withLock
+        }
+        val intent=records.transaction {records.read("app/group/baseline-v1/start-intent/$groupId")}
+            ?: throw ApiFailure(409,"group_baseline_unavailable")
+        if(!MessageDigest.isEqual(intent,GroupStatements.digest(current)))
+            throw ApiFailure(409,"group_baseline_unavailable")
+        val unknown=current.members.filter {it.memberId!=localId &&
+            !repository.baselineV1Peer(it.deviceId)}
+        if(unknown.isEmpty()) {
+            records.transaction {records.remove("app/group/baseline-v1/start-intent/$groupId")}
+            startAuthorityBaseline(groupId)
+        } else unknown.forEach {sendBaselineReadiness(current,it,retryFinished=true)}
     }
     private suspend fun flushBaselineReadiness() {
         for(key in records.transaction {records.keys("app/group/baseline-v1/reply-intent/").take(16)}) {
@@ -1866,7 +1908,8 @@ class GroupMembershipTransport(
             localStatus,management,members,policy.postingMode,pending,
             head?.sequence?.let {it>=GroupGovernanceJournalV1.MAX_ENTRIES}==true,
             invitationPending || (barrier!=null && !noOutgoingInvitation(groupId)),
-            barrier==null || allTextV2Peers(current,localId))
+            barrier==null || allTextV2Peers(current,localId),
+            records.transaction {records.read("app/group/baseline-v1/start-intent/$groupId")!=null})
     }
     suspend fun beginGroupManagementSetup(groupId:String) {
         val info=groupInfo(groupId) ?: throw ApiFailure(409,"group_unavailable")
@@ -2437,7 +2480,7 @@ class GroupMembershipTransport(
                         if(pending.control.kind==GroupControlKind.RESYNC_REQUEST &&
                             peer.memberId==current.coordinatorId &&
                             localMember(current.groupId)!=current.coordinatorId)
-                            sendBaselineReadiness(current,peer)
+                            sendBaselineReadiness(current,peer,retryFinished=true)
                     }
                 }
                 if(pending.governanceV1Advertised) {

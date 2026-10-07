@@ -26,8 +26,8 @@ class GroupInfoScreenTest {
         role:GroupRole=GroupRole.OWNER,pending:Boolean=false)=GroupInfo(
         "group-id",role,GroupLocalStatus.ACTIVE,status,listOf(owner,admin,member),
         GroupPostingModeV1.EVERYONE,pending,false,false)
-    private fun actions(onRemove:(String)->Unit={},onSetup:()->Unit={}):GroupInfoActions=GroupInfoActions(
-        setup=onSetup,posting={},restrict={},unrestrict={},remove=onRemove,promote={},demote={},
+    private fun actions(onRemove:(String)->Unit={},onSetup:()->Unit={},onRetry:()->Unit={}):GroupInfoActions=GroupInfoActions(
+        setup=onSetup,retrySetup=onRetry,posting={},restrict={},unrestrict={},remove=onRemove,promote={},demote={},
         transfer={},transferDecision={},leave={},dissolve={},invite={},openChat={})
 
     @Test fun ownerMemberControlsRequireConfirmationAndDoNotExposeIds() {
@@ -80,12 +80,15 @@ class GroupInfoScreenTest {
     @Test fun setupShowsProgressContinuationAndErrorsOnTheSamePage() {
         val status=mutableStateOf(GroupManagementStatus.NOT_CONFIGURED)
         val error=mutableStateOf<String?>(null)
+        var retries=0
         compose.setContent {GhostCloakTheme {
-            GroupInfoScreen(state.copy(error=error.value),info(status=status.value),{},actions())
+            GroupInfoScreen(state.copy(error=error.value),info(status=status.value),{},actions(onRetry={retries++}))
         }}
         compose.onNodeWithTag("group-setup").assertExists()
         compose.runOnUiThread {status.value=GroupManagementStatus.SETTING_UP_BASELINE}
-        compose.onNodeWithText("Preparing secure group management…").assertExists()
+        compose.onNodeWithText("signed group-security approval",substring=true).assertExists()
+        compose.onNodeWithTag("group-setup-retry").performClick()
+        assertEquals(1,retries)
         compose.onNodeWithTag("group-setup").assertDoesNotExist()
         compose.runOnUiThread {status.value=GroupManagementStatus.BASELINE_READY}
         compose.onNodeWithText("Continue group setup").assertExists()

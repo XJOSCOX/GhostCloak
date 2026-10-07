@@ -94,6 +94,13 @@ import org.ghostcloak.messaging.ChatOrganization
                         }
                     }
                 }
+                if(!directory && !archived && chats.isNotEmpty()) {
+                    item {Text("CHATS",Modifier.padding(start=GhostDimensions.tiny,
+                        top=if(state.groups.isEmpty()) GhostDimensions.micro else GhostDimensions.compact,
+                        bottom=GhostDimensions.controlGap),
+                        style=MaterialTheme.typography.labelSmall,
+                        color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                }
                 if(directory) item {Text("YOUR CONTACTS",Modifier.padding(start=GhostDimensions.tiny,bottom=GhostDimensions.controlGap),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
                 itemsIndexed(chats,key={_,status->status.contact.contactId}) { index,status ->
                     if(pinnedCount>0 && index==0) Text("Pinned",Modifier.padding(

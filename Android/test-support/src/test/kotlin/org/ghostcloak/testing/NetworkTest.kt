@@ -15,6 +15,83 @@ import java.net.URI
 import java.util.concurrent.Executors
 
 class NetworkTest {
+    @Test fun governedTextRequiresCurrentPolicyAndRejectsLegacyBypass() = runBlocking {
+        Fixture().use {f ->
+            val a=f.person("alice",true);val b=f.person("bob",true)
+            val people=listOf(a,b)
+            val repos=people.associateWith {LocalRepository(it.records)}
+            val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
+                NetworkMailboxTransport(f.client(p),p.state))}
+            fun group(p:Person)=GroupMembershipTransport(p.records,repos.getValue(p),p.engine,p.state,
+                GroupAuthorityResolver(repos.getValue(p),p.engine,f.client(p),p.records),outboxes.getValue(p))
+            val conversations=people.associateWith {p ->ConversationService(p.engine,
+                repos.getValue(p)).also {it.open()}}
+            for(p in people) for(q in people) if(p!=q) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repos.getValue(p).save(Contact(RandomIdentifiers.create(),q.registration.accountId,
+                    q.name,q.registration.deviceId))
+                repos.getValue(p).groupPeer(q.registration.deviceId,true)
+                repos.getValue(p).admissionV2Peer(q.registration.deviceId,true)
+                repos.getValue(p).baselineV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceTextV2Peer(q.registration.deviceId,true)
+            }
+            suspend fun settle(rounds:Int=1) { repeat(rounds) {
+                for(p in people) {
+                    val outbox=outboxes.getValue(p)
+                    outbox.pendingIds().forEach {id ->
+                        if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)
+                    }
+                }
+                for(p in people) {
+                    val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                    val deliveries=mailbox.fetch()
+                    deliveries.forEach {conversations.getValue(p).acceptNetwork(
+                        EnvelopeCodec.decode(it.encryptedEnvelope))}
+                    if(deliveries.isNotEmpty()) mailbox.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+                    group(p).processPending()
+                }
+            } }
+            val id=group(a).createAndInvite(b.registration.deviceId)
+            settle(2)
+            group(b).accept(group(b).invitations().single().id)
+            settle(4)
+            group(a).beginAuthorityBaseline(id)
+            settle(10)
+            group(a).beginGovernanceActivation(id)
+            settle(12)
+            assertNotNull(a.records.read("app/group/governance-v1/ready/$id"))
+            assertNotNull(b.records.read("app/group/governance-v1/ready/$id"))
+            val first=group(b).sendText(id,"permitted at G0")
+            settle(3)
+            assertEquals("permitted at G0",group(a).conversation(id)!!.messages.single {
+                it.logicalId==first}.text)
+            group(a).setPostingModeGoverned(id,GroupPostingModeV1.ADMINS_ONLY)
+            settle(6)
+            val bId=b.records.read("app/group/member/$id")!!.decodeToString()
+            assertEquals(GroupRole.MEMBER,group(b).state(id)!!.members.single {
+                it.memberId==bId}.role)
+            rejectAsync {group(b).sendText(id,"forbidden at G1")}
+            val legacy=ConversationPayload.encodeGroupText(GroupText(groupId=id,
+                epoch=group(b).state(id)!!.epoch,senderMemberId=bId,
+                logicalId=GroupIds.create(),text="legacy bypass"))
+            outboxes.getValue(b).process(outboxes.getValue(b).enqueue(a.registration.deviceId,legacy))
+            settle(2)
+            assertFalse(group(a).conversation(id)!!.messages.any {it.text=="legacy bypass"})
+            val ownerText=group(a).sendText(id,"owner may post")
+            settle(3)
+            assertEquals("owner may post",group(b).conversation(id)!!.messages.single {
+                it.logicalId==ownerText}.text)
+            group(a).setPostingModeGoverned(id,GroupPostingModeV1.EVERYONE)
+            settle(6)
+            conversations.getValue(a).block(b.registration.deviceId,true)
+            val blocked=group(b).sendText(id,"blocked group content")
+            settle(3)
+            assertFalse(group(a).conversation(id)!!.messages.any {it.logicalId==blocked})
+        }
+    }
     @Test fun existingBaselineSurvivesProspectiveAdmissionAndRemoval() = runBlocking {
         Fixture().use {f ->
             val people=listOf(f.person("alice",true),f.person("bob",true),

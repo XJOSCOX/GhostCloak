@@ -24,6 +24,26 @@ class GroupTextTest {
         val malformed=frame.clone().also {it[16]=0}
         assertThrows(Exception::class.java) {ConversationPayload.decode(malformed)}
     }
+    @Test fun governanceBoundV2FrameIsSeparateFromFrozenV1AndHasHeadroom() {
+        val v1=sample("x".repeat(GroupTextCodec.MAX_TEXT_BYTES))
+        val v1Bytes=ConversationPayload.encodeGroupText(v1)
+        val v2=GroupTextV2(groupId=v1.groupId,epoch=v1.epoch,
+            senderMemberId=v1.senderMemberId,logicalId=v1.logicalId,
+            governanceActivationDigest=ByteArray(32) {1},governanceSequence=7,
+            governanceHeadDigest=ByteArray(32) {2},policyDigest=ByteArray(32) {3},text=v1.text)
+        val v2Bytes=ConversationPayload.encodeGroupTextV2(v2)
+        assertEquals(14,v1Bytes[5].toInt())
+        assertEquals(15,v2Bytes[5].toInt())
+        assertEquals(v1,ConversationPayload.decode(v1Bytes).groupText)
+        val decoded=ConversationPayload.decode(v2Bytes).groupTextV2!!
+        assertEquals(v2.text,decoded.text)
+        assertArrayEquals(v2.governanceHeadDigest,decoded.governanceHeadDigest)
+        assertEquals(0,v2Bytes.size%256)
+        assertTrue(v2Bytes.size<=4096)
+        assertThrows(IllegalArgumentException::class.java) {
+            ConversationPayload.encodeGroupTextV2(v2.copy(text="y".repeat(2049)))
+        }
+    }
 
     @Test fun replaySurvivesStoreRecreationAndOwnRecipientPlanStaysFixed() {
         val records=MemoryRecords()

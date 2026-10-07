@@ -207,6 +207,21 @@ internal object GroupGovernanceV1 {
             require(GroupStatements.verify(member.authPublicKey,appliedStatement(value),value.signature))
             true
         }.getOrDefault(false)
+    fun unsignedPolicyApplied(entry:GroupGovernancePolicyEntryV1,memberId:String)=
+        GroupGovernanceEntryAppliedAckV1(groupId=entry.groupId,
+            activationDigest=entry.activationDigest,sequence=entry.sequence,
+            entryDigest=GroupGovernancePolicyRulesV1.entryDigest(entry),
+            memberId=memberId,signature=byteArrayOf())
+    fun verifyPolicyApplied(value:GroupGovernanceEntryAppliedAckV1,
+        entry:GroupGovernancePolicyEntryV1,state:GroupState):Boolean=runCatching {
+        require(value.version==1 && value.groupId==entry.groupId &&
+            same(value.activationDigest,entry.activationDigest) && value.sequence==entry.sequence &&
+            same(value.entryDigest,GroupGovernancePolicyRulesV1.entryDigest(entry)) &&
+            NetworkCodec.encode(value).size<=MAX_ACK_BYTES)
+        val member=state.members.single {it.memberId==value.memberId}
+        require(GroupStatements.verify(member.authPublicKey,appliedStatement(value),value.signature))
+        true
+    }.getOrDefault(false)
 }
 
 @Serializable internal data class PendingGovernanceActivationV1(
@@ -216,6 +231,10 @@ internal object GroupGovernanceV1 {
 )
 @Serializable internal data class PendingGovernanceEntryV1(
     val entry:GroupGovernanceEntryV1,
+    val applied:List<GroupGovernanceEntryAppliedAckV1> = emptyList(),
+)
+@Serializable internal data class PendingGovernancePolicyEntryV1(
+    val entry:GroupGovernancePolicyEntryV1,
     val applied:List<GroupGovernanceEntryAppliedAckV1> = emptyList(),
 )
 
@@ -253,6 +272,16 @@ internal class GroupGovernanceStore(private val records:EndpointRecords) {
         write(value.entry.groupId,"entry",value,MAX_PENDING)
     }
     fun clearOutstanding(id:String)=records.transaction {records.remove(key(id,"entry"))}
+    fun policyOutstanding(id:String)=read<PendingGovernancePolicyEntryV1>(id,"policy-entry",MAX_PENDING)
+    fun savePolicyOutstanding(value:PendingGovernancePolicyEntryV1) {
+        require(value.applied.size<=GroupStatements.MAX_MEMBERS)
+        write(value.entry.groupId,"policy-entry",value,MAX_PENDING)
+    }
+    fun clearPolicyOutstanding(id:String)=records.transaction {records.remove(key(id,"policy-entry"))}
+    fun policyOutstandingGroups()=records.transaction {
+        records.keys("app/group/governance-v1/policy-entry/").take(64)
+            .map {it.removePrefix("app/group/governance-v1/policy-entry/")}.filter(GroupIds::valid)
+    }
     fun clearSent(id:String,phase:String)=records.transaction {
         require((phase.startsWith("checkpoint-") && GroupIds.valid(phase.removePrefix("checkpoint-"))) ||
             (phase.startsWith("entry-") && phase.removePrefix("entry-").toLongOrNull()!=null) ||
@@ -268,7 +297,7 @@ internal class GroupGovernanceStore(private val records:EndpointRecords) {
         records.write(path,outboxId.encodeToByteArray())
     }
     private fun sentKey(id:String,phase:String,recipient:String):String {
-        require(phase in setOf("capability","owner-request","owner-response","proposal","ack","commit",
+        require(phase in setOf("capability","text-v2-capability","owner-request","owner-response","proposal","ack","commit",
             "installed","ready") ||
             (phase.startsWith("checkpoint-") && GroupIds.valid(phase.removePrefix("checkpoint-"))) ||
             (phase.startsWith("entry-") && phase.removePrefix("entry-").toLongOrNull()!=null) ||

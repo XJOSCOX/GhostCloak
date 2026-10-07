@@ -114,7 +114,11 @@ object GroupStatements {
         "GhostCloak.GroupGovernanceEntryAppliedAck.v1",
         "GhostCloak.GroupGovernanceAdmissionBinding.v1",
         "GhostCloak.GroupGovernanceInviteeCheckpointOwner.v1",
-        "GhostCloak.GroupGovernanceInviteeCheckpointCoordinator.v1")
+        "GhostCloak.GroupGovernanceInviteeCheckpointCoordinator.v1",
+        "GhostCloak.GroupGovernancePolicyActor.v1",
+        "GhostCloak.GroupGovernancePolicyCoordinator.v1",
+        "GhostCloak.GroupGovernancePolicyCheckpointOwner.v1",
+        "GhostCloak.GroupGovernancePolicyCheckpointCoordinator.v1")
     private val zero=ByteArray(32)
 
     fun digest(state:GroupState):ByteArray=DeviceAuth.digest(bytes(state))

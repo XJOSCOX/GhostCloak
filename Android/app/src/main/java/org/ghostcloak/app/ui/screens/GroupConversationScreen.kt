@@ -29,6 +29,7 @@ import org.ghostcloak.identity.SessionLifecycle
     var draft by remember(group.groupId) {mutableStateOf("")}
     var inviting by remember {mutableStateOf(false)}
     val active=group.status==GroupLocalStatus.ACTIVE && group.memberCount>=2
+    val sendRestriction=group.sendRestriction
     val invitation=state.groupInvitations.firstOrNull {it.groupId==group.groupId}
     val inviter=invitation?.let {offer -> state.contacts.firstOrNull {
         !it.contact.request && !it.contact.blocked && it.contact.remoteDeviceId==offer.senderDeviceId
@@ -103,7 +104,12 @@ import org.ghostcloak.identity.SessionLifecycle
                 }
             }
         }
-        if(active) Surface(color=MaterialTheme.colorScheme.surface) {
+        if(active && sendRestriction!=null) Surface(color=MaterialTheme.colorScheme.surface) {
+            Text(sendRestriction,Modifier.fillMaxWidth().padding(GhostLayout.pageInset),
+                style=MaterialTheme.typography.bodyMedium,
+                color=MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if(active && sendRestriction==null) Surface(color=MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxWidth().padding(horizontal=GhostLayout.pageInset,
                 vertical=GhostDimensions.controlGap),verticalArrangement=Arrangement.spacedBy(GhostDimensions.compact)) {
                 Row(verticalAlignment=Alignment.CenterVertically,

@@ -51,7 +51,8 @@ class GroupLedger(
                 val head=checkNotNull(head)
                 check(MessageDigest.isEqual(head.activationDigest,barrier.activationDigest) &&
                     head.stateRevision>=barrier.activationStateRevision &&
-                    head.sequence==head.stateRevision-barrier.activationStateRevision)
+                    head.sequence>=head.stateRevision-barrier.activationStateRevision &&
+                    head.sequence<=GroupGovernanceJournalV1.MAX_ENTRIES)
                 if(head.sequence==0L) check(head.stateRevision==barrier.activationStateRevision &&
                     MessageDigest.isEqual(head.stateDigest,barrier.activationStateDigest) &&
                     MessageDigest.isEqual(head.headDigest,barrier.activationDigest))
@@ -90,11 +91,12 @@ class GroupLedger(
         load(id);governance.barrier(id)
     }
     /** An incomplete A6.2 history locks management while leaving readable history intact. */
-    internal fun governanceJournalStatus(id:String):GovernanceJournalStatus?=records.transaction {
+    internal fun governanceJournalStatus(id:String):GovernanceJournalStatus?=runCatching { records.transaction {
         val record=load(id) ?: return@transaction null
         val barrier=governance.barrier(id) ?: return@transaction null
         val head=checkNotNull(governance.head(id))
         val join=GovernedAdmissionStore(records).join(id)
+        val policyProof=GroupGovernancePolicyCheckpointStoreV1(records).join(id)
         if(join!=null && (join.proof.target.memberId!=localMemberId ||
             record.admission?.inviteId!=join.proof.inviteId ||
             record.events.none {it.change.action==GroupAction.ADD &&
@@ -104,8 +106,28 @@ class GroupLedger(
         val anchor=record.genesis?.state ?: record.admission?.state
         val activation=if(join!=null) join.proof.state else if(anchor?.revision==barrier.activationStateRevision) anchor else
             record.events.singleOrNull {it.next.revision==barrier.activationStateRevision}?.next
-        GroupGovernanceJournalV1(records).status(id,barrier,head,activation,record.events)
-    }
+        if(join!=null && policyProof!=null &&
+            !GroupGovernancePolicyCheckpointRulesV1.verify(policyProof,join.checkpoint,
+                join.proof.state)) return@transaction GovernanceJournalStatus.LEGACY_INCOMPLETE
+        GroupGovernanceJournalV1(records).status(id,barrier,head,activation,record.events,
+            policyProof?.policy ?: GroupGovernancePolicyRulesV1.initial())
+    } }.getOrDefault(GovernanceJournalStatus.LEGACY_INCOMPLETE)
+    /** Policy is derived from the authenticated journal, never trusted from a local snapshot. */
+    internal fun governancePolicy(id:String):GroupGovernancePolicyV1?=runCatching { records.transaction {
+        val record=load(id) ?: return@transaction null
+        val barrier=governance.barrier(id) ?: return@transaction null
+        val head=governance.head(id) ?: return@transaction null
+        val join=GovernedAdmissionStore(records).join(id)
+        val policyProof=GroupGovernancePolicyCheckpointStoreV1(records).join(id)
+        val anchor=record.genesis?.state ?: record.admission?.state
+        val activation=if(join!=null) join.proof.state else if(anchor?.revision==barrier.activationStateRevision) anchor else
+            record.events.singleOrNull {it.next.revision==barrier.activationStateRevision}?.next
+        if(join!=null && policyProof!=null &&
+            !GroupGovernancePolicyCheckpointRulesV1.verify(policyProof,join.checkpoint,
+                join.proof.state)) return@transaction null
+        GroupGovernanceJournalV1(records).currentPolicy(id,barrier,head,activation,record.events,
+            policyProof?.policy ?: GroupGovernancePolicyRulesV1.initial())
+    } }.getOrNull()
     /** A rival is a fork only when both governance and wrapped v1 successors verify. */
     internal fun markGovernanceForkIfValid(entry:GroupGovernanceEntryV1,
         historicalPeer:((GroupMember,Long)->Boolean)?=null,
@@ -119,22 +141,33 @@ class GroupLedger(
             governanceJournalStatus(id)!=GovernanceJournalStatus.COMPLETE)
             return@transaction GroupApply.REJECTED
         val journal=GroupGovernanceJournalV1(records)
-        val accepted=journal.entry(id,entry.sequence) ?: return@transaction GroupApply.REJECTED
-        if(MessageDigest.isEqual(GroupGovernanceV1.entryDigest(accepted),
+        val accepted=journal.entry(id,entry.sequence)
+        val acceptedPolicy=journal.policyEntry(id,entry.sequence)
+        if(accepted==null && acceptedPolicy==null) return@transaction GroupApply.REJECTED
+        if(accepted!=null && MessageDigest.isEqual(GroupGovernanceV1.entryDigest(accepted),
                 GroupGovernanceV1.entryDigest(entry))) return@transaction GroupApply.DUPLICATE
         val join=GovernedAdmissionStore(records).join(id)
         val start=join?.checkpoint?.parentSequence ?: 0L
         if(entry.sequence<=start) return@transaction GroupApply.REJECTED
         val preceding=if(entry.sequence==start+1) null else journal.entry(id,entry.sequence-1)
-            ?: return@transaction GroupApply.REJECTED
-        val pre=if(preceding!=null) preceding.transition.next else {
+        val precedingPolicy=if(entry.sequence==start+1) null else journal.policyEntry(id,entry.sequence-1)
+        if(entry.sequence>start+1 && (preceding==null)==(precedingPolicy==null))
+            return@transaction GroupApply.REJECTED
+        val pre=if(preceding!=null) preceding.transition.next else if(precedingPolicy!=null) {
+            val revision=precedingPolicy.stateRevision
+            val anchor=join?.proof?.state ?: record.genesis?.state ?: record.admission?.state
+            if(anchor?.revision==revision) anchor else
+                record.events.singleOrNull {it.next.revision==revision}?.next
+        } else {
             val anchor=join?.proof?.state ?: record.genesis?.state ?: record.admission?.state
             if(join!=null || anchor?.revision==barrier.activationStateRevision) anchor else
                 record.events.singleOrNull {it.next.revision==barrier.activationStateRevision}?.next
         } ?: return@transaction GroupApply.REJECTED
         val prior=GovernanceHeadFoundationV1(groupId=id,activationDigest=barrier.activationDigest,
             sequence=entry.sequence-1,
-            headDigest=preceding?.let(GroupGovernanceV1::entryDigest) ?: join?.checkpoint?.parentHeadDigest
+            headDigest=preceding?.let(GroupGovernanceV1::entryDigest) ?:
+                precedingPolicy?.let(GroupGovernancePolicyRulesV1::entryDigest) ?:
+                join?.checkpoint?.parentHeadDigest
                 ?: barrier.activationDigest,
             stateRevision=pre.revision,stateDigest=GroupStatements.digest(pre))
         if(!GroupGovernanceV1.verifyEntry(entry,pre,prior) ||
@@ -155,6 +188,54 @@ class GroupLedger(
         save(record.copy(forked=true))
         GroupApply.FORKED
     }
+    /** A valid competing policy successor freezes the group; no local fork winner exists. */
+    internal fun markGovernancePolicyForkIfValid(entry:GroupGovernancePolicyEntryV1):GroupApply=
+        records.transaction {
+            val id=entry.groupId
+            val record=load(id) ?: return@transaction GroupApply.REJECTED
+            if(record.forked) return@transaction GroupApply.FORKED
+            val barrier=governance.barrier(id) ?: return@transaction GroupApply.REJECTED
+            val head=governance.head(id) ?: return@transaction GroupApply.REJECTED
+            if(entry.sequence !in 1..head.sequence ||
+                governanceJournalStatus(id)!=GovernanceJournalStatus.COMPLETE)
+                return@transaction GroupApply.REJECTED
+            val journal=GroupGovernanceJournalV1(records)
+            val accepted=journal.policyEntry(id,entry.sequence)
+            if(accepted!=null && MessageDigest.isEqual(
+                    GroupGovernancePolicyRulesV1.entryDigest(accepted),
+                    GroupGovernancePolicyRulesV1.entryDigest(entry)))
+                return@transaction GroupApply.DUPLICATE
+            if(accepted==null && journal.entry(id,entry.sequence)==null)
+                return@transaction GroupApply.REJECTED
+            val join=GovernedAdmissionStore(records).join(id)
+            val start=join?.checkpoint?.parentSequence ?: 0L
+            if(entry.sequence<=start) return@transaction GroupApply.REJECTED
+            val priorEntry=if(entry.sequence>start+1) journal.entry(id,entry.sequence-1) else null
+            val priorPolicy=if(entry.sequence>start+1) journal.policyEntry(id,entry.sequence-1) else null
+            if(entry.sequence>start+1 && (priorEntry==null)==(priorPolicy==null))
+                return@transaction GroupApply.REJECTED
+            val anchor=join?.proof?.state ?: record.genesis?.state ?: record.admission?.state
+            val activation=if(join!=null) join.proof.state else if(anchor?.revision==barrier.activationStateRevision)
+                anchor else record.events.singleOrNull {
+                    it.next.revision==barrier.activationStateRevision}?.next
+            val pre=if(activation?.revision==entry.stateRevision) activation else
+                record.events.singleOrNull {it.next.revision==entry.stateRevision}?.next
+                ?: return@transaction GroupApply.REJECTED
+            val parentDigest=priorEntry?.let(GroupGovernanceV1::entryDigest) ?:
+                priorPolicy?.let(GroupGovernancePolicyRulesV1::entryDigest) ?:
+                join?.checkpoint?.parentHeadDigest ?: barrier.activationDigest
+            val prior=GovernanceHeadFoundationV1(groupId=id,activationDigest=barrier.activationDigest,
+                sequence=entry.sequence-1,headDigest=parentDigest,
+                stateRevision=pre.revision,stateDigest=GroupStatements.digest(pre))
+            val initial=GroupGovernancePolicyCheckpointStoreV1(records).join(id)?.policy
+                ?: GroupGovernancePolicyRulesV1.initial()
+            val policy=journal.currentPolicy(id,barrier,head,activation,record.events,initial,
+                entry.sequence-1) ?: return@transaction GroupApply.REJECTED
+            if(!GroupGovernancePolicyRulesV1.verifyEntry(entry,pre,prior,policy))
+                return@transaction GroupApply.REJECTED
+            save(record.copy(forked=true))
+            GroupApply.FORKED
+        }
     /** Recovery-only read for a pre-anchor legacy chain; never used to display group content. */
     internal fun stateForLegacyReplay(id:String):GroupState?=records.transaction {
         load(id,allowPreBarrierReplay=true)?.state
@@ -290,6 +371,26 @@ class GroupLedger(
         onAccepted()
         result
     }
+    /** A policy-only action advances the same governance head and journal atomically. */
+    internal fun applyGovernedPolicy(entry:GroupGovernancePolicyEntryV1,
+        onAccepted:()->Unit={}):GroupApply=records.transaction {
+        val id=entry.groupId
+        val record=load(id) ?: return@transaction GroupApply.NEEDS_RESYNC
+        val barrier=governance.barrier(id) ?: return@transaction GroupApply.REJECTED
+        val head=governance.head(id) ?: return@transaction GroupApply.REJECTED
+        if(record.forked || governanceJournalStatus(id)!=GovernanceJournalStatus.COMPLETE ||
+            head.sequence>=GroupGovernanceJournalV1.MAX_ENTRIES)
+            return@transaction GroupApply.REJECTED
+        val policy=governancePolicy(id) ?: return@transaction GroupApply.REJECTED
+        if(!GroupGovernancePolicyRulesV1.verifyEntry(entry,record.state,head,policy))
+            return@transaction GroupApply.REJECTED
+        val digest=GroupGovernancePolicyRulesV1.entryDigest(entry)
+        if(!governance.advancePolicy(head,digest)) return@transaction GroupApply.REJECTED
+        val nextHead=checkNotNull(governance.head(id))
+        GroupGovernanceJournalV1(records).appendPolicy(entry,barrier,nextHead)
+        onAccepted()
+        GroupApply.ACCEPTED
+    }
 
     /** Internal future-activation hook. Nothing in production invokes it in A6.1. */
     internal fun installGovernanceBarrierForFutureActivation(id:String,
@@ -323,6 +424,7 @@ class GroupLedger(
     /** Only the exact newly invited target may install a signed join-point checkpoint. */
     internal fun acceptGovernedBootstrap(evidence:GovernedJoinEvidenceV1,
         acceptedInvite:GroupInvite,entry:GroupGovernanceEntryV1,
+        policyProof:GroupGovernancePolicyCheckpointV1?=null,
         onAccepted:()->Unit={}):GroupApply=records.transaction {
         val checkpoint=evidence.checkpoint
         val proof=evidence.proof
@@ -339,6 +441,8 @@ class GroupLedger(
             !AdmissionV2.verifyCertificate(evidence.certificate,parent) ||
             !GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint,parent,proof,
                 evidence.certificate,evidence.binding) ||
+            (policyProof!=null && !GroupGovernancePolicyCheckpointRulesV1.verify(
+                policyProof,checkpoint,parent)) ||
             entry.groupId!=id || entry.sequence!=checkpoint.parentSequence+1 ||
             entry.action!=GroupAction.ADD ||
             entry.eventId!=evidence.binding.eventId ||
@@ -376,7 +480,8 @@ class GroupLedger(
         save(GroupRecord(next,admission=proof,events=listOf(entry.transition),
             usedInvites=listOf(proof.inviteId)))
         governance.installAtJoinPoint(barrier,head)
-        GovernedAdmissionStore(records).saveJoin(id,evidence)
+        if(policyProof==null) GovernedAdmissionStore(records).saveJoin(id,evidence)
+        else GovernedAdmissionStore(records).saveJoinV2(id,evidence,policyProof)
         GroupGovernanceJournalV1(records).append(entry,barrier,head)
         onAccepted()
         GroupApply.ACCEPTED

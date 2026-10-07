@@ -74,7 +74,7 @@ internal class GovernanceFoundationStore(private val records:EndpointRecords) {
     fun installAtJoinPoint(barrier:GovernanceBarrierV1,head:GovernanceHeadFoundationV1) {
         require(this.barrier(barrier.groupId)==null && this.head(barrier.groupId)==null)
         require(head.groupId==barrier.groupId && head.sequence>0 &&
-            head.sequence==head.stateRevision-barrier.activationStateRevision &&
+            head.sequence>=head.stateRevision-barrier.activationStateRevision &&
             same(head.activationDigest,barrier.activationDigest) &&
             barrier.activationStateDigest.size==32 && barrier.baselineCertificateDigest.size==32 &&
             head.headDigest.size==32 && head.stateDigest.size==32)
@@ -98,11 +98,25 @@ internal class GovernanceFoundationStore(private val records:EndpointRecords) {
             same(current.headDigest,nextHeadDigest) ||
             next.groupId!=expected.groupId || current.stateRevision+1!=next.revision ||
             current.sequence>=GroupStatements.MAX_EVENTS ||
-            current.sequence+1!=next.revision-fence.activationStateRevision)
+            current.sequence+1<next.revision-fence.activationStateRevision)
             return false
         val advanced=current.copy(sequence=current.sequence+1,headDigest=nextHeadDigest,
             stateRevision=next.revision,stateDigest=GroupStatements.digest(next))
         val bytes=NetworkCodec.encode(advanced)
+        require(bytes.size<=512)
+        records.write(key(expected.groupId,"head"),bytes)
+        return true
+    }
+    /** Policy entries consume the same head sequence without fabricating a GroupState transition. */
+    fun advancePolicy(expected:GovernanceHeadFoundationV1,nextHeadDigest:ByteArray):Boolean {
+        require(nextHeadDigest.size==32)
+        val current=head(expected.groupId) ?: return false
+        val fence=barrier(expected.groupId) ?: return false
+        if(!matches(expected,current) || !same(current.activationDigest,fence.activationDigest) ||
+            same(current.headDigest,nextHeadDigest) || current.sequence>=GroupGovernanceJournalV1.MAX_ENTRIES)
+            return false
+        val next=current.copy(sequence=current.sequence+1,headDigest=nextHeadDigest)
+        val bytes=NetworkCodec.encode(next)
         require(bytes.size<=512)
         records.write(key(expected.groupId,"head"),bytes)
         return true

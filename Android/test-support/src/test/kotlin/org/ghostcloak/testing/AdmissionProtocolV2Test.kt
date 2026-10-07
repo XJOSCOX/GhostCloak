@@ -113,6 +113,7 @@ class AdmissionProtocolV2Test {
         assertEquals("hello",decoded.body)
         assertTrue(decoded.supportsGroups)
         assertTrue(decoded.supportsAdmissionV2)
+        assertTrue(decoded.supportsGovernanceTextV2)
         val corrupt=encoded.copyOf()
         val marker="GC/admission-v2!".toByteArray()
         val index=corrupt.indices.firstOrNull {offset ->

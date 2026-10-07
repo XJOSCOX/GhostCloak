@@ -17,7 +17,9 @@ enum class GroupControlKind { INVITE, ACCEPT, INVITE_EXPIRED, STATE_UPDATE, RESY
     GOVERNANCE_ACTIVATION_READY, GOVERNANCE_ENTRY, GOVERNANCE_ENTRY_APPLIED_ACK,
     GOVERNANCE_CAPABILITY_ECHO, GOVERNANCE_RESYNC_REQUEST_V1,
     GOVERNANCE_RESYNC_RESPONSE_V1, GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1,
-    GOVERNANCE_CHECKPOINT_SIGN_RESPONSE_V1, GOVERNANCE_BOOTSTRAP_V1 }
+    GOVERNANCE_CHECKPOINT_SIGN_RESPONSE_V1, GOVERNANCE_BOOTSTRAP_V1,
+    GOVERNANCE_POLICY_ENTRY_V1, GOVERNANCE_POLICY_ENTRY_ACK_V1,
+    GOVERNANCE_POLICY_PROPOSAL_V1, GOVERNANCE_RESYNC_RESPONSE_V2 }
 
 /** Only internal maintenance is permitted through a blocked canonical group relationship. */
 internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
@@ -34,7 +36,9 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     GroupControlKind.GOVERNANCE_ENTRY_APPLIED_ACK,GroupControlKind.GOVERNANCE_CAPABILITY_ECHO,
     GroupControlKind.GOVERNANCE_RESYNC_REQUEST_V1,GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V1,
     GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1,
-    GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_RESPONSE_V1)
+    GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_RESPONSE_V1,
+    GroupControlKind.GOVERNANCE_POLICY_ENTRY_V1,GroupControlKind.GOVERNANCE_POLICY_ENTRY_ACK_V1,
+    GroupControlKind.GOVERNANCE_POLICY_PROPOSAL_V1,GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V2)
 
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable data class GroupControl(
@@ -69,6 +73,9 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceResyncResponseV1:GroupGovernanceResyncResponseV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governedAdmissionBindingV1:GovernedAdmissionBindingV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceCheckpointV1:GroupGovernanceInviteeCheckpointV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governancePolicyEntryV1:GroupGovernancePolicyEntryV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceResyncResponseV2:GroupGovernanceResyncResponseV2?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governancePolicyCheckpointV1:GroupGovernancePolicyCheckpointV1?=null,
 ) {
     override fun toString() = "GroupControl(redacted)"
 }
@@ -77,7 +84,8 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
 @Serializable data class PendingGroupControl(val senderDeviceId: String, val control: GroupControl,
     val groupScoped: Boolean = false,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val baselineV1Advertised:Boolean=false,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceV1Advertised:Boolean=false) {
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceV1Advertised:Boolean=false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceTextV2Advertised:Boolean=false) {
     override fun toString() = "PendingGroupControl(redacted)"
 }
 
@@ -143,15 +151,38 @@ object GroupControlCodec {
             it.entries.single().previousHeadDigest.contentEquals(it.startHeadDigest) &&
             it.entries.single().activationDigest.contentEquals(it.activationDigest) &&
             GroupGovernanceV1.entryDigest(it.entries.single()).contentEquals(it.endHeadDigest))}
+        control.governancePolicyEntryV1?.let {require(it.version==1 && it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupGovernancePolicyRulesV1.MAX_ENTRY_BYTES)}
+        control.governanceResyncResponseV2?.let {require(it.version==2 && it.groupId==control.groupId &&
+            it.activationDigest.size==32 && it.requesterHeadDigest.size==32 &&
+            it.startHeadDigest.size==32 && it.endHeadDigest.size==32 &&
+            it.startSequence==it.requesterSequence+1 && it.endSequence==it.startSequence &&
+            it.endSequence in 1..GroupGovernanceJournalV1.MAX_ENTRIES.toLong() &&
+            (it.membershipEntry==null)!=(it.policyEntry==null) &&
+            (it.membershipEntry?.groupId ?: it.policyEntry?.groupId)==control.groupId &&
+            (it.membershipEntry?.sequence ?: it.policyEntry?.sequence)==it.startSequence &&
+            (it.membershipEntry?.previousHeadDigest ?: it.policyEntry?.previousHeadDigest)
+                ?.contentEquals(it.startHeadDigest)==true &&
+            (it.membershipEntry?.activationDigest ?: it.policyEntry?.activationDigest)
+                ?.contentEquals(it.activationDigest)==true &&
+            (it.membershipEntry?.let(GroupGovernanceV1::entryDigest) ?:
+                it.policyEntry?.let(GroupGovernancePolicyRulesV1::entryDigest))
+                ?.contentEquals(it.endHeadDigest)==true)}
         control.governedAdmissionBindingV1?.let {require(it.version==1 && it.groupId==control.groupId &&
             NetworkCodec.encode(it).size<=GroupGovernedAdmissionV1.MAX_BINDING_BYTES)}
         control.governanceCheckpointV1?.let {require(it.version==1 && it.groupId==control.groupId &&
             NetworkCodec.encode(it).size<=GroupGovernedAdmissionV1.MAX_CHECKPOINT_BYTES)}
+        control.governancePolicyCheckpointV1?.let {require(it.version==1 && it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupGovernancePolicyCheckpointRulesV1.MAX_BYTES &&
+            control.kind in setOf(GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1,
+                GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_RESPONSE_V1,
+                GroupControlKind.GOVERNANCE_BOOTSTRAP_V1))}
         val governanceCount=listOf(control.governanceProposalV1,control.governanceAckV1,
             control.governanceCommitV1,control.governanceInstalledV1,control.governanceReadyV1,
             control.governanceEntryV1,control.governanceEntryAckV1,
             control.governanceResyncRequestV1,control.governanceResyncResponseV1,
-            control.governanceCheckpointV1).count {it!=null}
+            control.governanceCheckpointV1,control.governancePolicyEntryV1,
+            control.governanceResyncResponseV2).count {it!=null}
         val governanceKind=control.kind.name.startsWith("GOVERNANCE_")
         if(control.kind==GroupControlKind.GOVERNANCE_CAPABILITY_ECHO) require(governanceCount==0)
         else if(control.kind==GroupControlKind.GOVERNANCE_BOOTSTRAP_V1) require(governanceCount==2)
@@ -294,6 +325,10 @@ object GroupControlCodec {
             GroupControlKind.GOVERNANCE_ENTRY_APPLIED_ACK,
             GroupControlKind.GOVERNANCE_RESYNC_REQUEST_V1,
             GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V1,
+            GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V2,
+            GroupControlKind.GOVERNANCE_POLICY_ENTRY_V1,
+            GroupControlKind.GOVERNANCE_POLICY_ENTRY_ACK_V1,
+            GroupControlKind.GOVERNANCE_POLICY_PROPOSAL_V1,
             GroupControlKind.GOVERNANCE_CAPABILITY_ECHO -> {
                 require(v2Absent && baselineAbsent && control.inviteId==null && control.state==null &&
                     control.genesis==null && control.admission==null && control.invite==null &&
@@ -311,6 +346,10 @@ object GroupControlCodec {
                     GroupControlKind.GOVERNANCE_ENTRY_APPLIED_ACK -> control.governanceEntryAckV1!=null
                     GroupControlKind.GOVERNANCE_RESYNC_REQUEST_V1 -> control.governanceResyncRequestV1!=null
                     GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V1 -> control.governanceResyncResponseV1!=null
+                    GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V2 -> control.governanceResyncResponseV2!=null
+                    GroupControlKind.GOVERNANCE_POLICY_ENTRY_V1,
+                    GroupControlKind.GOVERNANCE_POLICY_PROPOSAL_V1 -> control.governancePolicyEntryV1!=null
+                    GroupControlKind.GOVERNANCE_POLICY_ENTRY_ACK_V1 -> control.governanceEntryAckV1!=null
                     GroupControlKind.GOVERNANCE_CAPABILITY_ECHO -> governanceCount==0
                     else -> false
                 })

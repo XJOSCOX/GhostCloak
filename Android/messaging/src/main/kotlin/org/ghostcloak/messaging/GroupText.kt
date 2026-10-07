@@ -55,6 +55,13 @@ class GroupChatStore(private val records:EndpointRecords) {
     private fun pendingKey(envelopeId:String):String {
         require(RandomIdentifiers.valid(envelopeId));return "app/group-text/pending/$envelopeId"
     }
+    private fun pendingV2Key(envelopeId:String):String {
+        require(RandomIdentifiers.valid(envelopeId));return "app/group-text/pending-v2/$envelopeId"
+    }
+    private fun bindingKey(groupId:String,id:String):String {
+        require(GroupIds.valid(groupId) && GroupIds.valid(id))
+        return "app/group-text/v2-binding/$groupId/$id"
+    }
     private fun decodeMessage(key:String)=NetworkCodec.decode<GroupChatMessage>(
         records.read(key) ?: throw EndpointStorageFailure(),8192)
     fun groups():List<String> = records.transaction {
@@ -76,10 +83,58 @@ class GroupChatStore(private val records:EndpointRecords) {
         require(records.keys("app/group-text/message/").size<4096 && records.read(messageKey(value.groupId,value.logicalId))==null)
         records.write(messageKey(value.groupId,value.logicalId),NetworkCodec.encode(value))
     }
+    internal fun createV2(value:GroupChatMessage,binding:GroupTextV2Binding)=records.transaction {
+        require(binding.activationDigest.size==32 && binding.headDigest.size==32 &&
+            binding.policyDigest.size==32 &&
+            binding.sequence in 0..GroupGovernanceJournalV1.MAX_ENTRIES.toLong())
+        create(value)
+        records.write(bindingKey(value.groupId,value.logicalId),NetworkCodec.encode(binding))
+    }
+    internal fun binding(groupId:String,id:String):GroupTextV2Binding?=records.transaction {
+        records.read(bindingKey(groupId,id))?.let {NetworkCodec.decode<GroupTextV2Binding>(it,256)}
+    }
     fun queue(sender:String,envelopeId:String,value:GroupText)=records.transaction {
         require(RandomIdentifiers.valid(sender));GroupTextCodec.validate(value)
-        require(records.keys("app/group-text/pending/").size<128)
+        require(records.keys("app/group-text/pending/").size+
+            records.keys("app/group-text/pending-v2/").size<128)
         records.write(pendingKey(envelopeId),NetworkCodec.encode(PendingGroupText(sender,value)))
+    }
+    fun queueV2(sender:String,envelopeId:String,value:GroupTextV2)=records.transaction {
+        require(RandomIdentifiers.valid(sender));GroupTextV2Codec.validate(value)
+        require(records.keys("app/group-text/pending/").size+
+            records.keys("app/group-text/pending-v2/").size<128)
+        val existing=records.keys("app/group-text/pending-v2/").count {key ->
+            records.read(key)?.let {NetworkCodec.decode<PendingGroupTextV2>(it,4096)}
+                ?.text?.groupId==value.groupId
+        }
+        require(existing<32)
+        records.write(pendingV2Key(envelopeId),NetworkCodec.encode(PendingGroupTextV2(sender,value)))
+    }
+    internal fun pendingV2():List<Pair<String,PendingGroupTextV2>> = records.transaction {
+        records.keys("app/group-text/pending-v2/").sorted().take(16).map {key ->
+            key.removePrefix("app/group-text/pending-v2/") to NetworkCodec.decode<PendingGroupTextV2>(
+                records.read(key) ?: throw EndpointStorageFailure(),4096)
+        }
+    }
+    fun discardPendingV2(envelopeId:String)=records.transaction {records.remove(pendingV2Key(envelopeId))}
+    internal fun acceptV2(envelopeId:String,pending:PendingGroupTextV2):Boolean=records.transaction {
+        val value=pending.text
+        val replay=replayKey(value.groupId,value.senderMemberId,value.logicalId)
+        if(records.read(replay)!=null) {records.remove(pendingV2Key(envelopeId));return@transaction false}
+        if(records.read(messageKey(value.groupId,value.logicalId))!=null) {
+            require(records.keys("app/group-text/replay/").size<8192)
+            records.write(replay,byteArrayOf(1));records.remove(pendingV2Key(envelopeId));return@transaction false
+        }
+        require(records.keys("app/group-text/replay/").size<8192 &&
+            records.keys("app/group-text/message/").size<4096)
+        val order=(records.read("app/group-text/order")?.decodeToString()?.toLongOrNull() ?: 0L)+1
+        records.write("app/group-text/order",order.toString().encodeToByteArray())
+        records.write(messageKey(value.groupId,value.logicalId),NetworkCodec.encode(GroupChatMessage(
+            value.groupId,value.logicalId,value.epoch,value.senderMemberId,false,value.text,order)))
+        records.write(replay,byteArrayOf(1))
+        NotificationLedger.acceptedGroup(records,value.groupId,value.logicalId)
+        records.remove(pendingV2Key(envelopeId))
+        true
     }
     fun pending():List<Pair<String,PendingGroupText>> = records.transaction {
         records.keys("app/group-text/pending/").sorted().take(16).map {key ->
@@ -181,6 +236,33 @@ class GroupChatStore(private val records:EndpointRecords) {
                     }==true
                     recipient.copy(state=if(accepted) GroupRecipientState.SENT else GroupRecipientState.UNAVAILABLE,outboxId=null)
                 } else recipient
+            }
+            records.write(key,NetworkCodec.encode(old.copy(recipients=next)))
+        }
+    }
+    /** Submitted ciphertext is recorded as sent; every unsent old-head slot is retired. */
+    internal fun cancelStaleHead(groupId:String,head:GovernanceHeadFoundationV1?,
+        policy:GroupGovernancePolicyV1?)=records.transaction {
+        require(GroupIds.valid(groupId))
+        for(key in records.keys("app/group-text/message/$groupId/")) {
+            val old=decodeMessage(key)
+            if(!old.outgoing) continue
+            val binding=binding(groupId,old.logicalId)
+            if(head==null && binding==null || head!=null && policy!=null &&
+                binding?.matches(head,policy)==true) continue
+            val next=old.recipients.map {recipient ->
+                if(recipient.state !in setOf(GroupRecipientState.PENDING,GroupRecipientState.QUEUED)) recipient
+                else {
+                    val accepted=recipient.outboxId?.let {id ->
+                        val outboxKey="outbox/$id"
+                        val entry=records.read(outboxKey)?.let {NetworkCodec.decode<OutboxEntry>(it)}
+                        if(entry?.state!=OutboxState.SERVER_ACCEPTED) records.remove(outboxKey)
+                        records.remove("app/group-text/outbox/$id")
+                        entry?.state==OutboxState.SERVER_ACCEPTED
+                    }==true
+                    recipient.copy(state=if(accepted) GroupRecipientState.SENT else
+                        GroupRecipientState.UNAVAILABLE,outboxId=null)
+                }
             }
             records.write(key,NetworkCodec.encode(old.copy(recipients=next)))
         }

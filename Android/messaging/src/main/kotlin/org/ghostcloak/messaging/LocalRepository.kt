@@ -379,20 +379,30 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun governanceV1Peer(id:String,supported:Boolean)=records.transaction {
         if(supported) records.write("app/group-governance-v1-peer/$id",byteArrayOf(1))
     }
+    fun governanceTextV2Peer(id:String):Boolean=records.transaction {
+        records.read("app/group-governance-text-v2-peer/$id")?.contentEquals(byteArrayOf(1))==true
+    }
+    fun governanceTextV2Peer(id:String,supported:Boolean)=records.transaction {
+        if(supported) records.write("app/group-governance-text-v2-peer/$id",byteArrayOf(1))
+        else records.remove("app/group-governance-text-v2-peer/$id")
+    }
     fun queueGroupControl(senderId:String,envelopeId:String,control:GroupControl,
-        baselineV1Advertised:Boolean=false,governanceV1Advertised:Boolean=false)=records.transaction {
+        baselineV1Advertised:Boolean=false,governanceV1Advertised:Boolean=false,
+        governanceTextV2Advertised:Boolean=false)=records.transaction {
         require(isActiveContact(senderId) && RandomIdentifiers.valid(envelopeId))
         val keys=records.keys("app/group-control/pending/")
         require(keys.size<128)
         records.write("app/group-control/pending/$envelopeId",
             NetworkCodec.encode(PendingGroupControl(senderId,control,
                 baselineV1Advertised=baselineV1Advertised,
-                governanceV1Advertised=governanceV1Advertised)))
+                governanceV1Advertised=governanceV1Advertised,
+                governanceTextV2Advertised=governanceTextV2Advertised)))
     }
     /** Called only after Signal authentication, inside its decrypt-and-commit transaction. */
     fun queueGroupScopedSystem(senderId:String,envelopeId:String,control:GroupControl,
         signalDigest:ByteArray,baselineV1Advertised:Boolean=false,
-        governanceV1Advertised:Boolean=false)=records.transaction {
+        governanceV1Advertised:Boolean=false,
+        governanceTextV2Advertised:Boolean=false)=records.transaction {
         if(isActiveContact(senderId) || !RandomIdentifiers.valid(envelopeId) ||
             !control.kind.blockSafeMaintenance() ||
             GroupCurrentAuthority(records).current(control.groupId,senderId,signalDigest)==null)
@@ -402,7 +412,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         records.write("app/group-control/pending/$envelopeId",
             NetworkCodec.encode(PendingGroupControl(senderId,control,groupScoped=true,
                 baselineV1Advertised=baselineV1Advertised,
-                governanceV1Advertised=governanceV1Advertised)))
+                governanceV1Advertised=governanceV1Advertised,
+                governanceTextV2Advertised=governanceTextV2Advertised)))
         true
     }
     fun pendingGroupControls():List<Pair<String,PendingGroupControl>> = records.transaction {
@@ -422,6 +433,10 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun groupOutboxIds():Set<String> = GroupChatStore(records).outboxIds()
     fun groupSystemOutboxIds():Set<String> = records.transaction {
         records.keys("app/group/system-outbox/").map {it.substringAfterLast('/')}.toSet()
+    }
+    fun queueGroupTextV2(senderId:String,envelopeId:String,value:GroupTextV2)=records.transaction {
+        require(isActiveContact(senderId))
+        GroupChatStore(records).queueV2(senderId,envelopeId,value)
     }
     private fun reactionKey(id:String,target:String,mine:Boolean):String {
         require(RandomIdentifiers.valid(id) && RandomIdentifiers.valid(target))

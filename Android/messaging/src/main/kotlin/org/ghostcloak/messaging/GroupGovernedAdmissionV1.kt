@@ -43,6 +43,11 @@ import java.security.MessageDigest
     val proof:GroupAdmission,
     val certificate:AdmissionCertificateV2,
 )
+/** A7 join anchor is indivisible: deleting its policy proof also removes the join point. */
+@Serializable internal data class GovernedJoinEvidenceV2(
+    val version:Int=2,val evidence:GovernedJoinEvidenceV1,
+    val policyProof:GroupGovernancePolicyCheckpointV1,
+)
 
 internal object GroupGovernedAdmissionV1 {
     const val MAX_BINDING_BYTES=1024
@@ -183,11 +188,32 @@ internal class GovernedAdmissionStore(private val records:EndpointRecords) {
         records.write(key(value.groupId,"checkpoint"),bytes)
     }
     fun join(id:String):GovernedJoinEvidenceV1?=records.transaction {
-        records.read(key(id,"join"))?.let {NetworkCodec.decode<GovernedJoinEvidenceV1>(it,32_768)}
+        val newer=joinV2(id)
+        if(newer!=null) newer.evidence else records.read(key(id,"join"))?.let {
+            NetworkCodec.decode<GovernedJoinEvidenceV1>(it,32_768)
+        }
+    }
+    fun joinV2(id:String):GovernedJoinEvidenceV2?=records.transaction {
+        records.read(key(id,"join-v2"))?.let {
+            NetworkCodec.decode<GovernedJoinEvidenceV2>(it,32_768).also {proof ->
+                require(proof.version==2 && proof.evidence.checkpoint.groupId==id &&
+                    GroupGovernancePolicyCheckpointRulesV1.verify(proof.policyProof,
+                        proof.evidence.checkpoint,proof.evidence.proof.state))
+            }
+        }
     }
     fun saveJoin(id:String,value:GovernedJoinEvidenceV1)=records.transaction {
         val bytes=NetworkCodec.encode(value);require(bytes.size<=32_768)
         check(records.read(key(id,"join"))==null)
         records.write(key(id,"join"),bytes)
+    }
+    fun saveJoinV2(id:String,value:GovernedJoinEvidenceV1,
+        policyProof:GroupGovernancePolicyCheckpointV1)=records.transaction {
+        require(GroupGovernancePolicyCheckpointRulesV1.verify(policyProof,value.checkpoint,
+            value.proof.state))
+        val bytes=NetworkCodec.encode(GovernedJoinEvidenceV2(evidence=value,policyProof=policyProof))
+        require(bytes.size<=32_768 && records.read(key(id,"join"))==null &&
+            records.read(key(id,"join-v2"))==null)
+        records.write(key(id,"join-v2"),bytes)
     }
 }

@@ -80,16 +80,20 @@ import org.ghostcloak.messaging.ChatOrganization
                         Surface(onClick={openGroup(group.groupId)},shape=MaterialTheme.shapes.large,
                             color=MaterialTheme.colorScheme.surface,
                             modifier=Modifier.fillMaxWidth().padding(bottom=GhostDimensions.micro)) {
-                            Column(Modifier.padding(GhostDimensions.regular)) {
-                                Text(when {
-                                    group.status==org.ghostcloak.messaging.GroupLocalStatus.INVITED -> "Group invitation"
-                                    group.invitationPending && group.memberCount==1 -> "Group invitation sent"
-                                    else -> "Group conversation"
-                                },style=MaterialTheme.typography.titleMedium)
-                                Text("${group.memberCount} members · ${group.status.name.lowercase().replaceFirstChar(Char::uppercase)}",
-                                    style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                                group.messages.lastOrNull()?.let {Text(it.text,maxLines=1,
-                                    style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                            Row(Modifier.padding(GhostDimensions.regular),verticalAlignment=Alignment.CenterVertically,
+                                horizontalArrangement=Arrangement.spacedBy(GhostDimensions.regular)) {
+                                Avatar(group.info?.profile?.name ?: "Group",photo=group.info?.verifiedPhoto)
+                                Column {
+                                    Text(when {
+                                        group.status==org.ghostcloak.messaging.GroupLocalStatus.INVITED -> "Group invitation"
+                                        group.invitationPending && group.memberCount==1 -> "Group invitation sent"
+                                        else -> group.info?.profile?.name ?: "Group"
+                                    },style=MaterialTheme.typography.titleMedium)
+                                    Text("${group.memberCount} members · ${group.status.name.lowercase().replaceFirstChar(Char::uppercase)}",
+                                        style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                                    group.messages.lastOrNull()?.let {Text(it.text,maxLines=1,
+                                        style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                                }
                             }
                         }
                     }

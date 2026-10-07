@@ -18,6 +18,9 @@ data class GroupInfo(
     val journalFull:Boolean, val invitationPending:Boolean, val capable:Boolean=true,
     val waitingForMemberCheck:Boolean=false,val moderationCapable:Boolean=true,
     val messageControlsCapable:Boolean=false,val mediaCapable:Boolean=false,
+    val profile:GroupProfileV1=GroupProfileV1(),val verifiedPhoto:ByteArray?=null,
+    val photoPending:Boolean=false,val profileCapable:Boolean=false,
+    val governanceSequence:Long=0,val governanceHeadDigest:ByteArray?=null,
 ) {
     val active get()=status==GroupLocalStatus.ACTIVE
     val ready get()=active && managementStatus==GroupManagementStatus.READY
@@ -31,6 +34,8 @@ data class GroupInfo(
         localRole in setOf(GroupRole.OWNER,GroupRole.ADMIN)
     val canUseMessageControls get()=ready && messageControlsCapable && !pending
     val canUseMedia get()=ready && mediaCapable && !pending
+    val canEditProfile get()=canManage && profileCapable &&
+        localRole in setOf(GroupRole.OWNER,GroupRole.ADMIN)
     fun canRestrict(target:GroupInfoMember)=canManage && !target.isLocal &&
         target.role!=GroupRole.OWNER && (localRole==GroupRole.OWNER ||
             localRole==GroupRole.ADMIN && target.role==GroupRole.MEMBER)

@@ -51,6 +51,9 @@ internal class GroupGovernanceJournalV1(private val records:EndpointRecords) {
     private fun policyKey(id:String,sequence:Long):String {
         require(sequence in 1..MAX_ENTRIES.toLong());return base(id)+"policy/$sequence"
     }
+    private fun profileKey(id:String,sequence:Long):String {
+        require(sequence in 1..MAX_ENTRIES.toLong());return base(id)+"profile/$sequence"
+    }
     private fun tailKey(id:String)=base(id)+"tail"
     private fun markerKey(id:String)=base(id)+"resync"
     fun entry(id:String,sequence:Long):GroupGovernanceEntryV1?=records.transaction {
@@ -62,6 +65,11 @@ internal class GroupGovernanceJournalV1(private val records:EndpointRecords) {
         records.read(policyKey(id,sequence))?.let {
             NetworkCodec.decode<GroupGovernancePolicyEntryV1>(it,
                 GroupGovernancePolicyRulesV1.MAX_ENTRY_BYTES)
+        }
+    }
+    fun profileEntry(id:String,sequence:Long):GroupGovernanceProfileEntryV1?=records.transaction {
+        records.read(profileKey(id,sequence))?.let {
+            NetworkCodec.decode<GroupGovernanceProfileEntryV1>(it,GroupProfileRulesV1.MAX_ENTRY_BYTES)
         }
     }
     private fun tail(id:String):GovernanceJournalTailV1?=records.read(tailKey(id))?.let {
@@ -102,7 +110,8 @@ internal class GroupGovernanceJournalV1(private val records:EndpointRecords) {
             MessageDigest.isEqual(entry.previousHeadDigest,digest) &&
             MessageDigest.isEqual(entry.preDigest,stateDigest) &&
             records.read(entryKey(entry.groupId,entry.sequence))==null &&
-            records.read(policyKey(entry.groupId,entry.sequence))==null)
+            records.read(policyKey(entry.groupId,entry.sequence))==null &&
+            records.read(profileKey(entry.groupId,entry.sequence))==null)
         val bytes=NetworkCodec.encode(entry)
         require(bytes.size<=GroupGovernanceV1.MAX_ENTRY_BYTES)
         // Every accepted entry must fit in its future one-entry resync response.
@@ -138,7 +147,8 @@ internal class GroupGovernanceJournalV1(private val records:EndpointRecords) {
             MessageDigest.isEqual(entry.previousHeadDigest,digest) &&
             MessageDigest.isEqual(entry.stateDigest,stateDigest) &&
             records.read(entryKey(entry.groupId,entry.sequence))==null &&
-            records.read(policyKey(entry.groupId,entry.sequence))==null)
+            records.read(policyKey(entry.groupId,entry.sequence))==null &&
+            records.read(profileKey(entry.groupId,entry.sequence))==null)
         val bytes=NetworkCodec.encode(entry)
         require(bytes.size<=GroupGovernancePolicyRulesV1.MAX_ENTRY_BYTES)
         GroupControlCodec.encode(GroupControl(kind=GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V2,
@@ -154,11 +164,40 @@ internal class GroupGovernanceJournalV1(private val records:EndpointRecords) {
             sequence=entry.sequence,headDigest=head.headDigest,
             stateRevision=head.stateRevision,stateDigest=head.stateDigest)))
     }
+    fun appendProfile(entry:GroupGovernanceProfileEntryV1,barrier:GovernanceBarrierV1,
+        head:GovernanceHeadFoundationV1)=records.transaction {
+        require(entry.sequence in 1..MAX_ENTRIES.toLong() && entry.groupId==head.groupId &&
+            MessageDigest.isEqual(entry.activationDigest,barrier.activationDigest) &&
+            head.sequence==entry.sequence &&
+            MessageDigest.isEqual(head.headDigest,GroupProfileRulesV1.entryDigest(entry)) &&
+            head.stateRevision==entry.stateRevision &&
+            MessageDigest.isEqual(head.stateDigest,entry.stateDigest))
+        val old=tail(entry.groupId)
+        val join=GovernedAdmissionStore(records).join(entry.groupId)?.checkpoint
+        val sequence=old?.sequence ?: join?.parentSequence ?: 0L
+        val digest=old?.headDigest ?: join?.parentHeadDigest ?: barrier.activationDigest
+        val revision=old?.stateRevision ?: join?.parentRevision ?: barrier.activationStateRevision
+        val stateDigest=old?.stateDigest ?: join?.parentStateDigest ?: barrier.activationStateDigest
+        require(entry.sequence==sequence+1 && entry.stateRevision==revision &&
+            MessageDigest.isEqual(entry.previousHeadDigest,digest) &&
+            MessageDigest.isEqual(entry.stateDigest,stateDigest) &&
+            records.read(entryKey(entry.groupId,entry.sequence))==null &&
+            records.read(policyKey(entry.groupId,entry.sequence))==null &&
+            records.read(profileKey(entry.groupId,entry.sequence))==null)
+        val bytes=NetworkCodec.encode(entry)
+        require(bytes.size<=GroupProfileRulesV1.MAX_ENTRY_BYTES)
+        records.write(profileKey(entry.groupId,entry.sequence),bytes)
+        records.write(tailKey(entry.groupId),NetworkCodec.encode(GovernanceJournalTailV1(
+            groupId=entry.groupId,activationDigest=barrier.activationDigest,
+            sequence=entry.sequence,headDigest=head.headDigest,
+            stateRevision=head.stateRevision,stateDigest=head.stateDigest)))
+    }
     /** Missing A6.2 history is classified, never reconstructed from GroupState. */
     fun status(id:String,barrier:GovernanceBarrierV1,
         head:GovernanceHeadFoundationV1,activationState:GroupState?,
         ledgerEvents:List<GroupTransition>,
-        initialPolicy:GroupGovernancePolicyV1=GroupGovernancePolicyRulesV1.initial()):GovernanceJournalStatus=records.transaction {
+        initialPolicy:GroupGovernancePolicyV1=GroupGovernancePolicyRulesV1.initial(),
+        initialProfile:GroupProfileV1=GroupProfileRulesV1.default):GovernanceJournalStatus=records.transaction {
         val join=GovernedAdmissionStore(records).join(id)
         val checkpoint=join?.checkpoint
         if(join!=null && (checkpoint==null ||
@@ -174,6 +213,7 @@ internal class GroupGovernanceJournalV1(private val records:EndpointRecords) {
         if(head.sequence==0L) return@transaction if(tail(id)==null &&
             records.keys(base(id)+"entry/").isEmpty() &&
             records.keys(base(id)+"policy/").isEmpty() &&
+            records.keys(base(id)+"profile/").isEmpty() &&
             MessageDigest.isEqual(head.headDigest,barrier.activationDigest) &&
             head.stateRevision==barrier.activationStateRevision &&
             MessageDigest.isEqual(head.stateDigest,barrier.activationStateDigest))
@@ -194,17 +234,20 @@ internal class GroupGovernanceJournalV1(private val records:EndpointRecords) {
             tail.stateRevision!=head.stateRevision ||
             !MessageDigest.isEqual(tail.stateDigest,head.stateDigest) ||
             records.keys(base(id)+"entry/").size+
-                records.keys(base(id)+"policy/").size!=(head.sequence-start).toInt())
+                records.keys(base(id)+"policy/").size+
+                records.keys(base(id)+"profile/").size!=(head.sequence-start).toInt())
             return@transaction GovernanceJournalStatus.LEGACY_INCOMPLETE
         var pre=initial
         var previous=baseHead
         var policy=initialPolicy
+        var profile=initialProfile
         if(runCatching {GroupGovernancePolicyRulesV1.validate(policy,pre)}.isFailure)
             return@transaction GovernanceJournalStatus.LEGACY_INCOMPLETE
         for(sequence in (start+1)..head.sequence) {
             val entry=runCatching {entry(id,sequence)}.getOrNull()
             val policyEntry=runCatching {policyEntry(id,sequence)}.getOrNull()
-            if((entry==null)==(policyEntry==null))
+            val profileEntry=runCatching {profileEntry(id,sequence)}.getOrNull()
+            if(listOf(entry,policyEntry,profileEntry).count {it!=null}!=1)
                 return@transaction GovernanceJournalStatus.LEGACY_INCOMPLETE
             val expected=GovernanceHeadFoundationV1(groupId=id,
                 activationDigest=barrier.activationDigest,sequence=sequence-1,
@@ -218,13 +261,19 @@ internal class GroupGovernanceJournalV1(private val records:EndpointRecords) {
                 pre=entry.transition.next
                 policy=GroupGovernancePolicyRulesV1.afterTransition(policy,pre)
                 previous=GroupGovernanceV1.entryDigest(entry)
-            } else {
-                val action=checkNotNull(policyEntry)
+            } else if(policyEntry!=null) {
+                val action=policyEntry
                 if(!GroupGovernancePolicyRulesV1.verifyEntry(action,pre,expected,policy))
                     return@transaction GovernanceJournalStatus.LEGACY_INCOMPLETE
                 policy=GroupGovernancePolicyRulesV1.apply(policy,pre,action.actorId,
                     action.action,action.targetMemberId,action.postingMode,action.targetLogicalId)
                 previous=GroupGovernancePolicyRulesV1.entryDigest(action)
+            } else {
+                val action=checkNotNull(profileEntry)
+                if(!GroupProfileRulesV1.verifyEntry(action,pre,expected,profile))
+                    return@transaction GovernanceJournalStatus.LEGACY_INCOMPLETE
+                profile=action.profile
+                previous=GroupProfileRulesV1.entryDigest(action)
             }
         }
         if(pre.revision!=head.stateRevision ||
@@ -236,9 +285,10 @@ internal class GroupGovernanceJournalV1(private val records:EndpointRecords) {
         head:GovernanceHeadFoundationV1,activationState:GroupState?,
         ledgerEvents:List<GroupTransition>,
         initialPolicy:GroupGovernancePolicyV1=GroupGovernancePolicyRulesV1.initial(),
-        throughSequence:Long=head.sequence):GroupGovernancePolicyV1?=
+        throughSequence:Long=head.sequence,
+        initialProfile:GroupProfileV1=GroupProfileRulesV1.default):GroupGovernancePolicyV1?=
         records.transaction {
-            if(status(id,barrier,head,activationState,ledgerEvents,initialPolicy)!=GovernanceJournalStatus.COMPLETE)
+            if(status(id,barrier,head,activationState,ledgerEvents,initialPolicy,initialProfile)!=GovernanceJournalStatus.COMPLETE)
                 return@transaction null
             var policy=initialPolicy
             val start=GovernedAdmissionStore(records).join(id)?.checkpoint?.parentSequence ?: 0L
@@ -246,7 +296,7 @@ internal class GroupGovernanceJournalV1(private val records:EndpointRecords) {
             for(sequence in (start+1)..throughSequence) {
                 val wrapped=entry(id,sequence)
                 if(wrapped!=null) policy=GroupGovernancePolicyRulesV1.afterTransition(policy,wrapped.transition.next)
-                else policy=checkNotNull(policyEntry(id,sequence)).let {
+                else if(profileEntry(id,sequence)==null) policy=checkNotNull(policyEntry(id,sequence)).let {
                     GroupGovernancePolicyRulesV1.apply(policy,
                         activationState?.let {initial ->
                             val revision=it.stateRevision
@@ -259,4 +309,19 @@ internal class GroupGovernanceJournalV1(private val records:EndpointRecords) {
             }
             policy
         }
+    fun currentProfile(id:String,barrier:GovernanceBarrierV1,
+        head:GovernanceHeadFoundationV1,activationState:GroupState?,
+        ledgerEvents:List<GroupTransition>,
+        initialPolicy:GroupGovernancePolicyV1=GroupGovernancePolicyRulesV1.initial(),
+        throughSequence:Long=head.sequence,
+        initialProfile:GroupProfileV1=GroupProfileRulesV1.default):GroupProfileV1?=records.transaction {
+        if(status(id,barrier,head,activationState,ledgerEvents,initialPolicy,initialProfile)!=GovernanceJournalStatus.COMPLETE)
+            return@transaction null
+        val start=GovernedAdmissionStore(records).join(id)?.checkpoint?.parentSequence ?: 0L
+        if(throughSequence !in start..head.sequence) return@transaction null
+        var profile=initialProfile
+        for(sequence in (start+1)..throughSequence)
+            profileEntry(id,sequence)?.let { profile=it.profile }
+        profile
+    }
 }

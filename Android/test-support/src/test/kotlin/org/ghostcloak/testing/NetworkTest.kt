@@ -16,8 +16,189 @@ import java.time.*
 import java.net.HttpURLConnection
 import java.net.URI
 import java.util.concurrent.Executors
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
+import javax.imageio.ImageIO
 
 class NetworkTest {
+    @Test fun governedNewMemberGetsPhotoAfterOriginalEditorIsRemoved() = runBlocking {
+        Fixture().use {f ->
+            val people=listOf(f.person("alice",true),f.person("bob",true),f.person("charlie",true))
+            val (a,b,c)=people
+            val repos=people.associateWith {LocalRepository(it.records)}
+            val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
+                NetworkMailboxTransport(f.client(p),p.state))}
+            fun group(p:Person)=GroupMembershipTransport(p.records,repos.getValue(p),p.engine,p.state,
+                GroupAuthorityResolver(repos.getValue(p),p.engine,f.client(p),p.records),outboxes.getValue(p))
+            val conversations=people.associateWith {p ->ConversationService(p.engine,
+                repos.getValue(p)).also {it.open()}}
+            for(p in people) for(q in people) if(p!=q) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repos.getValue(p).save(Contact(RandomIdentifiers.create(),q.registration.accountId,
+                    q.name,q.registration.deviceId))
+                repos.getValue(p).groupPeer(q.registration.deviceId,true)
+                repos.getValue(p).admissionV2Peer(q.registration.deviceId,true)
+                repos.getValue(p).baselineV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceTextV2Peer(q.registration.deviceId,true)
+                repos.getValue(p).groupProfilePeer(q.registration.deviceId,true)
+            }
+            suspend fun settle(rounds:Int) {repeat(rounds) {
+                for(p in people) outboxes.getValue(p).pendingIds().forEach {id ->
+                    val outbox=outboxes.getValue(p)
+                    if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)
+                }
+                for(p in people) {
+                    val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                    val deliveries=mailbox.fetch()
+                    deliveries.forEach {conversations.getValue(p).acceptNetwork(
+                        EnvelopeCodec.decode(it.encryptedEnvelope))}
+                    if(deliveries.isNotEmpty()) mailbox.acknowledgeAccepted(
+                        deliveries.map {it.serverMessageId})
+                    group(p).processPending()
+                }
+            }}
+            val id=group(a).createAndInvite(b.registration.deviceId)
+            settle(2);group(b).accept(group(b).invitations().single().id);settle(4)
+            group(a).beginGroupManagementSetup(id);settle(10)
+            group(a).beginGroupManagementSetup(id);settle(12)
+            val bId=b.records.read("app/group/member/$id")!!.decodeToString()
+            group(a).promoteGroupMemberGoverned(id,bId)
+            settle(8)
+            val output=ByteArrayOutputStream()
+            assertTrue(ImageIO.write(BufferedImage(16,16,BufferedImage.TYPE_INT_RGB),"jpg",output))
+            val photo=output.toByteArray()
+            group(b).setGroupProfileGoverned(id,group(b).groupInfo(id)!!.governanceHeadDigest!!,
+                "Family","Private chat",GroupProfilePhotoRefV1(
+                    digest=DeviceAuth.digest(photo),length=photo.size),photo)
+            settle(8)
+            assertArrayEquals(photo,group(a).groupInfo(id)!!.verifiedPhoto)
+            group(a).removeGroupMemberGoverned(id,bId)
+            settle(8)
+            assertEquals(1,group(a).state(id)!!.members.size)
+            assertArrayEquals(photo,group(a).groupInfo(id)!!.verifiedPhoto)
+            group(a).invite(id,c.registration.deviceId)
+            settle(8)
+            assertEquals(1,group(c).invitations().size)
+            group(c).accept(group(c).invitations().single().id)
+            settle(16)
+            val joined=group(c).groupInfo(id)!!
+            assertEquals(2,joined.members.size)
+            assertEquals("Family",joined.profile.name)
+            assertEquals("Private chat",joined.profile.about)
+            assertArrayEquals(photo,joined.verifiedPhoto)
+            assertTrue(c.records.keys("app/group/governance-journal-v1/$id/profile/").isEmpty())
+            assertNotNull(c.records.read("app/group/profile-checkpoint-v1/join/$id"))
+        }
+    }
+    @Test fun governedProfilePhotoConvergesThroughSignalAndSurvivesRestartAndRename() = runBlocking {
+        Fixture().use {f ->
+            val a=f.person("alice",true);val b=f.person("bob",true)
+            val people=listOf(a,b)
+            val repos=people.associateWith {LocalRepository(it.records)}
+            val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
+                NetworkMailboxTransport(f.client(p),p.state))}
+            fun group(p:Person)=GroupMembershipTransport(p.records,repos.getValue(p),p.engine,p.state,
+                GroupAuthorityResolver(repos.getValue(p),p.engine,f.client(p),p.records),outboxes.getValue(p))
+            val conversations=people.associateWith {p ->ConversationService(p.engine,
+                repos.getValue(p)).also {it.open()}}
+            for(p in people) for(q in people) if(p!=q) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repos.getValue(p).save(Contact(RandomIdentifiers.create(),q.registration.accountId,
+                    q.name,q.registration.deviceId))
+                repos.getValue(p).groupPeer(q.registration.deviceId,true)
+                repos.getValue(p).admissionV2Peer(q.registration.deviceId,true)
+                repos.getValue(p).baselineV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceTextV2Peer(q.registration.deviceId,true)
+                repos.getValue(p).groupProfilePeer(q.registration.deviceId,true)
+            }
+            suspend fun settle(rounds:Int) {repeat(rounds) {
+                for(p in people) outboxes.getValue(p).pendingIds().forEach {id ->
+                    val outbox=outboxes.getValue(p)
+                    if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)
+                }
+                for(p in people) {
+                    val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                    val deliveries=mailbox.fetch()
+                    deliveries.forEach {conversations.getValue(p).acceptNetwork(
+                        EnvelopeCodec.decode(it.encryptedEnvelope))}
+                    if(deliveries.isNotEmpty()) mailbox.acknowledgeAccepted(
+                        deliveries.map {it.serverMessageId})
+                    group(p).processPending()
+                }
+            }}
+            val id=group(a).createAndInvite(b.registration.deviceId)
+            settle(2);group(b).accept(group(b).invitations().single().id);settle(4)
+            group(a).beginGroupManagementSetup(id);settle(10)
+            group(a).beginGroupManagementSetup(id);settle(12)
+            assertEquals(GroupManagementStatus.READY,group(a).groupInfo(id)!!.managementStatus)
+            assertTrue(group(a).groupInfo(id)!!.profileCapable)
+            val output=ByteArrayOutputStream()
+            assertTrue(ImageIO.write(BufferedImage(16,16,BufferedImage.TYPE_INT_RGB),"jpg",output))
+            val photo=output.toByteArray()
+            val ref=GroupProfilePhotoRefV1(digest=DeviceAuth.digest(photo),length=photo.size)
+            val before=group(a).groupInfo(id)!!
+            group(a).setGroupProfileGoverned(id,before.governanceHeadDigest!!,
+                "Family","Private chat",ref,photo)
+            settle(8)
+            for(p in people) {
+                val info=group(p).groupInfo(id)!!
+                assertEquals("Family",info.profile.name)
+                assertEquals("Private chat",info.profile.about)
+                assertArrayEquals(photo,info.verifiedPhoto)
+                assertFalse(info.photoPending)
+            }
+            val photoKey="app/group-profile/photo-v1/$id"
+            assertNotNull(b.records.read(photoKey))
+            val head=group(a).groupInfo(id)!!.governanceHeadDigest!!
+            group(a).setGroupProfileGoverned(id,head,"New Family","Private chat",ref)
+            for(outboxId in outboxes.getValue(a).pendingIds()) {
+                val outbox=outboxes.getValue(a)
+                if(outbox.get(outboxId).state!=OutboxState.SERVER_ACCEPTED) outbox.process(outboxId)
+            }
+            val missed=NetworkMailboxTransport(f.client(b),b.state)
+            val lost=missed.fetch()
+            assertTrue(lost.isNotEmpty())
+            missed.acknowledgeAccepted(lost.map {it.serverMessageId})
+            group(b).requestGovernanceResync(id)
+            settle(8)
+            assertEquals("New Family",group(b).groupInfo(id)!!.profile.name)
+            assertArrayEquals(photo,group(b).groupInfo(id)!!.verifiedPhoto)
+            val changedImage=BufferedImage(16,16,BufferedImage.TYPE_INT_RGB)
+            changedImage.setRGB(0,0,0x00ff00)
+            val changedOutput=ByteArrayOutputStream()
+            assertTrue(ImageIO.write(changedImage,"jpg",changedOutput))
+            val changedPhoto=changedOutput.toByteArray()
+            val changedRef=GroupProfilePhotoRefV1(
+                digest=DeviceAuth.digest(changedPhoto),length=changedPhoto.size)
+            group(a).setGroupProfileGoverned(id,group(a).groupInfo(id)!!.governanceHeadDigest!!,
+                "New Family","Updated",changedRef,changedPhoto)
+            for(outboxId in outboxes.getValue(a).pendingIds()) {
+                val outbox=outboxes.getValue(a)
+                if(outbox.get(outboxId).state!=OutboxState.SERVER_ACCEPTED) outbox.process(outboxId)
+            }
+            val missedPhoto=NetworkMailboxTransport(f.client(b),b.state)
+            val lostPhoto=missedPhoto.fetch()
+            assertTrue(lostPhoto.isNotEmpty())
+            missedPhoto.acknowledgeAccepted(lostPhoto.map {it.serverMessageId})
+            group(b).requestGovernanceResync(id)
+            settle(12)
+            assertEquals("Updated",group(b).groupInfo(id)!!.profile.about)
+            assertArrayEquals(changedPhoto,group(b).groupInfo(id)!!.verifiedPhoto)
+            group(a).setGroupProfileGoverned(id,group(a).groupInfo(id)!!.governanceHeadDigest!!,
+                "New Family","Private chat",null)
+            settle(8)
+            for(p in people) {
+                assertNull(group(p).groupInfo(id)!!.verifiedPhoto)
+                assertNull(p.records.read(photoKey))
+            }
+        }
+    }
     @Test fun governedGroupMediaDescriptorFanoutAndTerminalCleanup() = runBlocking {
         Fixture().use {f ->
             val a=f.person("alice",true);val b=f.person("bob",true)

@@ -9,6 +9,7 @@ import org.ghostcloak.app.ui.theme.GhostCloakTheme
 import org.ghostcloak.messaging.*
 import org.ghostcloak.identity.SessionLifecycle
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Rule
 import org.junit.Test
 
@@ -122,5 +123,45 @@ class GroupInfoScreenTest {
         }}
         compose.onNodeWithTag("group-info-entry").performClick()
         assertEquals(1,opened)
+    }
+
+    @Test fun ownerCanStageCancelAndSaveOneProfileReplacement() {
+        val head=ByteArray(32) { 7 }
+        val info=info().copy(profile=GroupProfileV1(name="Family",about="Private chat"),
+            profileCapable=true,governanceHeadDigest=head)
+        var saved=0
+        var savedName=""
+        var savedAbout=""
+        var savedPhoto:GroupProfilePhotoRefV1?=null
+        val actions=GroupInfoActions(setup={},retrySetup={},posting={},restrict={},unrestrict={},
+            remove={},promote={},demote={},transfer={},transferDecision={},leave={},dissolve={},
+            invite={},openChat={},saveProfile={digest,name,about,photo,bytes ->
+                assertArrayEquals(head,digest)
+                assertEquals(null,bytes)
+                saved++;savedName=name;savedAbout=about;savedPhoto=photo
+            })
+        compose.setContent {GhostCloakTheme {GroupInfoScreen(state,info,{},actions)}}
+        compose.onNodeWithText("Family").assertExists()
+        compose.onNodeWithText("Private chat").assertExists()
+        compose.onNodeWithTag("edit-group").performClick()
+        compose.onNodeWithTag("group-name").performTextReplacement("Friends")
+        compose.onNodeWithText("Cancel").performClick()
+        assertEquals(0,saved)
+        compose.onNodeWithTag("edit-group").performClick()
+        compose.onNodeWithTag("group-name").performTextReplacement("Friends")
+        compose.onNodeWithTag("group-about").performTextReplacement("Hello")
+        compose.onNodeWithTag("group-profile-save").performClick()
+        assertEquals(1,saved)
+        assertEquals("Friends",savedName)
+        assertEquals("Hello",savedAbout)
+        assertEquals(null,savedPhoto)
+    }
+
+    @Test fun memberAndPendingProfileStayReadOnly() {
+        val profileInfo=info(role=GroupRole.MEMBER).copy(profile=GroupProfileV1(name="Family"),
+            profileCapable=true,governanceHeadDigest=ByteArray(32))
+        compose.setContent {GhostCloakTheme {GroupInfoScreen(state,profileInfo,{},actions())}}
+        compose.onNodeWithText("Family").assertExists()
+        compose.onNodeWithTag("edit-group").assertDoesNotExist()
     }
 }

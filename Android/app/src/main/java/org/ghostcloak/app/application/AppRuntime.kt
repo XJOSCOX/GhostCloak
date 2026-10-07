@@ -270,6 +270,9 @@ class AppRuntime internal constructor(
     suspend fun retryGroupManagementSetup(id:String)=activeGroupNetwork().retryGroupManagementSetup(id)
     suspend fun setGroupPostingMode(id:String,mode:org.ghostcloak.messaging.GroupPostingModeV1)=
         activeGroupNetwork().setGroupPostingMode(id,mode)
+    suspend fun setGroupProfile(id:String,head:ByteArray,name:String,about:String,
+        photo:org.ghostcloak.messaging.GroupProfilePhotoRefV1?,bytes:ByteArray?)=
+        activeGroupNetwork().setGroupProfile(id,head,name,about,photo,bytes)
     suspend fun restrictGroupMember(id:String,memberId:String)=activeGroupNetwork().restrictGroupMember(id,memberId)
     suspend fun unrestrictGroupMember(id:String,memberId:String)=activeGroupNetwork().unrestrictGroupMember(id,memberId)
     suspend fun removeGroupMessage(id:String,logicalId:String)=activeGroupNetwork().removeGroupMessage(id,logicalId)

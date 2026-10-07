@@ -237,6 +237,10 @@ internal object GroupGovernanceV1 {
     val entry:GroupGovernancePolicyEntryV1,
     val applied:List<GroupGovernanceEntryAppliedAckV1> = emptyList(),
 )
+@Serializable internal data class PendingGovernanceProfileEntryV1(
+    val entry:GroupGovernanceProfileEntryV1,
+    val applied:List<GroupGovernanceEntryAppliedAckV1> = emptyList(),
+)
 
 /** Protected and bounded. Callers use EndpointRecords transactions for cross-record atomicity. */
 internal class GroupGovernanceStore(private val records:EndpointRecords) {
@@ -281,6 +285,16 @@ internal class GroupGovernanceStore(private val records:EndpointRecords) {
     fun policyOutstandingGroups()=records.transaction {
         records.keys("app/group/governance-v1/policy-entry/").take(64)
             .map {it.removePrefix("app/group/governance-v1/policy-entry/")}.filter(GroupIds::valid)
+    }
+    fun profileOutstanding(id:String)=read<PendingGovernanceProfileEntryV1>(id,"profile-entry",MAX_PENDING)
+    fun saveProfileOutstanding(value:PendingGovernanceProfileEntryV1) {
+        require(value.applied.size<=GroupStatements.MAX_MEMBERS)
+        write(value.entry.groupId,"profile-entry",value,MAX_PENDING)
+    }
+    fun clearProfileOutstanding(id:String)=records.transaction {records.remove(key(id,"profile-entry"))}
+    fun profileOutstandingGroups()=records.transaction {
+        records.keys("app/group/governance-v1/profile-entry/").take(64)
+            .map {it.removePrefix("app/group/governance-v1/profile-entry/")}.filter(GroupIds::valid)
     }
     fun clearSent(id:String,phase:String)=records.transaction {
         require((phase.startsWith("checkpoint-") && GroupIds.valid(phase.removePrefix("checkpoint-"))) ||

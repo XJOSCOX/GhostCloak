@@ -163,13 +163,14 @@ import org.ghostcloak.messaging.DownloadPreference
         return
     }
     Column(Modifier.fillMaxSize().imePadding().testTag("group-page")) {
-        PageHeader(if(invitation!=null) "Group invitation" else "Group conversation",
-            back=back,avatarName="Group",leading={
+        PageHeader(if(invitation!=null) "Group invitation" else group.info?.profile?.name ?: "Group",
+            back=back,avatarName=group.info?.profile?.name ?: "Group",
+            avatarPhoto=group.info?.verifiedPhoto,leading={
                 Column(Modifier.clickable(enabled=invitation==null && group.info!=null) {openInfo()}
                     .testTag("group-info-entry")) {
-                    Text(if(invitation!=null) "Group invitation" else "Group conversation",
+                    Text(if(invitation!=null) "Group invitation" else group.info?.profile?.name ?: "Group",
                         style=MaterialTheme.typography.titleMedium)
-                    Text(if(invitation!=null) "Not a member yet" else "${group.memberCount} of 5 members · Group info",
+                    Text(if(invitation!=null) "Not a member yet" else "${group.memberCount} members · Group info",
                         style=MaterialTheme.typography.labelSmall,
                         color=MaterialTheme.colorScheme.onSurfaceVariant)
                 }

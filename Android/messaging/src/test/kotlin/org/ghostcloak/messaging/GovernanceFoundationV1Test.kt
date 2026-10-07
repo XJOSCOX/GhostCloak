@@ -555,6 +555,21 @@ class GovernanceFoundationV1Test {
         println("A7 signed policy proof: ${NetworkCodec.encode(policyProof).size} bytes")
         println("A7 bootstrap with policy proof: $bootstrapSize bytes")
         assertTrue(bootstrapSize<=GroupControlCodec.MAX_BYTES)
+        val profile=GroupProfileV1(name="N".repeat(64),about="A".repeat(256),
+            photo=GroupProfilePhotoRefV1(digest=ByteArray(32),length=8192))
+        val unsignedProfile=GroupProfileCheckpointRulesV1.unsigned(checkpoint,profile)
+        val profileProof=unsignedProfile.copy(ownerSignature=sign(f.owner.key,
+            GroupProfileCheckpointRulesV1.ownerStatement(unsignedProfile)),
+            coordinatorSignature=sign(f.owner.key,
+                GroupProfileCheckpointRulesV1.coordinatorStatement(unsignedProfile)))
+        println("P13_7_PROOF profileProof=${NetworkCodec.encode(profileProof).size}")
+        assertTrue(GroupProfileCheckpointRulesV1.verify(profileProof,checkpoint,f.state))
+        val profileBootstrap=bootstrapWithPolicy.copy(groupProfileCheckpointV1=profileProof)
+        val profileBootstrapSize=GroupControlCodec.encode(profileBootstrap).size
+        val profileFrame=ConversationPayload.encodeGroup(profileBootstrap).size
+        println("P13_7_BOOTSTRAP old=$bootstrapSize profileProof=${NetworkCodec.encode(profileProof).size} new=$profileBootstrapSize frame=$profileFrame headroom=${GroupControlCodec.MAX_BYTES-profileBootstrapSize}")
+        assertTrue(profileBootstrapSize<=GroupControlCodec.MAX_BYTES)
+        assertTrue(profileFrame<=16_384)
     }
 
     @Test fun groupTextV2BindsExactHeadAndFitsEncryptedContentLimit() {

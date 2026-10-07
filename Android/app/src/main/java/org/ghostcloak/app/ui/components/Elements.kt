@@ -31,7 +31,8 @@ import org.ghostcloak.app.ui.theme.GhostPalette
     val bitmap=remember(digest) {
         photo?.let { bytes ->
             try {
-                org.ghostcloak.messaging.ProfileRules.photo(bytes)
+                if(!org.ghostcloak.app.attachments.ProfilePhotoPreparation.valid(bytes))
+                    return@let null
                 android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,
                     android.graphics.BitmapFactory.Options().apply {inSampleSize=2})?.takeIf {
                     it.width<=128 && it.height<=128

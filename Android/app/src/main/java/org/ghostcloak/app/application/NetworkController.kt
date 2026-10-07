@@ -41,7 +41,8 @@ class NetworkController(
         }
     }) }
     private val groups by lazy { GroupMembershipTransport(records,LocalRepository(records),engine,state,
-        GroupAuthorityResolver(LocalRepository(records),engine,client,records),outbox) }
+        GroupAuthorityResolver(LocalRepository(records),engine,client,records),outbox,
+        org.ghostcloak.app.attachments.ProfilePhotoPreparation::valid) }
     private val prekeyRefill by lazy { PrekeyRefill(records, engine, URI(origin).host, ::device,
         { client.call(it, reportTransientFailure=false) }, { canAutoSync && cooldown.remainingMillis == 0L },
         diagnostic = PrekeyDiagnostics::emit) }
@@ -315,6 +316,9 @@ class NetworkController(
     }
     suspend fun setGroupPostingMode(id:String,mode:org.ghostcloak.messaging.GroupPostingModeV1)=
         operation(NetworkOperation.SEND) {groups.setPostingModeGoverned(id,mode)}
+    suspend fun setGroupProfile(id:String,head:ByteArray,name:String,about:String,
+        photo:org.ghostcloak.messaging.GroupProfilePhotoRefV1?,bytes:ByteArray?)=
+        operation(NetworkOperation.SEND) {groups.setGroupProfileGoverned(id,head,name,about,photo,bytes)}
     suspend fun restrictGroupMember(id:String,memberId:String)=operation(NetworkOperation.SEND) {
         groups.restrictMemberGoverned(id,memberId)
     }

@@ -22,7 +22,10 @@ enum class GroupControlKind { INVITE, ACCEPT, INVITE_EXPIRED, STATE_UPDATE, RESY
     GOVERNANCE_POLICY_PROPOSAL_V1, GOVERNANCE_RESYNC_RESPONSE_V2,
     GOVERNANCE_CHANGE_PROPOSAL_V1, GOVERNANCE_CHANGE_SIGN_REQUEST_V1,
     GOVERNANCE_CHANGE_SIGN_RESPONSE_V1, GOVERNANCE_TRANSFER_REQUEST_V1,
-    GOVERNANCE_TRANSFER_DECISION_V1, GOVERNANCE_INVITE_DELEGATION_V1 }
+    GOVERNANCE_TRANSFER_DECISION_V1, GOVERNANCE_INVITE_DELEGATION_V1,
+    GOVERNANCE_PROFILE_PROPOSAL_V1, GOVERNANCE_PROFILE_ENTRY_V1,
+    GOVERNANCE_PROFILE_ENTRY_ACK_V1, GOVERNANCE_PROFILE_RESYNC_RESPONSE_V1,
+    GOVERNANCE_PROFILE_PHOTO_V1, GOVERNANCE_PROFILE_PHOTO_REQUEST_V1 }
 
 /** Only internal maintenance is permitted through a blocked canonical group relationship. */
 internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
@@ -44,7 +47,13 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     GroupControlKind.GOVERNANCE_POLICY_PROPOSAL_V1,GroupControlKind.GOVERNANCE_RESYNC_RESPONSE_V2,
     GroupControlKind.GOVERNANCE_CHANGE_PROPOSAL_V1,GroupControlKind.GOVERNANCE_CHANGE_SIGN_REQUEST_V1,
     GroupControlKind.GOVERNANCE_CHANGE_SIGN_RESPONSE_V1,GroupControlKind.GOVERNANCE_TRANSFER_REQUEST_V1,
-    GroupControlKind.GOVERNANCE_TRANSFER_DECISION_V1)
+    GroupControlKind.GOVERNANCE_TRANSFER_DECISION_V1,
+    GroupControlKind.GOVERNANCE_PROFILE_PROPOSAL_V1,
+    GroupControlKind.GOVERNANCE_PROFILE_ENTRY_V1,
+    GroupControlKind.GOVERNANCE_PROFILE_ENTRY_ACK_V1,
+    GroupControlKind.GOVERNANCE_PROFILE_RESYNC_RESPONSE_V1,
+    GroupControlKind.GOVERNANCE_PROFILE_PHOTO_V1,
+    GroupControlKind.GOVERNANCE_PROFILE_PHOTO_REQUEST_V1)
 
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable data class GroupControl(
@@ -82,10 +91,16 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governancePolicyEntryV1:GroupGovernancePolicyEntryV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceResyncResponseV2:GroupGovernanceResyncResponseV2?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governancePolicyCheckpointV1:GroupGovernancePolicyCheckpointV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val groupProfileCheckpointV1:GroupProfileCheckpointV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val groupProfileCheckpointCoordinatorSignatureV1:ByteArray?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governedChangeProposalV1:GroupGovernedChangeProposalV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val ownershipRequestV1:GroupOwnershipRequestV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val ownershipDecisionV1:GroupOwnershipDecisionV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val inviteDelegationV1:GroupInviteDelegationV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceProfileEntryV1:GroupGovernanceProfileEntryV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceProfileResyncV1:GroupGovernanceProfileResyncResponseV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val groupProfilePhotoV1:GroupProfilePhotoCompanionV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val groupProfilePhotoRequestV1:GroupProfilePhotoRequestV1?=null,
 ) {
     override fun toString() = "GroupControl(redacted)"
 }
@@ -98,7 +113,8 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceTextV2Advertised:Boolean=false,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val moderationAdvertised:Boolean=false,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val messageControlsAdvertised:Boolean=false,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) val mediaAdvertised:Boolean=false) {
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val mediaAdvertised:Boolean=false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val profileAdvertised:Boolean=false) {
     override fun toString() = "PendingGroupControl(redacted)"
 }
 
@@ -192,6 +208,14 @@ object GroupControlCodec {
             control.kind in setOf(GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1,
                 GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_RESPONSE_V1,
                 GroupControlKind.GOVERNANCE_BOOTSTRAP_V1))}
+        control.groupProfileCheckpointV1?.let {require(it.version==1 && it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupProfileCheckpointRulesV1.MAX_BYTES &&
+            control.kind in setOf(GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1,
+                GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_RESPONSE_V1,
+                GroupControlKind.GOVERNANCE_BOOTSTRAP_V1))}
+        control.groupProfileCheckpointCoordinatorSignatureV1?.let {require(
+            control.kind==GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1 &&
+                control.groupProfileCheckpointV1==null && it.size in 8..80)}
         control.governedChangeProposalV1?.let {require(it.version==1 && it.groupId==control.groupId &&
             it.activationDigest.size==32 && it.parentHeadDigest.size==32 &&
             it.parentStateDigest.size==32 && it.parentSequence in 0..GroupGovernanceJournalV1.MAX_ENTRIES.toLong() &&
@@ -208,6 +232,14 @@ object GroupControlCodec {
             NetworkCodec.encode(it).size<=MAX_BYTES)}
         control.inviteDelegationV1?.let {require(it.groupId==control.groupId &&
             GroupInviteDelegationRulesV1.valid(it))}
+        control.governanceProfileEntryV1?.let {require(it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupProfileRulesV1.MAX_ENTRY_BYTES)}
+        control.governanceProfileResyncV1?.let {require(it.groupId==control.groupId &&
+            GroupProfileRulesV1.validResync(it))}
+        control.groupProfilePhotoV1?.let {require(it.groupId==control.groupId &&
+            GroupProfileRulesV1.validCompanion(it))}
+        control.groupProfilePhotoRequestV1?.let {require(it.groupId==control.groupId &&
+            GroupProfileRulesV1.validPhotoRequest(it))}
         val governanceCount=listOf(control.governanceProposalV1,control.governanceAckV1,
             control.governanceCommitV1,control.governanceInstalledV1,control.governanceReadyV1,
             control.governanceEntryV1,control.governanceEntryAckV1,
@@ -215,7 +247,9 @@ object GroupControlCodec {
             control.governanceCheckpointV1,control.governancePolicyEntryV1,
             control.governanceResyncResponseV2,control.governedChangeProposalV1,
             control.ownershipRequestV1,control.ownershipDecisionV1,
-            control.inviteDelegationV1).count {it!=null}
+            control.inviteDelegationV1,control.governanceProfileEntryV1,
+            control.governanceProfileResyncV1,control.groupProfilePhotoV1,
+            control.groupProfilePhotoRequestV1).count {it!=null}
         val governanceKind=control.kind.name.startsWith("GOVERNANCE_")
         if(control.kind==GroupControlKind.GOVERNANCE_CAPABILITY_ECHO) require(governanceCount==0)
         else if(control.kind==GroupControlKind.GOVERNANCE_BOOTSTRAP_V1) require(governanceCount==2)
@@ -368,6 +402,12 @@ object GroupControlCodec {
             GroupControlKind.GOVERNANCE_TRANSFER_REQUEST_V1,
             GroupControlKind.GOVERNANCE_TRANSFER_DECISION_V1,
             GroupControlKind.GOVERNANCE_INVITE_DELEGATION_V1,
+            GroupControlKind.GOVERNANCE_PROFILE_PROPOSAL_V1,
+            GroupControlKind.GOVERNANCE_PROFILE_ENTRY_V1,
+            GroupControlKind.GOVERNANCE_PROFILE_ENTRY_ACK_V1,
+            GroupControlKind.GOVERNANCE_PROFILE_RESYNC_RESPONSE_V1,
+            GroupControlKind.GOVERNANCE_PROFILE_PHOTO_V1,
+            GroupControlKind.GOVERNANCE_PROFILE_PHOTO_REQUEST_V1,
             GroupControlKind.GOVERNANCE_CAPABILITY_ECHO -> {
                 require(v2Absent && baselineAbsent && control.inviteId==null && control.state==null &&
                     control.genesis==null && control.admission==null && control.invite==null &&
@@ -395,6 +435,14 @@ object GroupControlCodec {
                     GroupControlKind.GOVERNANCE_TRANSFER_REQUEST_V1 -> control.ownershipRequestV1!=null
                     GroupControlKind.GOVERNANCE_TRANSFER_DECISION_V1 -> control.ownershipDecisionV1!=null
                     GroupControlKind.GOVERNANCE_INVITE_DELEGATION_V1 -> control.inviteDelegationV1!=null
+                    GroupControlKind.GOVERNANCE_PROFILE_PROPOSAL_V1,
+                    GroupControlKind.GOVERNANCE_PROFILE_ENTRY_V1 -> control.governanceProfileEntryV1!=null
+                    GroupControlKind.GOVERNANCE_PROFILE_ENTRY_ACK_V1 -> control.governanceEntryAckV1!=null
+                    GroupControlKind.GOVERNANCE_PROFILE_RESYNC_RESPONSE_V1 ->
+                        control.governanceProfileResyncV1!=null
+                    GroupControlKind.GOVERNANCE_PROFILE_PHOTO_V1 -> control.groupProfilePhotoV1!=null
+                    GroupControlKind.GOVERNANCE_PROFILE_PHOTO_REQUEST_V1 ->
+                        control.groupProfilePhotoRequestV1!=null
                     GroupControlKind.GOVERNANCE_CAPABILITY_ECHO -> governanceCount==0
                     else -> false
                 })

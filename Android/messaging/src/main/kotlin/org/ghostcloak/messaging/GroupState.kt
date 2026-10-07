@@ -119,6 +119,10 @@ object GroupStatements {
         "GhostCloak.GroupGovernancePolicyCoordinator.v1",
         "GhostCloak.GroupGovernancePolicyCheckpointOwner.v1",
         "GhostCloak.GroupGovernancePolicyCheckpointCoordinator.v1",
+        "GhostCloak.GroupGovernanceProfileActor.v1",
+        "GhostCloak.GroupGovernanceProfileCoordinator.v1",
+        "GhostCloak.GroupGovernanceProfileCheckpointOwner.v1",
+        "GhostCloak.GroupGovernanceProfileCheckpointCoordinator.v1",
         "GhostCloak.GroupGovernanceInviteDelegation.v1")
     private val zero=ByteArray(32)
 

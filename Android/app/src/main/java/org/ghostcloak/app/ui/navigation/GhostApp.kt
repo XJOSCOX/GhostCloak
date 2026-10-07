@@ -175,7 +175,10 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             transferDecision={model.decideGroupOwnershipTransfer(id,it)},
                             leave={model.leaveGroup(id)},dissolve={model.dissolveGroup(id)},
                             invite={model.inviteToGroup(id,it)},
-                            openChat={nav.navigate("conversation/$it")}
+                            openChat={nav.navigate("conversation/$it")},
+                            saveProfile={head,name,about,photo,bytes ->
+                                model.setGroupProfile(id,head,name,about,photo,bytes)
+                            }
                         ))
                     }
                     composable("security/{id}") { backStack ->

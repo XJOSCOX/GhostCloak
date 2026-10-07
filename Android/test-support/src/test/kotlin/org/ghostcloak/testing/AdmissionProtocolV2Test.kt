@@ -114,6 +114,18 @@ class AdmissionProtocolV2Test {
         assertTrue(decoded.supportsGroups)
         assertTrue(decoded.supportsAdmissionV2)
         assertTrue(decoded.supportsGovernanceTextV2)
+        val profileFrame=ConversationPayload.encodeGroup(GroupControl(
+            kind=GroupControlKind.GOVERNANCE_CAPABILITY_ECHO,groupId=GroupIds.create()))
+        assertTrue(ConversationPayload.decode(profileFrame).supportsGroupProfile)
+        val profileCorrupt=profileFrame.copyOf()
+        val profileMarker="GC/group-profile-v1!".toByteArray()
+        val profileIndex=profileCorrupt.indices.firstOrNull {offset ->
+            offset+profileMarker.size<=profileCorrupt.size &&
+                profileCorrupt.copyOfRange(offset,offset+profileMarker.size)
+                    .contentEquals(profileMarker)
+        } ?: error("profile marker absent")
+        profileCorrupt[profileIndex]=0
+        assertFalse(ConversationPayload.decode(profileCorrupt).supportsGroupProfile)
         val corrupt=encoded.copyOf()
         val marker="GC/admission-v2!".toByteArray()
         val index=corrupt.indices.firstOrNull {offset ->

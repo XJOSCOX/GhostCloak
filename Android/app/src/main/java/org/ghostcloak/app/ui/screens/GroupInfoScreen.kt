@@ -11,6 +11,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.ghostcloak.app.attachments.PhotoPreparation
+import org.ghostcloak.app.attachments.ProfilePhotoPreparation
+import org.ghostcloak.app.ui.components.Avatar
+import org.ghostcloak.app.ui.privacy.noSensitiveCopyCut
+import java.security.MessageDigest
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.PageHeader
 import org.ghostcloak.app.ui.components.ErrorNotice
@@ -26,10 +37,11 @@ class GroupInfoActions(
     val transfer:(String)->Unit, val transferDecision:(Boolean)->Unit,
     val leave:()->Unit, val dissolve:()->Unit, val invite:(String)->Unit,
     val openChat:(String)->Unit,
+    val saveProfile:(ByteArray,String,String,GroupProfilePhotoRefV1?,ByteArray?)->Unit={_,_,_,_,_->},
 )
 
 private enum class MemberAction { RESTRICT, UNRESTRICT, REMOVE, PROMOTE, DEMOTE, TRANSFER }
-private enum class GroupInfoPage { OVERVIEW, MEMBER, CONFIRM_MEMBER, POSTING, INVITE, CONFIRM_LEAVE, CONFIRM_END }
+private enum class GroupInfoPage { OVERVIEW, MEMBER, CONFIRM_MEMBER, POSTING, INVITE, CONFIRM_LEAVE, CONFIRM_END, EDIT_PROFILE }
 private fun GroupInfoMember.label(state:AppState):String = if(isLocal) "You" else
     state.contacts.firstOrNull {it.contact.remoteDeviceId==deviceId &&
         !it.contact.request}?.contact?.visibleName ?: "Group member"
@@ -55,9 +67,41 @@ private fun GroupManagementStatus.description()=when(this) {
     var page by remember(info.groupId) {mutableStateOf(GroupInfoPage.OVERVIEW)}
     var selectedMemberId by remember(info.groupId) {mutableStateOf<String?>(null)}
     var selectedAction by remember(info.groupId) {mutableStateOf<MemberAction?>(null)}
+    var draftName by remember(info.groupId) {mutableStateOf("")}
+    var draftAbout by remember(info.groupId) {mutableStateOf("")}
+    var draftHead by remember(info.groupId) {mutableStateOf<ByteArray?>(null)}
+    var draftPhoto by remember(info.groupId) {mutableStateOf<ByteArray?>(null)}
+    var removePhoto by remember(info.groupId) {mutableStateOf(false)}
+    var photoError by remember(info.groupId) {mutableStateOf<String?>(null)}
+    val context=LocalContext.current
+    val scope=rememberCoroutineScope()
+    val picker=rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) {uri ->
+        if(uri!=null) scope.launch {
+            photoError=null
+            try {
+                val bytes=withContext(Dispatchers.IO) {
+                    val scratch=ProfilePhotoPreparation.newScratch(context.noBackupFilesDir)
+                    try {
+                        context.contentResolver.openInputStream(uri)?.use {input ->
+                            scratch.outputStream().use {output ->
+                                PhotoPreparation.boundedCopy(input,output,PhotoPreparation.SOURCE_CAP)
+                            }
+                        } ?: throw IllegalArgumentException("Unable to read photo")
+                        ProfilePhotoPreparation.prepare(scratch)
+                    } finally {scratch.delete()}
+                }
+                draftPhoto?.fill(0)
+                draftPhoto=bytes
+                removePhoto=false
+            } catch(_:Exception) {photoError="This photo could not be prepared for the group."}
+        }
+    }
     val busy=state.loading || info.pending
     val selected=info.members.firstOrNull {it.memberId==selectedMemberId}
     val goBack:()->Unit={
+        if(page==GroupInfoPage.EDIT_PROFILE) {
+            draftPhoto?.fill(0);draftPhoto=null;draftHead=null;photoError=null
+        }
         page=when(page) {
             GroupInfoPage.OVERVIEW -> {back();GroupInfoPage.OVERVIEW}
             GroupInfoPage.CONFIRM_MEMBER -> GroupInfoPage.MEMBER
@@ -65,6 +109,60 @@ private fun GroupManagementStatus.description()=when(this) {
         }
     }
     BackHandler(page!=GroupInfoPage.OVERVIEW) {goBack()}
+    if(page==GroupInfoPage.EDIT_PROFILE) {
+        val preview=if(removePhoto) null else draftPhoto ?: info.verifiedPhoto
+        val invalidName=draftName.trim().let {it.isEmpty() || it.encodeToByteArray().size>64 ||
+            it.any {c -> Character.isISOControl(c) || c=='\u061c' || c in '\u200e'..'\u200f' ||
+                c in '\u202a'..'\u202e' ||
+                c in '\u2066'..'\u2069'}} ||
+            draftName.any {Character.isISOControl(it)}
+        val invalidAbout=draftAbout.trim().let {it.encodeToByteArray().size>256 ||
+            it.any {c -> Character.isISOControl(c) || c=='\u061c' || c in '\u200e'..'\u200f' ||
+                c in '\u202a'..'\u202e' ||
+                c in '\u2066'..'\u2069'}} ||
+            draftAbout.any {Character.isISOControl(it)}
+        Column(Modifier.fillMaxSize().imePadding().testTag("group-profile-edit")) {
+            PageHeader("Edit group",back=goBack)
+            LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(
+                horizontal=GhostLayout.pageInset,vertical=16.dp),
+                verticalArrangement=Arrangement.spacedBy(16.dp)) {
+                item {Avatar(draftName.ifBlank {"Group"},Modifier.size(88.dp),preview)}
+                item {Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick={picker.launch("image/*")},enabled=!busy) {Text("Change photo")}
+                    if(preview!=null || info.profile.photo!=null) TextButton(onClick={
+                        draftPhoto?.fill(0);draftPhoto=null;removePhoto=true
+                    },enabled=!busy) {Text("Remove photo")}
+                }}
+                if(photoError!=null) item {Text(checkNotNull(photoError),
+                    color=MaterialTheme.colorScheme.error)}
+                item {OutlinedTextField(draftName,{draftName=it},label={Text("Group name")},
+                    isError=invalidName,singleLine=true,
+                    modifier=Modifier.fillMaxWidth().noSensitiveCopyCut().testTag("group-name"))}
+                item {OutlinedTextField(draftAbout,{draftAbout=it},label={Text("About")},
+                    isError=invalidAbout,maxLines=4,
+                    modifier=Modifier.fillMaxWidth().noSensitiveCopyCut().testTag("group-about"))}
+                if(info.governanceHeadDigest?.contentEquals(draftHead ?: byteArrayOf())!=true)
+                    item {Text("Group state changed. Go back and reopen Edit group to use the latest profile.",
+                        color=MaterialTheme.colorScheme.error)}
+                if(state.error!=null) item {ErrorNotice(state.error,important=state.errorImportant)}
+                item {Button(onClick={
+                    val bytes=draftPhoto?.copyOf()
+                    val ref=when {
+                        removePhoto -> null
+                        bytes!=null -> GroupProfilePhotoRefV1(digest=MessageDigest.getInstance("SHA-256")
+                            .digest(bytes),length=bytes.size)
+                        else -> info.profile.photo
+                    }
+                    actions.saveProfile(checkNotNull(draftHead).copyOf(),draftName,draftAbout,ref,bytes)
+                    draftPhoto?.fill(0);draftPhoto=null;draftHead=null;page=GroupInfoPage.OVERVIEW
+                },enabled=!busy && info.canEditProfile && !invalidName && !invalidAbout &&
+                    info.governanceHeadDigest?.contentEquals(draftHead ?: byteArrayOf())==true,
+                    modifier=Modifier.fillMaxWidth().testTag("group-profile-save")) {Text("Save")}}
+                item {OutlinedButton(onClick=goBack,modifier=Modifier.fillMaxWidth()) {Text("Cancel")}}
+            }
+        }
+        return
+    }
     val transferRequest=state.groupOwnershipRequests.firstOrNull {it.groupId==info.groupId}
     if(page!=GroupInfoPage.OVERVIEW) {
         GroupInfoDetailPage(state,info,page,selected,selectedAction,busy,goBack,
@@ -73,10 +171,26 @@ private fun GroupManagementStatus.description()=when(this) {
         return
     }
     Column(Modifier.fillMaxSize().imePadding().testTag("group-info")) {
-        PageHeader("Group info","${info.members.size} members",back,avatarName="Group")
+        PageHeader(info.profile.name,"${info.members.size} members",back,
+            avatarName=info.profile.name,avatarPhoto=info.verifiedPhoto)
         LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(
             horizontal=GhostLayout.pageInset,vertical=16.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
             if(state.error!=null) item {ErrorNotice(state.error,important=state.errorImportant)}
+            if(info.profile.about.isNotBlank()) item {
+                Text(info.profile.about,style=MaterialTheme.typography.bodyMedium,
+                    color=MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if(info.photoPending) item {Text("Updating group photo…",
+                color=MaterialTheme.colorScheme.onSurfaceVariant)}
+            if(info.canEditProfile) item {OutlinedButton(onClick={
+                draftName=info.profile.name;draftAbout=info.profile.about
+                draftHead=info.governanceHeadDigest?.copyOf()
+                draftPhoto?.fill(0);draftPhoto=null;removePhoto=false;photoError=null
+                page=GroupInfoPage.EDIT_PROFILE
+            },enabled=!busy,modifier=Modifier.fillMaxWidth().testTag("edit-group")) {Text("Edit group")}}
+            if(info.ready && !info.profileCapable) item {Text(
+                "Group profile editing becomes available after everyone updates Ghost Cloak.",
+                color=MaterialTheme.colorScheme.onSurfaceVariant)}
             item {
                 Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surface) {
                     Column(Modifier.fillMaxWidth().padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -193,6 +307,7 @@ private fun GroupManagementStatus.description()=when(this) {
         GroupInfoPage.INVITE -> "Add member"
         GroupInfoPage.CONFIRM_LEAVE -> "Leave group"
         GroupInfoPage.CONFIRM_END -> "End group"
+        GroupInfoPage.EDIT_PROFILE -> "Edit group"
         GroupInfoPage.OVERVIEW -> "Group info"
     }
     Column(Modifier.fillMaxSize().imePadding().testTag("group-info-detail")) {
@@ -278,6 +393,7 @@ private fun GroupManagementStatus.description()=when(this) {
                         }
                     }
                 }
+                GroupInfoPage.EDIT_PROFILE -> Unit
                 GroupInfoPage.INVITE -> {
                     val existing=info.members.map {it.deviceId}.toSet()
                     val candidates=state.contacts.filter {!it.contact.request && !it.contact.blocked &&

@@ -388,7 +388,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                         maintenance.supportsGovernanceV1,
                         maintenance.supportsGovernanceTextV2,
                         maintenance.supportsGroupModeration,
-                        maintenance.supportsGroupMessageControls,maintenance.supportsGroupMedia)
+                        maintenance.supportsGroupMessageControls,maintenance.supportsGroupMedia,
+                        maintenance.supportsGroupProfile)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
             }
             return@action
@@ -441,13 +442,14 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                     repository.queueGroupControl(contact.remoteDeviceId,envelope.envelopeId,
                         content.groupControl,content.supportsBaselineV1,content.supportsGovernanceV1,
                         content.supportsGovernanceTextV2,content.supportsGroupModeration,
-                        content.supportsGroupMessageControls,content.supportsGroupMedia)
+                        content.supportsGroupMessageControls,content.supportsGroupMedia,
+                        content.supportsGroupProfile)
                 } else if(content.groupControl.kind.blockSafeMaintenance() && scopedDigest!=null) {
                     repository.queueGroupScopedSystem(contact.remoteDeviceId,envelope.envelopeId,
                         content.groupControl,scopedDigest,content.supportsBaselineV1,
                         content.supportsGovernanceV1,content.supportsGovernanceTextV2,
                         content.supportsGroupModeration,content.supportsGroupMessageControls,
-                        content.supportsGroupMedia)
+                        content.supportsGroupMedia,content.supportsGroupProfile)
                 }
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit

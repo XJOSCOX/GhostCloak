@@ -268,3 +268,5 @@ filenames, and attachment keys remain E2EE application content. Group video,
 View Once, and media editing remain deferred. No backend deployment or DB
 migration is required. Controlled A/B/C testing follows the local validation
 plan after the build and regression gates pass.
+
+**P13.7 encrypted group profile (development validation):** Owner/Admin can edit a shared group name, About, and small photo from Group Info. A whole-profile Save is one signed action in the existing governance order. Photo bytes travel separately as bounded pairwise Signal evidence and appear only after matching the signed commitment. Offline members replay the signed journal and request the current photo; new members receive a current signed profile checkpoint and separate photo bytes. Existing group messaging continues when a member has not yet advertised the new profile capability. The backend receives no plaintext group profile or photo, and no DB migration is required. Controlled A/B/C UI and offline tests remain a development validation gate before release assurance.

@@ -305,6 +305,36 @@ class NetworkController(
     }
     fun groupInvitations()=groups.invitations()
     fun groupConversations()=groups.conversations()
+    fun groupInfo(id:String)=groups.groupInfo(id)
+    fun pendingGroupOwnershipRequests()=groups.pendingOwnershipRequests()
+    suspend fun beginGroupManagementSetup(id:String)=operation(NetworkOperation.SEND) {
+        groups.beginGroupManagementSetup(id)
+    }
+    suspend fun setGroupPostingMode(id:String,mode:org.ghostcloak.messaging.GroupPostingModeV1)=
+        operation(NetworkOperation.SEND) {groups.setPostingModeGoverned(id,mode)}
+    suspend fun restrictGroupMember(id:String,memberId:String)=operation(NetworkOperation.SEND) {
+        groups.restrictMemberGoverned(id,memberId)
+    }
+    suspend fun unrestrictGroupMember(id:String,memberId:String)=operation(NetworkOperation.SEND) {
+        groups.unrestrictMemberGoverned(id,memberId)
+    }
+    suspend fun removeGroupMember(id:String,memberId:String)=operation(NetworkOperation.SEND) {
+        groups.removeGroupMemberGoverned(id,memberId)
+    }
+    suspend fun promoteGroupMember(id:String,memberId:String)=operation(NetworkOperation.SEND) {
+        groups.promoteGroupMemberGoverned(id,memberId)
+    }
+    suspend fun demoteGroupAdmin(id:String,memberId:String)=operation(NetworkOperation.SEND) {
+        groups.demoteGroupAdminGoverned(id,memberId)
+    }
+    suspend fun requestGroupOwnershipTransfer(id:String,memberId:String)=operation(NetworkOperation.SEND) {
+        groups.requestOwnershipTransferGoverned(id,memberId)
+    }
+    suspend fun decideGroupOwnershipTransfer(id:String,accept:Boolean)=operation(NetworkOperation.SEND) {
+        groups.decideOwnershipTransfer(id,accept)
+    }
+    suspend fun leaveGroup(id:String)=operation(NetworkOperation.SEND) {groups.leaveGroupGoverned(id)}
+    suspend fun dissolveGroup(id:String)=operation(NetworkOperation.SEND) {groups.dissolveGroupGoverned(id)}
     suspend fun sendGroupText(id:String,text:String)=operation(NetworkOperation.SEND) {
         requireApi(state.registered(),"connect_required",401)
         groups.sendText(id,text)

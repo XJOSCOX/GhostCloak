@@ -1,4 +1,54 @@
-# P13.4A governance journal design review — management remains NO-GO
+# Group governance and management
+
+## P13.4B management surface
+
+Group Info projects member labels, roles, posting mode, pending status, and the
+bounded journal state without displaying account IDs, device IDs, keys, or
+digests. An existing group activates management only after the local owner or
+delegated coordinator explicitly starts A5 baseline setup and then A6
+activation. Every current member must participate; an offline member leaves
+setup pending. Ordinary pre-governance text groups remain usable without a
+reset. Forked, resyncing, and legacy-incomplete groups do not expose management
+actions; a legacy-incomplete group needs a new group for management.
+
+All member changes use the current signed `GroupTransition` and `GroupRules`,
+wrapped in one A6 governance entry with the exact head and pre-state. A
+non-coordinator actor signs the exact requested transition; the coordinator
+validates it, signs the transition, prepares the canonical entry, and returns
+that exact body for the actor's entry signature before co-signing and applying.
+Head changes invalidate the proposal. Protected local intent records survive
+restart; one outstanding entry serializes canonical mutations. Applied ACKs
+from the resulting member roster gate the next entry. A departing member gets
+best-effort signed terminal evidence without delaying that roster. No later
+group entry or text is addressed to the departed member. Unsent old-head text
+is retired. Already accepted ciphertext and existing local messages cannot be
+recalled.
+
+The owner may remove a Member or Admin, promote/demote (except the current
+coordinator), restrict either non-owner role, change posting mode, transfer
+ownership, and end the group. An Admin may remove or restrict a Member and
+change posting mode; an Admin cannot manage an Owner or another Admin, promote,
+demote, transfer, or end the group. Members cannot manage others; a Member or
+non-coordinator Admin may leave. The Owner must transfer ownership before
+leaving. The proposed new Owner must explicitly accept an encrypted request
+and sign the exact transfer statement; declining changes no state. The target
+becomes the sole Owner and the former Owner becomes an Admin only after the
+accepted canonical entry. Ending a group is terminal and preserves already
+stored history. It is not remote message deletion.
+
+An Owner or Admin who is not coordinator requests an invitation through an
+encrypted, actor-signed control bound to the exact group state and governance
+head. The coordinator checks the actor's current role, signature, target trust,
+capacity, and pending state before issuing the normal all-member-approved
+invitation. A bounded protected replay record prevents the same request from
+issuing another invitation. Members cannot request invitations.
+
+Group restriction is a canonical send policy. Local direct-contact Block is
+private and still suppresses blocked content without changing group membership
+or revealing Block to others. Local notification mute is not implemented in
+this phase. Admin deletion of another member's messages remains deferred to
+P13.4C. See [P134B_PHYSICAL_VALIDATION.md](P134B_PHYSICAL_VALIDATION.md)
+for the controlled A/B/C plan.
 
 ## P13.4A6.3 journal and admission implementation
 
@@ -8,7 +58,9 @@ An existing member requests an exact activation/sequence/head/state tuple from t
 
 Activated-group admission retains A3's all-current-member approval and target acceptance, then binds the certificate and invite to the exact governance head with a separately signed `GovernedAdmissionBindingV1`. A changed head invalidates the pending admission and requires a new proposal. The current owner and coordinator sign a candidate-specific `GroupGovernanceInviteeCheckpointV1`; a delegated coordinator must obtain the owner's signature. The coordinator issues the ADD as the next governance entry. Existing members verify and apply that entry normally, including their own A3 approval and candidate authority evidence. Only the exact new invitee can atomically install its join-point state, barrier/head, checkpoint, signed ADD and candidate authority. An existing member cannot use that checkpoint to skip earlier entries. The candidate receives no earlier governance entries or message plaintext. Five-member-result fixtures measured approximately 10.3 KiB for the invitation, 9.8 KiB for a checkpoint-sign request, 6.0 KiB for bootstrap, 0.6 KiB for the binding, and 1.2 KiB for the checkpoint.
 
-This is still an internal protocol. `GroupTextV2`, governance-bound posting policy, restrictions, moderation, and management UI remain disabled. A7 must bind message authorization to the accepted governance head and pass its own policy/restart/fork gates. The historical design sections below describe the earlier phases and are not a substitute for A6.3 validation.
+The sections below record the earlier foundation stages. Their then-current
+feature gates are historical; the P13.4B section above states the current
+management surface. Admin message moderation remains deferred.
 
 ## P13.4A6.2 activation and one ordered entry
 

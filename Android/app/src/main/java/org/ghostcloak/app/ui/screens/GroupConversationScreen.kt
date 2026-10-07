@@ -1,5 +1,6 @@
 package org.ghostcloak.app.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,7 +26,7 @@ import org.ghostcloak.identity.SessionLifecycle
 /** P13.3 deliberately exposes only text and sequential invitation management. */
 @Composable fun GroupConversationScreen(state:AppState,group:GroupMembershipTransport.Conversation,
     back:()->Unit,send:(String,()->Unit)->Unit,invite:(String)->Unit,openChat:(String)->Unit={},
-    acceptInvitation:(String)->Unit={},declineInvitation:(String)->Unit={}) {
+    acceptInvitation:(String)->Unit={},declineInvitation:(String)->Unit={},openInfo:()->Unit={}) {
     var draft by remember(group.groupId) {mutableStateOf("")}
     var inviting by remember {mutableStateOf(false)}
     val active=group.status==GroupLocalStatus.ACTIVE && group.memberCount>=2
@@ -40,11 +41,28 @@ import org.ghostcloak.identity.SessionLifecycle
         it.identity?.trustState!=IdentityTrustState.CHANGED}
     Column(Modifier.fillMaxSize().imePadding().testTag("group-page")) {
         PageHeader(if(invitation!=null) "Group invitation" else "Group conversation",
-            subtitle=if(invitation!=null) "Not a member yet" else "${group.memberCount} of 5 members",
-            back=back,avatarName="Group") {
-            if(group.status==GroupLocalStatus.ACTIVE && !group.invitationPending && group.memberCount<5 && candidates.isNotEmpty())
+            back=back,avatarName="Group",leading={
+                Column(Modifier.clickable(enabled=invitation==null && group.info!=null) {openInfo()}
+                    .testTag("group-info-entry")) {
+                    Text(if(invitation!=null) "Group invitation" else "Group conversation",
+                        style=MaterialTheme.typography.titleMedium)
+                    Text(if(invitation!=null) "Not a member yet" else "${group.memberCount} of 5 members · Group info",
+                        style=MaterialTheme.typography.labelSmall,
+                        color=MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }) {
+            if(group.info?.canInvite==true && candidates.isNotEmpty())
                 HeaderAction(Glyph.ADD_CONTACT,"Invite member") {inviting=true}
         }
+        if(group.info?.ready==true && state.groupOwnershipRequests.any {it.groupId==group.groupId})
+            Surface(color=MaterialTheme.colorScheme.surface) {
+                Row(Modifier.fillMaxWidth().padding(horizontal=GhostLayout.pageInset),
+                    verticalAlignment=Alignment.CenterVertically) {
+                    Text("Group ownership request",Modifier.weight(1f),
+                        style=MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick=openInfo) {Text("Review")}
+                }
+            }
         if(!active) Column(Modifier.padding(horizontal=GhostLayout.pageInset),
             verticalArrangement=Arrangement.spacedBy(GhostDimensions.compact)) {
             val statusText=when {

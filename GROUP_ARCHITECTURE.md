@@ -1,5 +1,23 @@
 # P12 — private group architecture design
 
+**P13.4B current management layer:** Group Info displays safe member labels,
+roles, posting permissions, and setup/sync/locked states. Existing groups
+enter A5/A6 setup only by an explicit coordinator action; all-member evidence
+remains mandatory. Governed REMOVE, PROMOTE, DEMOTE, LEAVE, TRANSFER_OWNER, and
+DISSOLVE share the existing signed ledger rules and retained journal order.
+Non-coordinator actions use a bounded exact-transition proposal and two-step
+entry co-sign flow. Ownership transfer additionally requires a separate
+encrypted target request and explicit signed acceptance. Owner/Admin/Member
+permissions are enforced by `GroupRules` and policy validation, independent of
+UI visibility. A blocked canonical member remains in the roster and receives
+only A4 maintenance as permitted; restriction is a group send policy, while
+Block is a local content decision. Removal and dissolution send best-effort
+terminal signed evidence before group-scoped authority closes. Local history
+remains readable after leave, removal, and dissolution. A full journal or
+missing governance chain disables new management, without reconstructing
+entries. Admin message moderation and local group notification mute remain
+deferred. The earlier phase status paragraphs below are historical.
+
 **P13.4A6 split:** A6.1 supplies the GroupLedger barrier and atomic GroupState/companion-head transition primitive. A6.2 adds authenticated per-member capability, owner/coordinator-signed activation proposal, every-member approval, complete COMMIT, per-member installed ACK, and a distributed READY certificate. A local barrier is not group READY. Its one signed governed timer-entry path applies through A6.1 and waits for signed application ACKs from every resulting member before another entry. Raw legacy state updates and state-only resync cannot advance an activated group. A6.3 adds retained signed entries, contiguous one-entry-at-a-time existing-member resync, governed A3 admission and a candidate-only signed join checkpoint. Older A6.2 heads with missing entries are locked as legacy-incomplete without deleting history; ordinary unactivated P13.3 groups are unchanged. A7 still must bind GroupTextV2 and policy to the verified governance head. P13.3 text-only groups remain in their existing mode until activation, and management UI stays disabled. See [GROUP_GOVERNANCE.md](GROUP_GOVERNANCE.md) for the A6.3 bounds and rollout rule.
 
 **P13.4A/A2–A5 governance prerequisites:** The separate canonical-journal design and its activation blockers are recorded in [GROUP_GOVERNANCE.md](GROUP_GOVERNANCE.md). A3 implements all-current-member approval of each new admission; A4 carries internal maintenance with a blocked canonical member without restoring direct contact or group text; A5 adds an all-current-member authority baseline for members already present. The admission-only checkpoint applies solely to a newly invited member, never to an existing member's missing chain. Both A3 and A5 historical authority have explicit prospective revision cutoffs and cannot authorize fresh actions. A6.2 supplies a bounded internal activation/entry path; P13.4 management UI remains NO-GO until governance resync, text-policy binding, and later gates pass.

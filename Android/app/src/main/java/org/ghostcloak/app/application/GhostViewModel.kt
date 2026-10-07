@@ -22,6 +22,7 @@ data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? =
     val blockedContacts:List<Contact> = emptyList(),
     val groupInvitations:List<GroupMembershipTransport.Invitation> = emptyList(),
     val groups:List<GroupMembershipTransport.Conversation> = emptyList(),
+    val groupOwnershipRequests:List<GroupOwnershipRequestV1> = emptyList(),
     val forkedGroupCount:Int=0,
     val reactionsAvailable:Boolean=false,
     val deleteAvailable:Boolean=false,
@@ -99,6 +100,7 @@ class GhostViewModel internal constructor(application: Application, private val 
                         blockedContacts=if(identity!=null) active.blockedContacts() else emptyList(),
                         groupInvitations=if(identity!=null) runtime.groupInvitations() else emptyList(),
                         groups=if(identity!=null) runtime.groupConversations() else emptyList(),
+                        groupOwnershipRequests=if(identity!=null) runtime.pendingGroupOwnershipRequests() else emptyList(),
                         forkedGroupCount=if(identity!=null) runtime.forkedGroupCount() else 0,
                         cachedAttachments = runtime.cachedAttachments(selected),
                         disappearingPolicies = if (identity != null) active.policies() else emptyMap(),
@@ -186,6 +188,36 @@ class GhostViewModel internal constructor(application: Application, private val 
     }
     fun acceptGroupInvite(id:String) = run { runtime.acceptGroupInvite(id); pollingWake.trySend(Unit); null }
     fun declineGroupInvite(id:String) = run { runtime.declineGroupInvite(id); null }
+    private fun groupManagementAction(block:suspend ()->Unit)=run {
+        block();pollingWake.trySend(Unit);null
+    }
+    fun beginGroupManagementSetup(id:String)=groupManagementAction {runtime.beginGroupManagementSetup(id)}
+    fun setGroupPostingMode(id:String,mode:GroupPostingModeV1)=groupManagementAction {
+        runtime.setGroupPostingMode(id,mode)
+    }
+    fun restrictGroupMember(id:String,memberId:String)=groupManagementAction {
+        runtime.restrictGroupMember(id,memberId)
+    }
+    fun unrestrictGroupMember(id:String,memberId:String)=groupManagementAction {
+        runtime.unrestrictGroupMember(id,memberId)
+    }
+    fun removeGroupMember(id:String,memberId:String)=groupManagementAction {
+        runtime.removeGroupMember(id,memberId)
+    }
+    fun promoteGroupMember(id:String,memberId:String)=groupManagementAction {
+        runtime.promoteGroupMember(id,memberId)
+    }
+    fun demoteGroupAdmin(id:String,memberId:String)=groupManagementAction {
+        runtime.demoteGroupAdmin(id,memberId)
+    }
+    fun requestGroupOwnershipTransfer(id:String,memberId:String)=groupManagementAction {
+        runtime.requestGroupOwnershipTransfer(id,memberId)
+    }
+    fun decideGroupOwnershipTransfer(id:String,accept:Boolean)=groupManagementAction {
+        runtime.decideGroupOwnershipTransfer(id,accept)
+    }
+    fun leaveGroup(id:String)=groupManagementAction {runtime.leaveGroup(id)}
+    fun dissolveGroup(id:String)=groupManagementAction {runtime.dissolveGroup(id)}
     fun deleteRequest(id: String) = run { it.deleteRequest(id); null }
     fun refresh() = run()
     fun connectNetwork(): kotlinx.coroutines.Job {
@@ -343,6 +375,12 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun startDemo() = run { runtime.startDemo(); selected = null; safetyNumberSelection.clear(); mutable.value = mutable.value.copy(card = "", safetyNumber = null); null }
     fun leaveDemo() = run { runtime.leaveDemo(); selected = null; safetyNumberSelection.clear(); mutable.value = mutable.value.copy(card = "", safetyNumber = null); null }
     private fun networkError(error: org.ghostcloak.protocol.ApiFailure) = when {
+        error.code == "group_governance_entry_pending" -> "A group update is already pending."
+        error.code == "group_policy_denied" -> "You don't have permission to make that group change."
+        error.code == "group_governance_resync" -> "Group security state is still syncing."
+        error.code == "group_governance_legacy_incomplete" ->
+            "This group uses an earlier development version of group management. Create a new group to use management features."
+        error.code == "group_transfer_stale" -> "The ownership request expired after a group change. Ask for a new request."
         error.code == "recovery_required" -> "Ghost Cloak found an existing device identity but its account connection needs to be restored."
         error.code == "recovery_failed" -> "Account recovery could not be verified."
         error.code == "legacy_auth_requires_reset" -> "This identity uses an older account credential. Your keys were preserved; follow the documented development migration."

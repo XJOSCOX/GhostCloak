@@ -260,6 +260,26 @@ class AppRuntime internal constructor(
         if(networkConfigured && !inDemo) network?.groupInvitations().orEmpty() else emptyList()
     fun groupConversations():List<org.ghostcloak.messaging.GroupMembershipTransport.Conversation> =
         if(networkConfigured && !inDemo) network?.groupConversations().orEmpty() else emptyList()
+    fun pendingGroupOwnershipRequests():List<org.ghostcloak.messaging.GroupOwnershipRequestV1> =
+        if(networkConfigured && !inDemo) network?.pendingGroupOwnershipRequests().orEmpty() else emptyList()
+    private fun activeGroupNetwork():NetworkController {
+        check(networkConfigured && !inDemo)
+        return checkNotNull(network)
+    }
+    suspend fun beginGroupManagementSetup(id:String)=activeGroupNetwork().beginGroupManagementSetup(id)
+    suspend fun setGroupPostingMode(id:String,mode:org.ghostcloak.messaging.GroupPostingModeV1)=
+        activeGroupNetwork().setGroupPostingMode(id,mode)
+    suspend fun restrictGroupMember(id:String,memberId:String)=activeGroupNetwork().restrictGroupMember(id,memberId)
+    suspend fun unrestrictGroupMember(id:String,memberId:String)=activeGroupNetwork().unrestrictGroupMember(id,memberId)
+    suspend fun removeGroupMember(id:String,memberId:String)=activeGroupNetwork().removeGroupMember(id,memberId)
+    suspend fun promoteGroupMember(id:String,memberId:String)=activeGroupNetwork().promoteGroupMember(id,memberId)
+    suspend fun demoteGroupAdmin(id:String,memberId:String)=activeGroupNetwork().demoteGroupAdmin(id,memberId)
+    suspend fun requestGroupOwnershipTransfer(id:String,memberId:String)=
+        activeGroupNetwork().requestGroupOwnershipTransfer(id,memberId)
+    suspend fun decideGroupOwnershipTransfer(id:String,accept:Boolean)=
+        activeGroupNetwork().decideGroupOwnershipTransfer(id,accept)
+    suspend fun leaveGroup(id:String)=activeGroupNetwork().leaveGroup(id)
+    suspend fun dissolveGroup(id:String)=activeGroupNetwork().dissolveGroup(id)
     suspend fun sendGroupText(id:String,text:String):String {
         check(networkConfigured && !inDemo)
         return network!!.sendGroupText(id,text)

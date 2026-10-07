@@ -151,7 +151,25 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             model::acceptGroupInvite,{inviteId ->
                                 model.declineGroupInvite(inviteId)
                                 nav.popBackStack()
-                            })
+                            },{nav.navigate("group-info/$id")})
+                    }
+                    composable("group-info/{id}") { backStack ->
+                        val id=backStack.arguments?.getString("id") ?: return@composable
+                        val info=state.groups.firstOrNull {it.groupId==id}?.info ?: return@composable
+                        GroupInfoScreen(state,info,{nav.popBackStack()},GroupInfoActions(
+                            setup={model.beginGroupManagementSetup(id)},
+                            posting={model.setGroupPostingMode(id,it)},
+                            restrict={model.restrictGroupMember(id,it)},
+                            unrestrict={model.unrestrictGroupMember(id,it)},
+                            remove={model.removeGroupMember(id,it)},
+                            promote={model.promoteGroupMember(id,it)},
+                            demote={model.demoteGroupAdmin(id,it)},
+                            transfer={model.requestGroupOwnershipTransfer(id,it)},
+                            transferDecision={model.decideGroupOwnershipTransfer(id,it)},
+                            leave={model.leaveGroup(id)},dissolve={model.dissolveGroup(id)},
+                            invite={model.inviteToGroup(id,it)},
+                            openChat={nav.navigate("conversation/$it")}
+                        ))
                     }
                     composable("security/{id}") { backStack ->
                         val id = backStack.arguments?.getString("id") ?: return@composable

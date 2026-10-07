@@ -97,6 +97,9 @@ class GroupMembershipTransport(
     private fun allMessageControlPeers(state:GroupState,localId:String)=state.members.all {
         it.memberId==localId || repository.groupMessageControlsPeer(it.deviceId)
     }
+    private fun allMediaPeers(state:GroupState,localId:String)=state.members.all {
+        it.memberId==localId || repository.groupMediaPeer(it.deviceId)
+    }
     /** Only the coordinator retires a fully acknowledged prior entry before the next mutation. */
     private fun retireCompletedGovernanceEntry(groupId:String,state:GroupState,localId:String) {
         if(localId!=state.coordinatorId) return
@@ -1945,7 +1948,7 @@ class GroupMembershipTransport(
             barrier==null || allTextV2Peers(current,localId),
             records.transaction {records.read("app/group/baseline-v1/start-intent/$groupId")!=null},
             allModerationPeers(current,localId),
-            allMessageControlPeers(current,localId))
+            allMessageControlPeers(current,localId),allMediaPeers(current,localId))
     }
     suspend fun beginGroupManagementSetup(groupId:String) {
         val info=groupInfo(groupId) ?: throw ApiFailure(409,"group_unavailable")
@@ -2060,6 +2063,40 @@ class GroupMembershipTransport(
                     policyDigest=binding.policyDigest,text=text,replyToLogicalId=replyToLogicalId))
                 chats.createV2(message,binding)
             }
+            logicalId
+        }
+    }
+    /** The caller must have completed the single encrypted blob upload before this transaction. */
+    suspend fun sendMedia(groupId:String,descriptor:org.ghostcloak.attachments.AttachmentDescriptor,
+        caption:String=""):String = textMutex.withLock {
+        val before=state(groupId) ?: throw ApiFailure(409,"group_unavailable")
+        val local=localMember(groupId) ?: throw ApiFailure(409,"group_unavailable")
+        trusted(listOf(before.members.singleOrNull {it.memberId==local}
+            ?: throw ApiFailure(409,"group_unavailable")))
+        records.transaction {
+            val localId=localMember(groupId) ?: throw ApiFailure(409,"group_unavailable")
+            val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+            val current=ledger.state(groupId) ?: throw ApiFailure(409,"group_unavailable")
+            val head=ledger.governanceHead(groupId) ?: throw ApiFailure(409,"group_media_unavailable")
+            val policy=ledger.governancePolicy(groupId) ?: throw ApiFailure(409,"group_media_unavailable")
+            if(ledger.status(groupId)!=GroupLocalStatus.ACTIVE || current.lifecycle!=GroupLifecycle.ACTIVE ||
+                current.members.size<2 || ledger.governanceJournalStatus(groupId)!=GovernanceJournalStatus.COMPLETE ||
+                (governanceV1.ready(groupId)==null && governedAdmission.join(groupId)==null) ||
+                governanceJournal.marker(groupId)!=null || groupInfo(groupId)?.pending==true ||
+                !allMediaPeers(current,localId) || !GroupGovernancePolicyRulesV1.canSend(policy,current,localId))
+                throw ApiFailure(409,"group_media_unavailable")
+            val logicalId=GroupIds.create()
+            val value=GroupMediaV1(groupId=groupId,epoch=current.epoch,
+                senderMemberId=localId,logicalId=logicalId,
+                governanceActivationDigest=head.activationDigest,governanceSequence=head.sequence,
+                governanceHeadDigest=head.headDigest,
+                policyDigest=GroupGovernancePolicyRulesV1.digest(head.activationDigest,policy),
+                descriptor=descriptor,kind=descriptor.kind,caption=caption)
+            GroupMediaCodecV1.encode(value).fill(0)
+            chats.createMedia(GroupChatMessage(groupId,logicalId,current.epoch,localId,true,"",
+                chats.nextOrder(),current.members.filter {it.memberId!=localId}.map {GroupRecipient(it.deviceId)},
+                mediaKind=descriptor.kind,mediaCaption=caption,mediaFilename=descriptor.filename,
+                mediaBytes=descriptor.plaintextLength,mediaDurationMillis=descriptor.durationMillis),value)
             logicalId
         }
     }
@@ -2628,6 +2665,13 @@ class GroupMembershipTransport(
                         authority.matchesCurrentGroupMember(current.groupId,peer))
                         repository.groupMessageControlsPeer(pending.senderDeviceId,true)
                 }
+                if(pending.mediaAdvertised) {
+                    val current=state(pending.control.groupId)
+                    val peer=current?.members?.singleOrNull {it.deviceId==pending.senderDeviceId}
+                    if(current!=null && peer!=null &&
+                        authority.matchesCurrentGroupMember(current.groupId,peer))
+                        repository.groupMediaPeer(pending.senderDeviceId,true)
+                }
                 when(pending.control.kind) {
                     GroupControlKind.INVITE -> receiveInvite(pending.senderDeviceId,pending.control)
                     GroupControlKind.ACCEPT -> receiveAcceptance(pending.senderDeviceId,pending.control)
@@ -2703,6 +2747,7 @@ class GroupMembershipTransport(
         retryMarkedGovernanceResync()
         processPendingMessageControls()
         processPendingTexts()
+        processPendingMedia()
         flushTexts()
         flushMessageControls()
     }
@@ -2996,6 +3041,64 @@ class GroupMembershipTransport(
             chats.accept(envelopeId,pending)
         }
     }
+    private suspend fun processPendingMedia() {
+        for((envelopeId,pending) in chats.pendingMedia()) {
+            val value=pending.media
+            fun discard()=chats.discardPendingMedia(envelopeId)
+            val localId=localMember(value.groupId)
+            if(localId==null) {discard();continue}
+            val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+            val current=ledger.state(value.groupId)
+            val head=ledger.governanceHead(value.groupId)
+            val policy=ledger.governancePolicy(value.groupId)
+            if(current==null || ledger.status(value.groupId)!=GroupLocalStatus.ACTIVE) {
+                discard();continue
+            }
+            if(ledger.governanceBarrier(value.groupId)==null || head==null || policy==null ||
+                ledger.governanceJournalStatus(value.groupId)!=GovernanceJournalStatus.COMPLETE ||
+                (governanceV1.ready(value.groupId)==null && governedAdmission.join(value.groupId)==null))
+                continue
+            if(!allMediaPeers(current,localId)) {probeMissingGovernancePeers(current,localId);continue}
+            if(!MessageDigest.isEqual(value.governanceActivationDigest,head.activationDigest)) {
+                discard();continue
+            }
+            if(value.governanceSequence>head.sequence) {
+                runCatching {requestGovernanceResync(value.groupId)}
+                continue
+            }
+            if(governanceJournal.marker(value.groupId)!=null) continue
+            if(value.governanceSequence!=head.sequence || value.epoch!=current.epoch ||
+                !MessageDigest.isEqual(value.governanceHeadDigest,head.headDigest) ||
+                !MessageDigest.isEqual(value.policyDigest,
+                    GroupGovernancePolicyRulesV1.digest(head.activationDigest,policy)) ||
+                !GroupGovernancePolicyRulesV1.canSend(policy,current,value.senderMemberId)) {
+                discard();continue
+            }
+            val sender=current.members.singleOrNull {it.memberId==value.senderMemberId}
+            if(sender==null || sender.deviceId!=pending.senderDeviceId ||
+                !repository.isActiveContact(sender.deviceId)) {discard();continue}
+            try {trusted(listOf(sender))}
+            catch(e:CancellationException) {throw e}
+            catch(_:ApiFailure) {continue}
+            records.transaction {
+                val fresh=ledger.state(value.groupId)
+                val freshHead=ledger.governanceHead(value.groupId)
+                val freshPolicy=ledger.governancePolicy(value.groupId)
+                if(fresh!=null && freshHead!=null && freshPolicy!=null &&
+                    ledger.status(value.groupId)==GroupLocalStatus.ACTIVE &&
+                    governanceJournal.marker(value.groupId)==null &&
+                    value.governanceSequence==freshHead.sequence && value.epoch==fresh.epoch &&
+                    MessageDigest.isEqual(value.governanceActivationDigest,freshHead.activationDigest) &&
+                    MessageDigest.isEqual(value.governanceHeadDigest,freshHead.headDigest) &&
+                    MessageDigest.isEqual(value.policyDigest,
+                        GroupGovernancePolicyRulesV1.digest(freshHead.activationDigest,freshPolicy)) &&
+                    fresh.members.singleOrNull {it.memberId==value.senderMemberId}?.deviceId==pending.senderDeviceId &&
+                    repository.isActiveContact(pending.senderDeviceId) &&
+                    GroupGovernancePolicyRulesV1.canSend(freshPolicy,fresh,value.senderMemberId))
+                    chats.acceptMedia(envelopeId,pending)
+            }
+        }
+    }
     private suspend fun flushMessageControls() {
         var budget=8
         for(item in messageControls.outgoing()) {
@@ -3076,11 +3179,14 @@ class GroupMembershipTransport(
             }
             for(message in chats.messages(groupId).filter {it.outgoing}) {
                 if(budget<=0) break
+                if(message.moderationState!=GroupModerationState.NONE) continue
                 // Epoch changes never reinterpret queued old-epoch text as current content.
                 if(message.epoch!=current.epoch) {chats.cancelStale(groupId,current.epoch);continue}
                 val binding=chats.binding(groupId,message.logicalId)
                 if(barrier!=null && (head==null || policy==null ||
                     binding?.matches(head,policy)!=true)) continue
+                if(message.mediaKind!=null && (binding==null ||
+                    !allMediaPeers(current,localId))) continue
                 if(message.replyToLogicalId!=null && (binding==null ||
                     !allMessageControlPeers(current,localId))) continue
                 for(recipient in message.recipients) {
@@ -3097,7 +3203,17 @@ class GroupMembershipTransport(
                         val member=current.members.single {it.deviceId==recipient.deviceId}
                         try {trusted(listOf(member))} catch(e:CancellationException) {throw e}
                         catch(_:ApiFailure) {continue}
-                        val payload=if(binding==null) ConversationPayload.encodeGroupText(GroupText(
+                        val payload=if(message.mediaKind!=null) {
+                            val mediaDescriptor=repository.attachment(groupId,message.logicalId)
+                                ?: throw ApiFailure(409,"group_media_unavailable")
+                            ConversationPayload.encodeGroupMedia(GroupMediaV1(groupId=groupId,
+                                epoch=message.epoch,senderMemberId=localId,logicalId=message.logicalId,
+                                governanceActivationDigest=binding!!.activationDigest,
+                                governanceSequence=binding.sequence,
+                                governanceHeadDigest=binding.headDigest,policyDigest=binding.policyDigest,
+                                descriptor=mediaDescriptor,kind=message.mediaKind,
+                                caption=message.mediaCaption.orEmpty()))
+                        } else if(binding==null) ConversationPayload.encodeGroupText(GroupText(
                             groupId=groupId,epoch=message.epoch,senderMemberId=localId,
                             logicalId=message.logicalId,text=message.text)) else if(message.replyToLogicalId!=null)
                             ConversationPayload.encodeGroupTextV3(GroupTextV3(groupId=groupId,

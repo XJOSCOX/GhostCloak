@@ -345,6 +345,11 @@ class NetworkController(
         requireApi(state.registered(),"connect_required",401)
         groups.sendText(id,text,replyTo)
     }
+    suspend fun sendGroupMedia(id:String,descriptor:org.ghostcloak.attachments.AttachmentDescriptor,
+        caption:String)=operation(NetworkOperation.SEND) {
+        requireApi(state.registered(),"connect_required",401)
+        groups.sendMedia(id,descriptor,caption)
+    }
     suspend fun reactGroupMessage(id:String,target:String,emoji:String?)=operation(NetworkOperation.SEND) {
         groups.react(id,target,emoji)
     }

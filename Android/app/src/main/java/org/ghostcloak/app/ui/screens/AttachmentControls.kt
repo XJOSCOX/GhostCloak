@@ -27,7 +27,8 @@ import org.ghostcloak.messaging.ConversationPayload
 import org.ghostcloak.attachments.AttachmentKind
 import org.ghostcloak.app.attachments.VoiceMask
 
-@Composable fun AttachmentComposer(conversation: String, enabled: Boolean, refresh: ()->Unit) {
+@Composable fun AttachmentComposer(conversation: String, enabled: Boolean, group:Boolean=false,
+    showButton:Boolean=true,refresh: ()->Unit) {
     val context=LocalContext.current
     val owner=(context.applicationContext as GhostApplication).media
     val state by owner.state.collectAsState()
@@ -39,23 +40,23 @@ import org.ghostcloak.app.attachments.VoiceMask
     val scope=rememberCoroutineScope()
     val pickerLifecycle=LocalLifecycleOwner.current.lifecycle
     val photo=rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if(uri!=null) scope.launch { awaitAttachmentHost(pickerLifecycle) { owner.select(conversation,uri,true) } }
+        if(uri!=null) scope.launch { awaitAttachmentHost(pickerLifecycle) { owner.select(conversation,uri,true,group) } }
     }
     val document=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if(uri!=null) scope.launch { awaitAttachmentHost(pickerLifecycle) { owner.select(conversation,uri,false) } }
+        if(uri!=null) scope.launch { awaitAttachmentHost(pickerLifecycle) { owner.select(conversation,uri,false,group) } }
     }
     val microphone=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if(granted) owner.startVoiceRecording(conversation) else microphoneDenied=true
+        if(granted) owner.startVoiceRecording(conversation,group) else microphoneDenied=true
     }
     DisposableEffect(conversation) { onDispose { owner.clear() } }
-    Box {
+    if(showButton) Box {
         IconButton(onClick={menu=true},enabled=enabled) { AppIcon(Glyph.ATTACHMENT,"Attach photo or document") }
         DropdownMenu(expanded=menu,onDismissRequest={menu=false}) {
             DropdownMenuItem(text={Text("Photo")},leadingIcon={AppIcon(Glyph.GALLERY)},onClick={menu=false;photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))})
             DropdownMenuItem(text={Text("Document")},leadingIcon={AppIcon(Glyph.ATTACHMENT)},onClick={menu=false;document.launch(arrayOf("*/*"))})
             DropdownMenuItem(text={Text("Voice note")},leadingIcon={AppIcon(Glyph.MICROPHONE)},onClick={menu=false;
                 if(ContextCompat.checkSelfPermission(context,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED)
-                    owner.startVoiceRecording(conversation) else explainMicrophone=true})
+                    owner.startVoiceRecording(conversation,group) else explainMicrophone=true})
         }
     }
     if(explainMicrophone) AlertDialog(onDismissRequest={explainMicrophone=false},title={Text("Record a voice note?")},
@@ -89,12 +90,12 @@ import org.ghostcloak.app.attachments.VoiceMask
                 TextButton(onClick=owner::toggleVoicePreview,enabled=enabled && !state.busy) {
                     Text(if(state.voicePreviewPlaying) "Stop preview" else "Preview")
                 }
-                TextButton(onClick={owner.startVoiceRecording(conversation)},enabled=enabled && !state.busy) {Text("Record again")}
+                TextButton(onClick={owner.startVoiceRecording(conversation,group)},enabled=enabled && !state.busy) {Text("Record again")}
             }
             state.preview?.let { Image(it.asImageBitmap(),"Photo preview",Modifier.fillMaxWidth().heightIn(max=GhostDimensions.previewWidth)) }
             if(state.filename.isNotEmpty()) Text(state.filename)
             if(state.bytes>0) Text("${(state.bytes+1023)/1024} KiB",style=MaterialTheme.typography.bodySmall)
-            if(state.photo && state.message==null && state.ready && !state.sending && state.caption.isBlank())
+            if(!group && state.photo && state.message==null && state.ready && !state.sending && state.caption.isBlank())
                 TextButton(onClick=owner::toggleViewOnce,enabled=enabled && !state.busy) {
                     Text(if(state.viewOnce) "① View Once on" else "① View Once")
                 }
@@ -112,7 +113,7 @@ import org.ghostcloak.app.attachments.VoiceMask
         confirmButton={
             if(state.voice && state.recording) TextButton(onClick=owner::stopVoiceRecording) {Text("Stop recording")}
             else if(state.voice && state.message==null && state.error!=null && !state.uploadPrepared)
-                TextButton(onClick={owner.startVoiceRecording(conversation)},enabled=enabled) {Text("Record again")}
+                TextButton(onClick={owner.startVoiceRecording(conversation,group)},enabled=enabled) {Text("Record again")}
             else if(state.voice && state.message==null)
                 TextButton(onClick={owner.send(refresh)},enabled=enabled && !state.busy && state.ready &&
                     runCatching {ConversationPayload.validateCaption(state.caption)}.isSuccess) {Text("Send")}

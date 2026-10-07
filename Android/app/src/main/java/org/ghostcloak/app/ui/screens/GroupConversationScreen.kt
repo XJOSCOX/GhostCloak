@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import org.ghostcloak.app.application.AppState
@@ -25,6 +26,10 @@ import org.ghostcloak.messaging.GroupTextCodec
 import org.ghostcloak.messaging.GroupModerationState
 import org.ghostcloak.identity.IdentityTrustState
 import org.ghostcloak.identity.SessionLifecycle
+import org.ghostcloak.attachments.AttachmentKind
+import org.ghostcloak.app.application.GhostApplication
+import org.ghostcloak.messaging.GroupChatMessage
+import org.ghostcloak.messaging.DownloadPreference
 
 /** P13.3 deliberately exposes only text and sequential invitation management. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,7 +40,7 @@ import org.ghostcloak.identity.SessionLifecycle
     sendReply:(String,String,()->Unit)->Unit={_,_,_->},
     react:(String,String?)->Unit={_,_->},
     editOwn:(String,String,()->Unit)->Unit={_,_,_->},
-    deleteOwn:(String)->Unit={}) {
+    deleteOwn:(String)->Unit={},refreshMedia:()->Unit={}) {
     var draft by remember(group.groupId) {mutableStateOf("")}
     var inviting by remember {mutableStateOf(false)}
     var selectedMessage by remember(group.groupId) {mutableStateOf<String?>(null)}
@@ -66,17 +71,19 @@ import org.ghostcloak.identity.SessionLifecycle
                     }) {Text(emoji)}
                 }
             }
-            if(canUseControls && target.outgoing &&
+            if(canUseControls && target.outgoing && target.mediaKind==null &&
                 target.recipients.all {it.state==GroupRecipientState.SENT}) {
                 TextButton(onClick={editing=target.logicalId;replyingTo=null;draft=target.text
                     selectedMessage=null},modifier=Modifier.fillMaxWidth().testTag("group-edit-action")) {
                     Text("Edit")
                 }
+            }
+            if(canUseControls && target.outgoing &&
+                target.recipients.all {it.state==GroupRecipientState.SENT})
                 TextButton(onClick={confirmingSenderDelete=target.logicalId;selectedMessage=null},
                     modifier=Modifier.fillMaxWidth().testTag("group-delete-action")) {
                     Text("Delete for everyone")
                 }
-            }
             if(canModerate) TextButton(onClick={
                 confirmingRemoval=target.logicalId;selectedMessage=null
             },modifier=Modifier.fillMaxWidth().testTag("group-remove-message-action")) {
@@ -233,7 +240,10 @@ import org.ghostcloak.identity.SessionLifecycle
                                 val preview=when(original?.moderationState) {
                                     GroupModerationState.REMOVED_BY_ADMIN -> "Message removed by an admin"
                                     GroupModerationState.DELETED_BY_SENDER -> "Original message deleted"
-                                    GroupModerationState.NONE -> original.text.take(80)
+                                    GroupModerationState.NONE -> if(original.mediaKind!=null)
+                                        groupMediaLabel(original) + original.mediaCaption?.takeIf {it.isNotBlank()}
+                                            ?.let {": ${it.take(60)}"}.orEmpty()
+                                        else original.text.take(80)
                                     null -> "Original message unavailable"
                                 }
                                 val label=if(original?.outgoing==true) "You" else
@@ -247,7 +257,9 @@ import org.ghostcloak.identity.SessionLifecycle
                                     color=if(message.outgoing) MaterialTheme.colorScheme.onPrimary
                                     else MaterialTheme.colorScheme.onSurfaceVariant)
                             }
-                            Text(if(message.moderationState==GroupModerationState.REMOVED_BY_ADMIN)
+                            if(message.moderationState==GroupModerationState.NONE && message.mediaKind!=null)
+                                GroupMediaContent(group.groupId,message,active)
+                            else Text(if(message.moderationState==GroupModerationState.REMOVED_BY_ADMIN)
                                 "Message removed by an admin" else if(message.moderationState==
                                 GroupModerationState.DELETED_BY_SENDER) "This message was deleted" else message.text,
                                 color=if(message.outgoing) MaterialTheme.colorScheme.onPrimary
@@ -277,11 +289,14 @@ import org.ghostcloak.identity.SessionLifecycle
                 }
             }
         }
+        if(active) SendingPhoto(group.groupId,refreshMedia)
         if(active && sendRestriction!=null) Surface(color=MaterialTheme.colorScheme.surface) {
             Text(sendRestriction,Modifier.fillMaxWidth().padding(GhostLayout.pageInset),
                 style=MaterialTheme.typography.bodyMedium,
                 color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        if(!active || sendRestriction!=null)
+            AttachmentComposer(group.groupId,true,group=true,showButton=false,refresh=refreshMedia)
         if(active && group.info?.ready==true && group.info?.messageControlsCapable==false)
             Text("Group message controls become available after everyone updates Ghost Cloak.",
                 Modifier.fillMaxWidth().padding(horizontal=GhostLayout.pageInset),
@@ -299,6 +314,9 @@ import org.ghostcloak.identity.SessionLifecycle
                 }
                 Row(verticalAlignment=Alignment.CenterVertically,
                     horizontalArrangement=Arrangement.spacedBy(GhostDimensions.controlGap)) {
+                    AttachmentComposer(group.groupId,editing==null && !state.loading,
+                        group=true,showButton=editing==null && state.networkConfigured && !state.demo &&
+                            group.info?.canUseMedia==true,refresh=refreshMedia)
                     OutlinedTextField(draft,{value ->
                         if(value.encodeToByteArray().size<=GroupTextCodec.MAX_TEXT_BYTES) draft=value
                     },modifier=Modifier.weight(1f).testTag("group-composer").noSensitiveCopyCut(),
@@ -327,5 +345,76 @@ import org.ghostcloak.identity.SessionLifecycle
                     color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        if(active && sendRestriction==null && group.info?.ready==true &&
+            group.info?.mediaCapable==false)
+            Text("Group media becomes available after everyone updates Ghost Cloak.",
+                Modifier.fillMaxWidth().padding(horizontal=GhostLayout.pageInset),
+                style=MaterialTheme.typography.labelSmall,
+                color=MaterialTheme.colorScheme.onSurfaceVariant)
     }
+}
+
+private fun groupMediaLabel(message:GroupChatMessage):String=when(message.mediaKind) {
+    AttachmentKind.IMAGE -> "Photo"
+    AttachmentKind.DOCUMENT -> "Document"
+    AttachmentKind.VOICE_NOTE -> "Voice note"
+    else -> "Attachment"
+}
+
+@Composable private fun GroupMediaContent(groupId:String,message:GroupChatMessage,enabled:Boolean) {
+    val owner=(LocalContext.current.applicationContext as GhostApplication).media
+    val kind=message.mediaKind ?: return
+    Column(verticalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
+        Text(groupMediaLabel(message))
+        if(kind==AttachmentKind.DOCUMENT)
+            Text(message.mediaFilename ?: "Document",style=MaterialTheme.typography.bodyMedium)
+        if(message.mediaBytes>0)
+            Text("${(message.mediaBytes+1023)/1024} KiB",style=MaterialTheme.typography.labelSmall)
+        val duration=message.mediaDurationMillis
+        if(kind==AttachmentKind.VOICE_NOTE && duration!=null) {
+            val seconds=duration/1000
+            Text("${seconds/60}:${(seconds%60).toString().padStart(2,'0')}",
+                style=MaterialTheme.typography.labelSmall)
+        }
+        message.mediaCaption?.takeIf {it.isNotBlank()}?.let {Text(it)}
+        if(enabled) when(kind) {
+            AttachmentKind.VOICE_NOTE -> {
+                val playback by owner.voicePlayback.collectAsState()
+                val current=playback.conversation==groupId && playback.message==message.logicalId
+                TextButton(onClick={owner.toggleVoicePlayback(groupId,message.logicalId)}) {
+                    Text(if(current && playback.playing) "Pause" else "Play voice note")
+                }
+                if(current && playback.error) Text("Voice note unavailable")
+            }
+            AttachmentKind.IMAGE,AttachmentKind.DOCUMENT ->
+                if(kind==AttachmentKind.IMAGE)
+                    GroupInlinePhoto(groupId,message.logicalId,enabled)
+                else TextButton(onClick={owner.download(groupId,message.logicalId,
+                    false,message.mediaFilename ?: "Document")}) {Text("Download / open")}
+            else -> Unit
+        }
+    }
+}
+
+@Composable private fun GroupInlinePhoto(groupId:String,messageId:String,enabled:Boolean) {
+    val app=LocalContext.current.applicationContext as GhostApplication
+    val owner=app.media
+    val photos by owner.photos.state.collectAsState()
+    val session by owner.presentationSession.collectAsState()
+    var automatic by remember(groupId,messageId) {mutableStateOf(false)}
+    var requested by remember(groupId,messageId) {mutableStateOf(false)}
+    LaunchedEffect(groupId,messageId,enabled) {
+        automatic=enabled && runCatching {
+            app.runtime.privacyDefaults().photos==DownloadPreference.AUTOMATIC
+        }.getOrDefault(false)
+    }
+    val load=enabled && (automatic || requested)
+    DisposableEffect(groupId,messageId,load,session) {
+        if(load) owner.photos.request(groupId,messageId,true,true)
+        onDispose {owner.photos.release(groupId,messageId)}
+    }
+    if(!load) TextButton(onClick={requested=true}) {Text("Load photo")}
+    else InlinePhotoContent(photos[groupId to messageId],enabled,
+        retry={owner.photos.request(groupId,messageId,true,enabled,retry=true)},
+        open={owner.download(groupId,messageId,true,"Photo")})
 }

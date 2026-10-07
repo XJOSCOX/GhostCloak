@@ -388,7 +388,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                         maintenance.supportsGovernanceV1,
                         maintenance.supportsGovernanceTextV2,
                         maintenance.supportsGroupModeration,
-                        maintenance.supportsGroupMessageControls)
+                        maintenance.supportsGroupMessageControls,maintenance.supportsGroupMedia)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
             }
             return@action
@@ -417,6 +417,13 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
+            if(content.groupMedia!=null) {
+                if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
+                    repository.isActiveContact(contact.remoteDeviceId))
+                    repository.queueGroupMedia(contact.remoteDeviceId,envelope.envelopeId,content.groupMedia)
+                repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
+                return@decryptAndCommit
+            }
             if(content.groupMessageControl!=null) {
                 if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
                     repository.isActiveContact(contact.remoteDeviceId))
@@ -434,12 +441,13 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                     repository.queueGroupControl(contact.remoteDeviceId,envelope.envelopeId,
                         content.groupControl,content.supportsBaselineV1,content.supportsGovernanceV1,
                         content.supportsGovernanceTextV2,content.supportsGroupModeration,
-                        content.supportsGroupMessageControls)
+                        content.supportsGroupMessageControls,content.supportsGroupMedia)
                 } else if(content.groupControl.kind.blockSafeMaintenance() && scopedDigest!=null) {
                     repository.queueGroupScopedSystem(contact.remoteDeviceId,envelope.envelopeId,
                         content.groupControl,scopedDigest,content.supportsBaselineV1,
                         content.supportsGovernanceV1,content.supportsGovernanceTextV2,
-                        content.supportsGroupModeration,content.supportsGroupMessageControls)
+                        content.supportsGroupModeration,content.supportsGroupMessageControls,
+                        content.supportsGroupMedia)
                 }
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit

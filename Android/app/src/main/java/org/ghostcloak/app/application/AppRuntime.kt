@@ -410,6 +410,11 @@ class AppRuntime internal constructor(
     }
     internal suspend fun attachmentStillAvailable(conversation:String,message:String):Boolean=use { attachmentAvailableNow(conversation,message) }
     internal suspend fun attachmentDuration(conversation:String):Int=use { it.policies()[conversation] ?: 0 }
+    internal suspend fun supportsGroupMedia(groupId:String):Boolean=use {
+        network?.groupInfo(groupId)?.let {info -> info.canUseMedia &&
+            network?.groupConversations()?.firstOrNull {it.groupId==groupId}?.sendRestriction==null
+        }==true
+    }
     internal suspend fun discardAttachment(id:String) { use { attachments?.entry(id)?.takeIf { it.references.isEmpty() }?.let { attachments?.remove(id) } } }
     internal suspend fun uploadAttachment(id:String):org.ghostcloak.attachments.AttachmentDescriptor = guarded {
         use { check(attachmentAllowed()) }
@@ -431,6 +436,16 @@ class AppRuntime internal constructor(
             attachments!!.bind(blob,"$conversation/${it.localId}")
         }
     }
+    internal suspend fun sendPreparedGroupAttachment(groupId:String,blob:String,caption:String=""):String=use {
+        check(attachmentAllowed())
+        val entry=attachments!!.entry(blob) ?: error("attachment_missing")
+        check(entry.state==org.ghostcloak.attachments.TransferState.UPLOADED && entry.upload)
+        val existing=entry.references.firstOrNull {it.substringBefore('/')==groupId}
+        if(existing!=null) return@use existing.substringAfter('/')
+        val logicalId=network!!.sendGroupMedia(groupId,entry.descriptor,caption)
+        attachments!!.bind(blob,"$groupId/$logicalId")
+        logicalId
+    }
     internal suspend fun beginViewOnce(conversation:String,message:String):Message=use { service ->
         check(activityVisible && attachmentAccess() && !operationBlocked)
         service.beginViewOnce(conversation,message)
@@ -440,7 +455,8 @@ class AppRuntime internal constructor(
     }
     internal suspend fun downloadAttachment(conversation:String,message:String):org.ghostcloak.attachments.VerifiedAttachment = guarded {
         val descriptor=use { check(attachmentAllowed()); it.attachment(conversation,message) ?: error("attachment_missing") }
-        val allowed = { attachmentAllowed() && conversation in attachmentContacts &&
+        val allowed = { attachmentAllowed() &&
+            (conversation in attachmentContacts || org.ghostcloak.messaging.GroupIds.valid(conversation)) &&
             LocalRepository(store!!,expiryClock).attachmentAvailable(conversation,message) }
         attachments!!.download(descriptor,"$conversation/$message",network!!.blobClient(allowed,{check(allowed())}),allowed).also {
             LocalRepository(store!!,expiryClock).clearPendingAutoDownload(conversation,message)

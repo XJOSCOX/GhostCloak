@@ -2,6 +2,7 @@ package org.ghostcloak.app
 
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.runtime.*
 import android.app.Notification
 import androidx.test.core.app.ApplicationProvider
 import android.content.Context
@@ -26,12 +27,64 @@ import org.ghostcloak.messaging.GroupManagementStatus
 import org.ghostcloak.messaging.GroupRole
 import org.ghostcloak.messaging.GroupPostingModeV1
 import org.ghostcloak.messaging.GroupModerationState
+import org.ghostcloak.attachments.AttachmentKind
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
 class GroupInvitationScreenTest {
     @get:Rule val compose=createComposeRule()
+
+    @Test fun groupMediaComposerRespectsCapabilityAndPostingRestriction() {
+        val id=GroupIds.create();val own=GroupIds.create();val peer=GroupIds.create()
+        fun group(capable:Boolean,restricted:String?=null)=GroupMembershipTransport.Conversation(
+            id,GroupLocalStatus.ACTIVE,2,mapOf(own to "own-device",peer to "peer-device"),
+            emptyList(),sendRestriction=restricted,
+            info=GroupInfo(id,GroupRole.MEMBER,GroupLocalStatus.ACTIVE,
+                GroupManagementStatus.READY,listOf(GroupInfoMember(own,"own-device",
+                    GroupRole.MEMBER,false,true,false)),GroupPostingModeV1.EVERYONE,
+                false,false,false,mediaCapable=capable))
+        var current by mutableStateOf(group(true))
+        compose.setContent {GhostCloakTheme {
+            GroupConversationScreen(AppState(loading=false,networkConfigured=true),
+                current,{},{_,_->},{})
+        }}
+        compose.onNodeWithContentDescription("Attach photo or document").performClick()
+        compose.onNodeWithText("Photo").assertExists()
+        compose.onNodeWithText("Document").assertExists()
+        compose.onNodeWithText("Voice note").assertExists()
+        compose.onNodeWithText("View Once",substring=true).assertDoesNotExist()
+        compose.runOnIdle {current=group(false)}
+        compose.onNodeWithContentDescription("Attach photo or document").assertDoesNotExist()
+        compose.onNodeWithText("Group media becomes available",substring=true).assertExists()
+        compose.runOnIdle {current=group(true,"You cannot send")}
+        compose.onNodeWithContentDescription("Attach photo or document").assertDoesNotExist()
+    }
+
+    @Test fun groupMediaBubbleDoesNotExposeDescriptorOrEditing() {
+        val id=GroupIds.create();val own=GroupIds.create();val peer=GroupIds.create()
+        val messageId=GroupIds.create()
+        val info=GroupInfo(id,GroupRole.OWNER,GroupLocalStatus.ACTIVE,
+            GroupManagementStatus.READY,listOf(GroupInfoMember(own,"own-device",
+                GroupRole.OWNER,false,true,true)),GroupPostingModeV1.EVERYONE,false,false,false,
+            messageControlsCapable=true,mediaCapable=true)
+        val message=GroupChatMessage(id,messageId,2,own,true,"",1,
+            recipients=listOf(GroupRecipient("peer-device",GroupRecipientState.SENT)),
+            mediaKind=AttachmentKind.DOCUMENT,mediaCaption="Project notes",
+            mediaFilename="notes.pdf",mediaBytes=2048)
+        compose.setContent {GhostCloakTheme {
+            GroupConversationScreen(AppState(loading=false,networkConfigured=true),
+                GroupMembershipTransport.Conversation(id,GroupLocalStatus.ACTIVE,2,
+                    mapOf(own to "own-device",peer to "peer-device"),listOf(message),info=info),
+                {},{_,_->},{})
+        }}
+        compose.onNodeWithText("notes.pdf").assertExists()
+        compose.onNodeWithText("Project notes").assertExists()
+        compose.onNodeWithText("Sent to 1").assertExists()
+        compose.onNodeWithText("notes.pdf").performTouchInput {longClick()}
+        compose.onNodeWithText("Edit").assertDoesNotExist()
+        compose.onNodeWithText("Delete for everyone").assertExists()
+    }
 
     @Test fun createGroupMenuOpensDedicatedPage() {
         var opened=0

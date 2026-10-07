@@ -7,6 +7,9 @@ import org.ghostcloak.identity.RandomIdentifiers
 import org.ghostcloak.messaging.*
 import org.ghostcloak.protocol.*
 import org.ghostcloak.transport.*
+import org.ghostcloak.attachments.AttachmentDescriptor
+import org.ghostcloak.attachments.AttachmentFormat
+import org.ghostcloak.attachments.AttachmentKind
 import org.junit.Assert.*
 import org.junit.Test
 import java.time.*
@@ -15,6 +18,86 @@ import java.net.URI
 import java.util.concurrent.Executors
 
 class NetworkTest {
+    @Test fun governedGroupMediaDescriptorFanoutAndTerminalCleanup() = runBlocking {
+        Fixture().use {f ->
+            val a=f.person("alice",true);val b=f.person("bob",true)
+            val people=listOf(a,b)
+            val repos=people.associateWith {LocalRepository(it.records)}
+            val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
+                NetworkMailboxTransport(f.client(p),p.state))}
+            fun group(p:Person)=GroupMembershipTransport(p.records,repos.getValue(p),p.engine,p.state,
+                GroupAuthorityResolver(repos.getValue(p),p.engine,f.client(p),p.records),outboxes.getValue(p))
+            val conversations=people.associateWith {p ->ConversationService(p.engine,
+                repos.getValue(p)).also {it.open()}}
+            for(p in people) for(q in people) if(p!=q) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repos.getValue(p).save(Contact(RandomIdentifiers.create(),q.registration.accountId,
+                    q.name,q.registration.deviceId))
+                repos.getValue(p).groupPeer(q.registration.deviceId,true)
+                repos.getValue(p).admissionV2Peer(q.registration.deviceId,true)
+                repos.getValue(p).baselineV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceTextV2Peer(q.registration.deviceId,true)
+            }
+            suspend fun settle(rounds:Int=1) {repeat(rounds) {
+                for(p in people) outboxes.getValue(p).pendingIds().forEach {outboxId ->
+                    val outbox=outboxes.getValue(p)
+                    if(outbox.get(outboxId).state!=OutboxState.SERVER_ACCEPTED) outbox.process(outboxId)
+                }
+                for(p in people) {
+                    val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                    val deliveries=mailbox.fetch()
+                    deliveries.forEach {conversations.getValue(p).acceptNetwork(
+                        EnvelopeCodec.decode(it.encryptedEnvelope))}
+                    if(deliveries.isNotEmpty()) mailbox.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+                    group(p).processPending()
+                }
+            }}
+            val id=group(a).createAndInvite(b.registration.deviceId)
+            settle(2);group(b).accept(group(b).invitations().single().id);settle(4)
+            group(a).beginGroupManagementSetup(id);settle(10)
+            group(a).beginGroupManagementSetup(id);settle(12)
+            val length=1024L;val padded=AttachmentFormat.padded(length)
+            val descriptor=AttachmentDescriptor(id=AttachmentFormat.newId(),
+                capability=ByteArray(32) {1},key=ByteArray(16) {2},digest=ByteArray(32) {3},
+                plaintextLength=length,paddedLength=padded,
+                ciphertextLength=AttachmentFormat.encryptedLength(padded),kind=AttachmentKind.IMAGE)
+            repos.getValue(a).groupMediaPeer(b.registration.deviceId,false)
+            rejectAsync {group(a).sendMedia(id,descriptor,"Caption")}
+            repos.getValue(a).groupMediaPeer(b.registration.deviceId,true)
+            repos.getValue(b).groupMediaPeer(a.registration.deviceId,true)
+            assertTrue(group(a).groupInfo(id)!!.canUseMedia)
+            val logical=group(a).sendMedia(id,descriptor,"Caption")
+            settle(4)
+            val received=group(b).conversation(id)!!.messages.single {it.logicalId==logical}
+            assertEquals(AttachmentKind.IMAGE,received.mediaKind)
+            assertEquals("Caption",received.mediaCaption)
+            assertArrayEquals(descriptor.key,repos.getValue(b).attachment(id,logical)!!.key)
+            assertEquals(1,group(b).conversation(id)!!.messages.count {it.logicalId==logical})
+            for(kind in listOf(AttachmentKind.DOCUMENT,AttachmentKind.VOICE_NOTE)) {
+                val next=AttachmentDescriptor(id=AttachmentFormat.newId(),
+                    capability=ByteArray(32) {1},key=ByteArray(16) {2},digest=ByteArray(32) {3},
+                    plaintextLength=length,paddedLength=padded,
+                    ciphertextLength=AttachmentFormat.encryptedLength(padded),kind=kind,
+                    filename=if(kind==AttachmentKind.DOCUMENT) "notes.pdf" else null,
+                    durationMillis=if(kind==AttachmentKind.VOICE_NOTE) 2_500 else null)
+                val nextId=group(a).sendMedia(id,next,"Encrypted caption")
+                settle(4)
+                val row=group(b).conversation(id)!!.messages.single {it.logicalId==nextId}
+                assertEquals(kind,row.mediaKind)
+                assertEquals("Encrypted caption",row.mediaCaption)
+                assertEquals(next.filename,row.mediaFilename)
+                assertArrayEquals(next.key,repos.getValue(b).attachment(id,nextId)!!.key)
+            }
+            group(a).deleteOwnText(id,logical);settle(4)
+            assertNull(repos.getValue(a).attachment(id,logical))
+            assertNull(repos.getValue(b).attachment(id,logical))
+            assertEquals(GroupModerationState.DELETED_BY_SENDER,
+                group(b).conversation(id)!!.messages.single {it.logicalId==logical}.moderationState)
+        }
+    }
     @Test fun governedGroupReplyReactionEditDeleteFanoutAndModerationPriority() = runBlocking {
         Fixture().use {f ->
             val a=f.person("alice",true);val b=f.person("bob",true)

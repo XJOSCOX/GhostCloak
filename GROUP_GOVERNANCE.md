@@ -221,3 +221,7 @@ not a promise to erase screenshots, copied text, notification history, or
 content already viewed. Blocked user content stays opaque; only authenticated
 internal maintenance can carry the moderation entry. Sender group delete and
 moderation of media remain outside this phase.
+
+### P13.6 governed media
+
+`GroupMediaV1` is a new application frame; frozen group-text bytes remain unchanged. Its descriptor and caption travel only inside pairwise Signal envelopes. A recipient checks the exact active governance sequence, head digest, policy digest, epoch, sender membership, and posting authorization before making media visible or fetchable. Future-head media waits hidden for bounded resync; stale-head media is dropped. The media capability marker is authenticated in ordinary group control traffic. All members must advertise it for group media send, while text remains usable without it. Membership or policy advancement retires unsent old-head descriptors. Local Block still authenticates and acknowledges but discards group media content. Moderation and sender deletion of an accepted media logical ID clear its descriptor, caption, pending download, and local presentation reference; neither action recalls an already received or saved blob.

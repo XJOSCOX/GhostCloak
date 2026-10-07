@@ -241,7 +241,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
                 TextButton(onClick={replyTo=null}) {Text("Cancel reply")}
             } }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(GhostDimensions.controlGap)) {
-                if(editingId==null && state.networkConfigured && !state.demo) AttachmentComposer(status.contact.remoteDeviceId,active && !state.loading,refresh)
+                if(editingId==null && state.networkConfigured && !state.demo) AttachmentComposer(status.contact.remoteDeviceId,active && !state.loading,refresh=refresh)
                 OutlinedTextField(input, onValueChange = { rejectedPaste = it.length > 65536; if (!rejectedPaste) {
                     if(editingId!=null) editDraft=it else draft=it
                 } },

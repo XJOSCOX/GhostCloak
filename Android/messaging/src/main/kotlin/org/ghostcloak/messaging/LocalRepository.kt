@@ -402,10 +402,17 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
             records.write("app/group-message-controls-v1-peer/$id",byteArrayOf(1))
         else records.remove("app/group-message-controls-v1-peer/$id")
     }
+    fun groupMediaPeer(id:String):Boolean=records.transaction {
+        records.read("app/group-media-v1-peer/$id")?.contentEquals(byteArrayOf(1))==true
+    }
+    fun groupMediaPeer(id:String,supported:Boolean)=records.transaction {
+        if(supported && isActiveContact(id)) records.write("app/group-media-v1-peer/$id",byteArrayOf(1))
+        else records.remove("app/group-media-v1-peer/$id")
+    }
     fun queueGroupControl(senderId:String,envelopeId:String,control:GroupControl,
         baselineV1Advertised:Boolean=false,governanceV1Advertised:Boolean=false,
         governanceTextV2Advertised:Boolean=false,moderationAdvertised:Boolean=false,
-        messageControlsAdvertised:Boolean=false)=records.transaction {
+        messageControlsAdvertised:Boolean=false,mediaAdvertised:Boolean=false)=records.transaction {
         require(isActiveContact(senderId) && RandomIdentifiers.valid(envelopeId))
         val keys=records.keys("app/group-control/pending/")
         require(keys.size<128)
@@ -415,14 +422,15 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 governanceV1Advertised=governanceV1Advertised,
                 governanceTextV2Advertised=governanceTextV2Advertised,
                 moderationAdvertised=moderationAdvertised,
-                messageControlsAdvertised=messageControlsAdvertised)))
+                messageControlsAdvertised=messageControlsAdvertised,
+                mediaAdvertised=mediaAdvertised)))
     }
     /** Called only after Signal authentication, inside its decrypt-and-commit transaction. */
     fun queueGroupScopedSystem(senderId:String,envelopeId:String,control:GroupControl,
         signalDigest:ByteArray,baselineV1Advertised:Boolean=false,
         governanceV1Advertised:Boolean=false,
         governanceTextV2Advertised:Boolean=false,moderationAdvertised:Boolean=false,
-        messageControlsAdvertised:Boolean=false)=records.transaction {
+        messageControlsAdvertised:Boolean=false,mediaAdvertised:Boolean=false)=records.transaction {
         if(isActiveContact(senderId) || !RandomIdentifiers.valid(envelopeId) ||
             !control.kind.blockSafeMaintenance() ||
             GroupCurrentAuthority(records).current(control.groupId,senderId,signalDigest)==null)
@@ -435,7 +443,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 governanceV1Advertised=governanceV1Advertised,
                 governanceTextV2Advertised=governanceTextV2Advertised,
                 moderationAdvertised=moderationAdvertised,
-                messageControlsAdvertised=messageControlsAdvertised)))
+                messageControlsAdvertised=messageControlsAdvertised,
+                mediaAdvertised=mediaAdvertised)))
         true
     }
     fun pendingGroupControls():List<Pair<String,PendingGroupControl>> = records.transaction {
@@ -464,6 +473,10 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun queueGroupTextV3(senderId:String,envelopeId:String,value:GroupTextV3)=records.transaction {
         require(isActiveContact(senderId))
         GroupChatStore(records).queueV3(senderId,envelopeId,value)
+    }
+    fun queueGroupMedia(senderId:String,envelopeId:String,value:GroupMediaV1)=records.transaction {
+        require(isActiveContact(senderId))
+        GroupChatStore(records).queueMedia(senderId,envelopeId,value)
     }
     fun queueGroupMessageControl(senderId:String,envelopeId:String,value:GroupMessageControlV1)=records.transaction {
         require(isActiveContact(senderId))
@@ -774,7 +787,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     }
     fun capacity() = records.transaction { if (records.keys("app/message/").size >= 5000) throw AppFailure(AppError.LOCAL_CAPACITY) }
     fun retainedAttachmentReferences():Set<String> = records.transaction {
-        records.keys("app/message/").mapNotNull { key ->
+        val direct=records.keys("app/message/").mapNotNull { key ->
             val message=read<Message>(key) ?: throw EndpointStorageFailure()
             if(message.deleted || (message.viewOnceKind!=null &&
                 (message.viewOnceState==ViewOnceState.CONSUMED ||
@@ -782,6 +795,13 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                         message.state in setOf(MessageState.SERVER_ACCEPTED,MessageState.DELIVERED))))) null
             else key.removePrefix("app/message/")
         }.toSet()
+        val group=records.keys("app/group-text/message/").mapNotNull {key ->
+            val message=NetworkCodec.decode<GroupChatMessage>(records.read(key) ?: throw EndpointStorageFailure(),8192)
+            if(message.mediaKind==null || message.moderationState!=GroupModerationState.NONE ||
+                !hasAttachment(message.groupId,message.logicalId)) null
+            else "${message.groupId}/${message.logicalId}"
+        }.toSet()
+        direct+group
     }
     fun attachment(id:String,localId:String):org.ghostcloak.attachments.AttachmentDescriptor? = records.transaction {
         records.read("app/attachment/$id/$localId")?.let { bytes ->
@@ -795,7 +815,9 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
             records.keys("app/attachment/").forEach { key ->
                 val reference=key.removePrefix("app/attachment/")
                 val id=reference.substringBefore('/'); val localId=reference.substringAfter('/')
-                if(id in allowedContacts) {
+                if(GroupIds.valid(id)) {
+                    if(groupAttachmentAvailable(id,localId)) put(id to localId,null)
+                } else if(id in allowedContacts) {
                     val message=read<Message>("app/message/$id/$localId")
                     if(message!=null && message.activeExpiry?.reached(clock.now())!=true &&
                         (message.viewOnceKind==null || message.viewOnceState==ViewOnceState.REVEALING))
@@ -804,13 +826,25 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
             }
         }
     }
+    private fun groupAttachmentAvailable(id:String,localId:String):Boolean {
+        val message=GroupChatStore(records).message(id,localId) ?: return false
+        return message.mediaKind!=null && message.moderationState==GroupModerationState.NONE &&
+            hasAttachment(id,localId) && (message.outgoing ||
+                message.mediaSenderDeviceId?.let(::isActiveContact)==true)
+    }
     fun attachmentAvailable(id:String,localId:String) = records.transaction {
+        if(GroupIds.valid(id)) return@transaction groupAttachmentAvailable(id,localId)
         val message=read<Message>("app/message/$id/$localId")
         val contact=read<Contact>("app/contact/$id")
         message!=null && message.activeExpiry?.reached(clock.now())!=true && contact!=null && isActiveContact(id) && hasAttachment(id,localId) &&
             (message.viewOnceKind==null || message.viewOnceState==ViewOnceState.REVEALING)
     }
     fun autoDownloadDescriptor(id:String,localId:String):org.ghostcloak.attachments.AttachmentDescriptor?=records.transaction {
+        if(GroupIds.valid(id)) {
+            val message=GroupChatStore(records).message(id,localId)
+            return@transaction if(message?.outgoing==false && groupAttachmentAvailable(id,localId))
+                attachment(id,localId) else null
+        }
         val message=read<Message>("app/message/$id/$localId") ?: return@transaction null
         if(!isActiveContact(id) || message.direction!=Direction.INCOMING || message.deleted ||
             message.viewOnceKind!=null || message.activeExpiry?.reached(clock.now())==true) return@transaction null
@@ -828,7 +862,9 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun pendingAutoDownloads():List<Pair<String,String>> = records.transaction {
         records.keys("app/auto-download/").map {key ->
             val parts=key.removePrefix("app/auto-download/").split('/')
-            if(parts.size!=2 || !RandomIdentifiers.valid(parts[0]) || !RandomIdentifiers.valid(parts[1]))
+            if(parts.size!=2 ||
+                !(RandomIdentifiers.valid(parts[0]) && RandomIdentifiers.valid(parts[1]) ||
+                    GroupIds.valid(parts[0]) && GroupIds.valid(parts[1])))
                 throw EndpointStorageFailure()
             parts[0] to parts[1]
         }

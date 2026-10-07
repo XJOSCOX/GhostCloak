@@ -14,6 +14,7 @@ import org.ghostcloak.attachments.*
 import java.io.File
 
 data class MediaUi(val conversation: String = "", val message: String? = null,
+    val group:Boolean=false,
     val filename: String = "", val photo: Boolean = false, val bytes: Long = 0,
     val busy: Boolean = false, val error: String? = null, val ready: Boolean = false,
     val preview: Bitmap? = null, val sending: Boolean = false, val uploadPrepared: Boolean = false,
@@ -121,12 +122,13 @@ class AttachmentPresentation(private val app: GhostApplication) {
             catch (_: Exception) { /* Durable REVEALING remains fail-closed on restart. */ }
         } }
     }
-    fun startVoiceRecording(conversation:String) {
+    fun startVoiceRecording(conversation:String,group:Boolean=false) {
         app.localOperationGate.requireNormal()
         clear()
-        mutable.value=MediaUi(conversation=conversation,voice=true,busy=true)
+        mutable.value=MediaUi(conversation=conversation,group=group,voice=true,busy=true)
         launch { expected ->
-            if(!app.runtime.supportsAttachments(conversation) || !app.runtime.supportsMedia(conversation)) {
+            if(if(group) !app.runtime.supportsGroupMedia(conversation) else
+                !app.runtime.supportsAttachments(conversation) || !app.runtime.supportsMedia(conversation)) {
                 mutable.value=mutable.value.copy(busy=false,error="This contact needs an updated Ghost Cloak app for voice notes.")
                 return@launch
             }
@@ -330,15 +332,16 @@ class AttachmentPresentation(private val app: GhostApplication) {
             }
         }
     }
-    fun select(conversation: String, uri: Uri, photo: Boolean) {
+    fun select(conversation: String, uri: Uri, photo: Boolean, group:Boolean=false) {
         app.localOperationGate.requireNormal()
         clear()
-        mutable.value=MediaUi(conversation=conversation,photo=photo,busy=true)
+        mutable.value=MediaUi(conversation=conversation,group=group,photo=photo,busy=true)
         if(photo) PhotoDiagnostics.emit(PhotoEvent.START)
         val trace=PhotoTrace(document=!photo)
         launch(trace) { expected ->
             trace?.begin(PhotoOperation.ELIGIBILITY_CHECK)
-            if (!app.runtime.supportsAttachments(conversation)) {
+            if(if(group) !app.runtime.supportsGroupMedia(conversation) else
+                !app.runtime.supportsAttachments(conversation)) {
                 mutable.value=mutable.value.copy(busy=false,error=supportNotConfirmed)
                 return@launch
             }
@@ -405,11 +408,13 @@ class AttachmentPresentation(private val app: GhostApplication) {
         mutable.value=before.copy(busy=true,error=null,sending=before.photo)
         stopComposePreview()
         launch { expected ->
-            if(!app.runtime.supportsAttachments(before.conversation)) {
+            if(if(before.group) !app.runtime.supportsGroupMedia(before.conversation) else
+                !app.runtime.supportsAttachments(before.conversation)) {
                 mutable.value=mutable.value.copy(busy=false,error=supportNotConfirmed)
                 return@launch
             }
-            if((before.voice || caption.isNotEmpty()) && !app.runtime.supportsMedia(before.conversation)) {
+            if(!before.group && (before.voice || caption.isNotEmpty()) &&
+                !app.runtime.supportsMedia(before.conversation)) {
                 mutable.value=mutable.value.copy(busy=false,error="This contact needs an updated Ghost Cloak app for this media message.")
                 return@launch
             }
@@ -432,7 +437,7 @@ class AttachmentPresentation(private val app: GhostApplication) {
                         return@launch
                     }
                 } else file ?: error("attachment_missing")
-                val duration=app.runtime.attachmentDuration(before.conversation)
+                val duration=if(before.group) 0 else app.runtime.attachmentDuration(before.conversation)
                 val descriptor=app.runtime.prepareAttachment(source.inputStream(),source.length(),
                     if(before.photo) AttachmentKind.IMAGE else if(before.voice) AttachmentKind.VOICE_NOTE else AttachmentKind.DOCUMENT,
                     duration,if(before.voice || before.photo) null else before.filename,
@@ -443,7 +448,8 @@ class AttachmentPresentation(private val app: GhostApplication) {
             }
             val id=blob!!
             app.runtime.uploadAttachment(id); check(expected)
-            app.runtime.sendPreparedAttachment(before.conversation,id,true,requireNegotiatedSupport=true,
+            if(before.group) app.runtime.sendPreparedGroupAttachment(before.conversation,id,caption)
+            else app.runtime.sendPreparedAttachment(before.conversation,id,true,requireNegotiatedSupport=true,
                 viewOnce=before.viewOnce,caption=caption)
             check(expected); clear(); refresh()
         }

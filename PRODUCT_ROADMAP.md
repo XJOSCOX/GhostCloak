@@ -256,3 +256,15 @@ moderation takes terminal precedence over sender deletion. A separate signed
 new-member terminal filter prevents late old ciphertext from restoring deleted
 content. Delayed controls can be discarded after governance advances. No
 backend deployment or database migration is involved.
+
+**P13.6 group media (development validation):** Photos, documents, voice notes,
+and captions use one existing encrypted attachment blob and a separate
+current-head-bound Signal descriptor per recipient. The existing local voice
+mask, media preferences, and private cache are reused. Mixed-version groups
+keep text but cannot send media until every current member advertises support.
+The existing download protocol exposes the blob capability to the backend on
+GET, and a shared blob can correlate downloaders; group IDs, roster, captions,
+filenames, and attachment keys remain E2EE application content. Group video,
+View Once, and media editing remain deferred. No backend deployment or DB
+migration is required. Controlled A/B/C testing follows the local validation
+plan after the build and regression gates pass.

@@ -97,7 +97,8 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceV1Advertised:Boolean=false,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceTextV2Advertised:Boolean=false,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val moderationAdvertised:Boolean=false,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) val messageControlsAdvertised:Boolean=false) {
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val messageControlsAdvertised:Boolean=false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val mediaAdvertised:Boolean=false) {
     override fun toString() = "PendingGroupControl(redacted)"
 }
 

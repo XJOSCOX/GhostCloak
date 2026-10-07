@@ -156,7 +156,8 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             sendReply={text,target,done->model.sendGroupText(id,text,done,target)},
                             react={target,emoji->model.reactGroupMessage(id,target,emoji)},
                             editOwn={target,text,done->model.editGroupMessage(id,target,text,done)},
-                            deleteOwn={target->model.deleteGroupMessage(id,target)})
+                            deleteOwn={target->model.deleteGroupMessage(id,target)},
+                            refreshMedia={model.refresh()})
                     }
                     composable("group-info/{id}") { backStack ->
                         val id=backStack.arguments?.getString("id") ?: return@composable

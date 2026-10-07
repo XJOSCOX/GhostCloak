@@ -45,6 +45,24 @@ class GroupTextTest {
         }
     }
 
+    @Test fun blockedEnvelopeParserNeverInterpretsReplyOrUserControl() {
+        val base=sample()
+        val reply=GroupTextV3(groupId=base.groupId,epoch=base.epoch,
+            senderMemberId=base.senderMemberId,logicalId=GroupIds.create(),
+            governanceActivationDigest=ByteArray(32),governanceSequence=1,
+            governanceHeadDigest=ByteArray(32),policyDigest=ByteArray(32),
+            text="reply",replyToLogicalId=base.logicalId)
+        val control=GroupMessageControlV1(groupId=base.groupId,
+            activationDigest=ByteArray(32),governanceSequence=1,
+            governanceHeadDigest=ByteArray(32),actorMemberId=base.senderMemberId,
+            targetLogicalId=base.logicalId,controlId=GroupIds.create(),
+            kind=GroupMessageControlKindV1.DELETE_BY_SENDER)
+        assertNull(ConversationPayload.decodeBlockedGroupSystemContent(
+            ConversationPayload.encodeGroupTextV3(reply)))
+        assertNull(ConversationPayload.decodeBlockedGroupSystemContent(
+            ConversationPayload.encodeGroupMessageControl(control)))
+    }
+
     @Test fun replaySurvivesStoreRecreationAndOwnRecipientPlanStaysFixed() {
         val records=MemoryRecords()
         val a=GroupChatStore(records)

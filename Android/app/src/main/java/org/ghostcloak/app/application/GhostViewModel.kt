@@ -175,11 +175,21 @@ class GhostViewModel internal constructor(application: Application, private val 
         withContext(Dispatchers.Main.immediate) {opened(groupId)}
         null
     }
-    fun sendGroupText(id:String,text:String,success:()->Unit)=run {
-        runtime.sendGroupText(id,text)
+    fun sendGroupText(id:String,text:String,success:()->Unit,replyTo:String?=null)=run {
+        runtime.sendGroupText(id,text,replyTo)
         pollingWake.trySend(Unit)
         withContext(Dispatchers.Main.immediate) {success()}
         null
+    }
+    fun reactGroupMessage(id:String,target:String,emoji:String?)=run {
+        runtime.reactGroupMessage(id,target,emoji);pollingWake.trySend(Unit);null
+    }
+    fun editGroupMessage(id:String,target:String,text:String,success:()->Unit)=run {
+        runtime.editGroupMessage(id,target,text);pollingWake.trySend(Unit)
+        withContext(Dispatchers.Main.immediate) {success()};null
+    }
+    fun deleteGroupMessage(id:String,target:String)=run {
+        runtime.deleteGroupMessage(id,target);pollingWake.trySend(Unit);null
     }
     fun inviteToGroup(groupId:String,id:String)=run {
         runtime.inviteToGroup(groupId,id)

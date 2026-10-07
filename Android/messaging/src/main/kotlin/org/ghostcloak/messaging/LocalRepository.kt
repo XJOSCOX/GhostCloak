@@ -394,9 +394,18 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
             records.write("app/group-moderation-v1-peer/$id",byteArrayOf(1))
         else records.remove("app/group-moderation-v1-peer/$id")
     }
+    fun groupMessageControlsPeer(id:String):Boolean=records.transaction {
+        records.read("app/group-message-controls-v1-peer/$id")?.contentEquals(byteArrayOf(1))==true
+    }
+    fun groupMessageControlsPeer(id:String,supported:Boolean)=records.transaction {
+        if(supported && isActiveContact(id))
+            records.write("app/group-message-controls-v1-peer/$id",byteArrayOf(1))
+        else records.remove("app/group-message-controls-v1-peer/$id")
+    }
     fun queueGroupControl(senderId:String,envelopeId:String,control:GroupControl,
         baselineV1Advertised:Boolean=false,governanceV1Advertised:Boolean=false,
-        governanceTextV2Advertised:Boolean=false,moderationAdvertised:Boolean=false)=records.transaction {
+        governanceTextV2Advertised:Boolean=false,moderationAdvertised:Boolean=false,
+        messageControlsAdvertised:Boolean=false)=records.transaction {
         require(isActiveContact(senderId) && RandomIdentifiers.valid(envelopeId))
         val keys=records.keys("app/group-control/pending/")
         require(keys.size<128)
@@ -405,13 +414,15 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 baselineV1Advertised=baselineV1Advertised,
                 governanceV1Advertised=governanceV1Advertised,
                 governanceTextV2Advertised=governanceTextV2Advertised,
-                moderationAdvertised=moderationAdvertised)))
+                moderationAdvertised=moderationAdvertised,
+                messageControlsAdvertised=messageControlsAdvertised)))
     }
     /** Called only after Signal authentication, inside its decrypt-and-commit transaction. */
     fun queueGroupScopedSystem(senderId:String,envelopeId:String,control:GroupControl,
         signalDigest:ByteArray,baselineV1Advertised:Boolean=false,
         governanceV1Advertised:Boolean=false,
-        governanceTextV2Advertised:Boolean=false,moderationAdvertised:Boolean=false)=records.transaction {
+        governanceTextV2Advertised:Boolean=false,moderationAdvertised:Boolean=false,
+        messageControlsAdvertised:Boolean=false)=records.transaction {
         if(isActiveContact(senderId) || !RandomIdentifiers.valid(envelopeId) ||
             !control.kind.blockSafeMaintenance() ||
             GroupCurrentAuthority(records).current(control.groupId,senderId,signalDigest)==null)
@@ -423,7 +434,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 baselineV1Advertised=baselineV1Advertised,
                 governanceV1Advertised=governanceV1Advertised,
                 governanceTextV2Advertised=governanceTextV2Advertised,
-                moderationAdvertised=moderationAdvertised)))
+                moderationAdvertised=moderationAdvertised,
+                messageControlsAdvertised=messageControlsAdvertised)))
         true
     }
     fun pendingGroupControls():List<Pair<String,PendingGroupControl>> = records.transaction {
@@ -440,13 +452,22 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         require(isActiveContact(senderId))
         GroupChatStore(records).queue(senderId,envelopeId,value)
     }
-    fun groupOutboxIds():Set<String> = GroupChatStore(records).outboxIds()
+    fun groupOutboxIds():Set<String> = GroupChatStore(records).outboxIds() +
+        GroupMessageControlStoreV1(records).outboxIds()
     fun groupSystemOutboxIds():Set<String> = records.transaction {
         records.keys("app/group/system-outbox/").map {it.substringAfterLast('/')}.toSet()
     }
     fun queueGroupTextV2(senderId:String,envelopeId:String,value:GroupTextV2)=records.transaction {
         require(isActiveContact(senderId))
         GroupChatStore(records).queueV2(senderId,envelopeId,value)
+    }
+    fun queueGroupTextV3(senderId:String,envelopeId:String,value:GroupTextV3)=records.transaction {
+        require(isActiveContact(senderId))
+        GroupChatStore(records).queueV3(senderId,envelopeId,value)
+    }
+    fun queueGroupMessageControl(senderId:String,envelopeId:String,value:GroupMessageControlV1)=records.transaction {
+        require(isActiveContact(senderId))
+        GroupMessageControlStoreV1(records).queue(senderId,envelopeId,value)
     }
     private fun reactionKey(id:String,target:String,mine:Boolean):String {
         require(RandomIdentifiers.valid(id) && RandomIdentifiers.valid(target))

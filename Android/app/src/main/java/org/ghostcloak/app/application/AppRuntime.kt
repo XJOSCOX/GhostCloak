@@ -282,10 +282,16 @@ class AppRuntime internal constructor(
         activeGroupNetwork().decideGroupOwnershipTransfer(id,accept)
     suspend fun leaveGroup(id:String)=activeGroupNetwork().leaveGroup(id)
     suspend fun dissolveGroup(id:String)=activeGroupNetwork().dissolveGroup(id)
-    suspend fun sendGroupText(id:String,text:String):String {
+    suspend fun sendGroupText(id:String,text:String,replyTo:String?=null):String {
         check(networkConfigured && !inDemo)
-        return network!!.sendGroupText(id,text)
+        return network!!.sendGroupText(id,text,replyTo)
     }
+    suspend fun reactGroupMessage(id:String,target:String,emoji:String?)=
+        activeGroupNetwork().reactGroupMessage(id,target,emoji)
+    suspend fun editGroupMessage(id:String,target:String,text:String)=
+        activeGroupNetwork().editGroupMessage(id,target,text)
+    suspend fun deleteGroupMessage(id:String,target:String)=
+        activeGroupNetwork().deleteGroupMessage(id,target)
     suspend fun inviteToGroup(groupId:String,id:String):String {
         check(networkConfigured && !inDemo)
         return network!!.inviteToGroup(groupId,id)

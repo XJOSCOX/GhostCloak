@@ -341,9 +341,18 @@ class NetworkController(
     }
     suspend fun leaveGroup(id:String)=operation(NetworkOperation.SEND) {groups.leaveGroupGoverned(id)}
     suspend fun dissolveGroup(id:String)=operation(NetworkOperation.SEND) {groups.dissolveGroupGoverned(id)}
-    suspend fun sendGroupText(id:String,text:String)=operation(NetworkOperation.SEND) {
+    suspend fun sendGroupText(id:String,text:String,replyTo:String?=null)=operation(NetworkOperation.SEND) {
         requireApi(state.registered(),"connect_required",401)
-        groups.sendText(id,text)
+        groups.sendText(id,text,replyTo)
+    }
+    suspend fun reactGroupMessage(id:String,target:String,emoji:String?)=operation(NetworkOperation.SEND) {
+        groups.react(id,target,emoji)
+    }
+    suspend fun editGroupMessage(id:String,target:String,text:String)=operation(NetworkOperation.SEND) {
+        groups.editOwnText(id,target,text)
+    }
+    suspend fun deleteGroupMessage(id:String,target:String)=operation(NetworkOperation.SEND) {
+        groups.deleteOwnText(id,target)
     }
     fun forkedGroupCount()=groups.forkedCount()
     fun pendingGroupInvitationNotices()=groups.pendingInvitationNotices()

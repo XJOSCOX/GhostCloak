@@ -16,25 +16,27 @@ import java.security.MessageDigest
     val parentSequence:Long,val parentHeadDigest:ByteArray,
     val policy:GroupGovernancePolicyV1,val policyDigest:ByteArray,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val moderationFilter:ByteArray?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val senderDeleteFilter:ByteArray?=null,
     val ownerSignature:ByteArray=byteArrayOf(),
     val coordinatorSignature:ByteArray=byteArrayOf(),
 ) { override fun toString()="GroupGovernancePolicyCheckpointV1(redacted)" }
 
 internal object GroupGovernancePolicyCheckpointRulesV1 {
-    const val MAX_BYTES=4096
+    const val MAX_BYTES=8192
     private fun body(value:GroupGovernancePolicyCheckpointV1)=NetworkCodec.encode(value.copy(
         ownerSignature=byteArrayOf(),coordinatorSignature=byteArrayOf()))
     private fun checkpointBodyDigest(checkpoint:GroupGovernanceInviteeCheckpointV1)=
         DeviceAuth.digest(NetworkCodec.encode(checkpoint.copy(ownerSignature=byteArrayOf(),
             coordinatorSignature=byteArrayOf())))
     fun unsigned(checkpoint:GroupGovernanceInviteeCheckpointV1,
-        policy:GroupGovernancePolicyV1,moderationFilter:ByteArray?=null)=GroupGovernancePolicyCheckpointV1(
+        policy:GroupGovernancePolicyV1,moderationFilter:ByteArray?=null,
+        senderDeleteFilter:ByteArray?=null)=GroupGovernancePolicyCheckpointV1(
         groupId=checkpoint.groupId,inviteId=checkpoint.inviteId,
         checkpointId=checkpoint.checkpointId,
         checkpointBodyDigest=checkpointBodyDigest(checkpoint),
         activationDigest=checkpoint.activationDigest,parentSequence=checkpoint.parentSequence,
         parentHeadDigest=checkpoint.parentHeadDigest,policy=policy,
-        moderationFilter=moderationFilter,
+        moderationFilter=moderationFilter,senderDeleteFilter=senderDeleteFilter,
         policyDigest=GroupGovernancePolicyRulesV1.digest(checkpoint.activationDigest,policy))
     fun ownerStatement(value:GroupGovernancePolicyCheckpointV1)=GroupStatements.governanceStatement(
         "GhostCloak.GroupGovernancePolicyCheckpointOwner.v1",body(value))
@@ -54,6 +56,8 @@ internal object GroupGovernancePolicyCheckpointRulesV1 {
                 GroupGovernancePolicyRulesV1.digest(value.activationDigest,value.policy)) &&
             (value.moderationFilter==null ||
                 value.moderationFilter.size==GroupModerationFilterV1.BYTES) &&
+            (value.senderDeleteFilter==null ||
+                value.senderDeleteFilter.size==GroupSenderDeleteFilterV1.BYTES) &&
             NetworkCodec.encode(value).size<=MAX_BYTES)
         GroupGovernancePolicyRulesV1.validate(value.policy,parent)
         val coordinator=parent.members.single {it.memberId==parent.coordinatorId}

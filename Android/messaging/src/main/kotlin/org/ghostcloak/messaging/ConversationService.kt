@@ -387,7 +387,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                         maintenance.groupControl!!,signalDigest,maintenance.supportsBaselineV1,
                         maintenance.supportsGovernanceV1,
                         maintenance.supportsGovernanceTextV2,
-                        maintenance.supportsGroupModeration)
+                        maintenance.supportsGroupModeration,
+                        maintenance.supportsGroupMessageControls)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
             }
             return@action
@@ -409,6 +410,20 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
+            if(content.groupTextV3!=null) {
+                if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
+                    repository.isActiveContact(contact.remoteDeviceId))
+                    repository.queueGroupTextV3(contact.remoteDeviceId,envelope.envelopeId,content.groupTextV3)
+                repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
+                return@decryptAndCommit
+            }
+            if(content.groupMessageControl!=null) {
+                if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
+                    repository.isActiveContact(contact.remoteDeviceId))
+                    repository.queueGroupMessageControl(contact.remoteDeviceId,envelope.envelopeId,content.groupMessageControl)
+                repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
+                return@decryptAndCommit
+            }
             if(content.groupControl!=null) {
                 // Authentication and ratchet/replay receipt commit together. Authority resolution
                 // can require a network request, so the control remains encrypted locally and
@@ -418,12 +433,13 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                     repository.groupPeer(contact.remoteDeviceId,true)
                     repository.queueGroupControl(contact.remoteDeviceId,envelope.envelopeId,
                         content.groupControl,content.supportsBaselineV1,content.supportsGovernanceV1,
-                        content.supportsGovernanceTextV2,content.supportsGroupModeration)
+                        content.supportsGovernanceTextV2,content.supportsGroupModeration,
+                        content.supportsGroupMessageControls)
                 } else if(content.groupControl.kind.blockSafeMaintenance() && scopedDigest!=null) {
                     repository.queueGroupScopedSystem(contact.remoteDeviceId,envelope.envelopeId,
                         content.groupControl,scopedDigest,content.supportsBaselineV1,
                         content.supportsGovernanceV1,content.supportsGovernanceTextV2,
-                        content.supportsGroupModeration)
+                        content.supportsGroupModeration,content.supportsGroupMessageControls)
                 }
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit

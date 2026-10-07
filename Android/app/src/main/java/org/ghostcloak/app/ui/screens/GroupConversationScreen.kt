@@ -31,24 +31,68 @@ import org.ghostcloak.identity.SessionLifecycle
 @Composable fun GroupConversationScreen(state:AppState,group:GroupMembershipTransport.Conversation,
     back:()->Unit,send:(String,()->Unit)->Unit,invite:(String)->Unit,openChat:(String)->Unit={},
     acceptInvitation:(String)->Unit={},declineInvitation:(String)->Unit={},openInfo:()->Unit={},
-    removeMessage:(String)->Unit={}) {
+    removeMessage:(String)->Unit={},
+    sendReply:(String,String,()->Unit)->Unit={_,_,_->},
+    react:(String,String?)->Unit={_,_->},
+    editOwn:(String,String,()->Unit)->Unit={_,_,_->},
+    deleteOwn:(String)->Unit={}) {
     var draft by remember(group.groupId) {mutableStateOf("")}
     var inviting by remember {mutableStateOf(false)}
     var selectedMessage by remember(group.groupId) {mutableStateOf<String?>(null)}
     var confirmingRemoval by remember(group.groupId) {mutableStateOf<String?>(null)}
+    var confirmingSenderDelete by remember(group.groupId) {mutableStateOf<String?>(null)}
+    var replyingTo by remember(group.groupId) {mutableStateOf<String?>(null)}
+    var editing by remember(group.groupId) {mutableStateOf<String?>(null)}
     val canModerate=group.info?.canModerate==true
-    if(selectedMessage!=null && !canModerate) selectedMessage=null
+    val canUseControls=group.info?.canUseMessageControls==true
+    val canSend=group.status==GroupLocalStatus.ACTIVE && group.sendRestriction==null
+    if(selectedMessage!=null && !canModerate && !canUseControls) selectedMessage=null
     if(confirmingRemoval!=null && !canModerate) confirmingRemoval=null
+    if(confirmingSenderDelete!=null && !canUseControls) confirmingSenderDelete=null
     if(selectedMessage!=null) ModalBottomSheet(onDismissRequest={selectedMessage=null}) {
-        TextButton(onClick={
-            val id=selectedMessage
-            selectedMessage=null
-            if(canModerate && id!=null) confirmingRemoval=id
-        },modifier=Modifier.fillMaxWidth().testTag("group-remove-message-action")) {
-            Text("Remove message")
+        val target=group.messages.firstOrNull {it.logicalId==selectedMessage}
+        if(target!=null && target.moderationState==GroupModerationState.NONE) {
+            if(canUseControls && canSend) TextButton(onClick={
+                replyingTo=target.logicalId;editing=null;selectedMessage=null
+            },modifier=Modifier.fillMaxWidth().testTag("group-reply-action")) {Text("Reply")}
+            if(canUseControls && (!target.outgoing ||
+                target.recipients.all {it.state==GroupRecipientState.SENT}))
+                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceEvenly) {
+                listOf("👍","❤️","😂","😮","😢","🙏").forEach {emoji ->
+                    TextButton(onClick={
+                        val mine=target.reactions.any {it.emoji==emoji && it.mine}
+                        react(target.logicalId,if(mine) null else emoji)
+                        selectedMessage=null
+                    }) {Text(emoji)}
+                }
+            }
+            if(canUseControls && target.outgoing &&
+                target.recipients.all {it.state==GroupRecipientState.SENT}) {
+                TextButton(onClick={editing=target.logicalId;replyingTo=null;draft=target.text
+                    selectedMessage=null},modifier=Modifier.fillMaxWidth().testTag("group-edit-action")) {
+                    Text("Edit")
+                }
+                TextButton(onClick={confirmingSenderDelete=target.logicalId;selectedMessage=null},
+                    modifier=Modifier.fillMaxWidth().testTag("group-delete-action")) {
+                    Text("Delete for everyone")
+                }
+            }
+            if(canModerate) TextButton(onClick={
+                confirmingRemoval=target.logicalId;selectedMessage=null
+            },modifier=Modifier.fillMaxWidth().testTag("group-remove-message-action")) {
+                Text("Remove message")
+            }
         }
         Spacer(Modifier.height(GhostDimensions.medium))
     }
+    if(confirmingSenderDelete!=null) AlertDialog(onDismissRequest={confirmingSenderDelete=null},
+        title={Text("Delete this message?")},
+        text={Text("It will be replaced with a deletion notice on updated group members' devices. Copies already seen or saved cannot be recalled.")},
+        confirmButton={TextButton(onClick={
+            val id=confirmingSenderDelete;confirmingSenderDelete=null
+            if(canUseControls && id!=null) deleteOwn(id)
+        }) {Text("Delete for everyone")}},
+        dismissButton={TextButton(onClick={confirmingSenderDelete=null}) {Text("Cancel")}})
     if(confirmingRemoval!=null) AlertDialog(onDismissRequest={confirmingRemoval=null},
         title={Text("Remove this message?")},
         text={Text("It will be replaced with a moderation notice on updated group members' devices. Copies already seen or saved cannot be recalled.")},
@@ -169,7 +213,8 @@ import org.ghostcloak.identity.SessionLifecycle
             items(group.messages,key={it.logicalId}) { message ->
                 Column(Modifier.fillMaxWidth(),horizontalAlignment=if(message.outgoing) Alignment.End else Alignment.Start) {
                     Surface(modifier=Modifier.combinedClickable(onClick={},onLongClick={
-                        if(canModerate && message.moderationState==GroupModerationState.NONE)
+                        if((canModerate || canUseControls) &&
+                            message.moderationState==GroupModerationState.NONE)
                             selectedMessage=message.logicalId
                     }),color=if(message.outgoing) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.surface,shape=MaterialTheme.shapes.large) {
@@ -181,12 +226,45 @@ import org.ghostcloak.identity.SessionLifecycle
                                     ?: "Group member",style=MaterialTheme.typography.labelSmall,
                                     color=MaterialTheme.colorScheme.primary)
                             }
+                            if(message.replyToLogicalId!=null) {
+                                val original=group.messages.firstOrNull {
+                                    it.logicalId==message.replyToLogicalId
+                                }
+                                val preview=when(original?.moderationState) {
+                                    GroupModerationState.REMOVED_BY_ADMIN -> "Message removed by an admin"
+                                    GroupModerationState.DELETED_BY_SENDER -> "Original message deleted"
+                                    GroupModerationState.NONE -> original.text.take(80)
+                                    null -> "Original message unavailable"
+                                }
+                                val label=if(original?.outgoing==true) "You" else
+                                    original?.senderMemberId?.let {memberId ->
+                                        group.memberDevices[memberId]?.let {device ->
+                                            state.contacts.firstOrNull {it.contact.remoteDeviceId==device}
+                                                ?.contact?.visibleName
+                                        }
+                                    } ?: "Group member"
+                                Text("$label: $preview",style=MaterialTheme.typography.labelSmall,
+                                    color=if(message.outgoing) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                             Text(if(message.moderationState==GroupModerationState.REMOVED_BY_ADMIN)
-                                "Message removed by an admin" else message.text,
+                                "Message removed by an admin" else if(message.moderationState==
+                                GroupModerationState.DELETED_BY_SENDER) "This message was deleted" else message.text,
                                 color=if(message.outgoing) MaterialTheme.colorScheme.onPrimary
                                 else MaterialTheme.colorScheme.onSurface)
+                            if(message.moderationState==GroupModerationState.NONE && message.editRevision>0)
+                                Text("Edited",style=MaterialTheme.typography.labelSmall,
+                                    color=if(message.outgoing) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
+                    if(message.moderationState==GroupModerationState.NONE && message.reactions.isNotEmpty())
+                        Row(horizontalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
+                            message.reactions.forEach {badge ->
+                                Text("${badge.emoji} ${badge.count}",style=MaterialTheme.typography.labelSmall,
+                                    color=MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
                     if(message.outgoing && message.moderationState==GroupModerationState.NONE) {
                         val sent=message.recipients.count {it.state==GroupRecipientState.SENT}
                         val failed=message.recipients.count {it.state==GroupRecipientState.UNAVAILABLE}
@@ -204,9 +282,21 @@ import org.ghostcloak.identity.SessionLifecycle
                 style=MaterialTheme.typography.bodyMedium,
                 color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        if(active && group.info?.ready==true && group.info?.messageControlsCapable==false)
+            Text("Group message controls become available after everyone updates Ghost Cloak.",
+                Modifier.fillMaxWidth().padding(horizontal=GhostLayout.pageInset),
+                style=MaterialTheme.typography.labelSmall,
+                color=MaterialTheme.colorScheme.onSurfaceVariant)
         if(active && sendRestriction==null) Surface(color=MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxWidth().padding(horizontal=GhostLayout.pageInset,
                 vertical=GhostDimensions.controlGap),verticalArrangement=Arrangement.spacedBy(GhostDimensions.compact)) {
+                if(replyingTo!=null || editing!=null) Row(Modifier.fillMaxWidth(),
+                    verticalAlignment=Alignment.CenterVertically) {
+                    val target=group.messages.firstOrNull {it.logicalId==(editing ?: replyingTo)}
+                    Text(if(editing!=null) "Editing message" else "Replying to ${if(target?.outgoing==true) "You" else "group member"}: ${target?.text?.take(60) ?: "Original message unavailable"}",
+                        Modifier.weight(1f),style=MaterialTheme.typography.labelSmall)
+                    TextButton(onClick={replyingTo=null;editing=null;draft=""}) {Text("Cancel")}
+                }
                 Row(verticalAlignment=Alignment.CenterVertically,
                     horizontalArrangement=Arrangement.spacedBy(GhostDimensions.controlGap)) {
                     OutlinedTextField(draft,{value ->
@@ -218,7 +308,17 @@ import org.ghostcloak.identity.SessionLifecycle
                             unfocusedContainerColor=MaterialTheme.colorScheme.surface,
                             focusedContainerColor=MaterialTheme.colorScheme.surface),
                         shape=RoundedCornerShape(GhostDimensions.spacious))
-                    FilledIconButton(onClick={val text=draft;send(text) {draft=""}},
+                    FilledIconButton(onClick={
+                        val text=draft
+                        val editId=editing
+                        val replyId=replyingTo
+                        val done={draft="";editing=null;replyingTo=null}
+                        when {
+                            editId!=null -> editOwn(editId,text,done)
+                            replyId!=null -> sendReply(text,replyId,done)
+                            else -> send(text,done)
+                        }
+                    },
                         enabled=draft.isNotBlank() && !state.loading,
                         modifier=Modifier.size(GhostDimensions.avatar)) {AppIcon(Glyph.SEND,"Send")}
                 }

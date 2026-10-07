@@ -152,7 +152,11 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                                 model.declineGroupInvite(inviteId)
                                 nav.popBackStack()
                             },{nav.navigate("group-info/$id")},
-                            {logicalId -> model.removeGroupMessage(id,logicalId)})
+                            {logicalId -> model.removeGroupMessage(id,logicalId)},
+                            sendReply={text,target,done->model.sendGroupText(id,text,done,target)},
+                            react={target,emoji->model.reactGroupMessage(id,target,emoji)},
+                            editOwn={target,text,done->model.editGroupMessage(id,target,text,done)},
+                            deleteOwn={target->model.deleteGroupMessage(id,target)})
                     }
                     composable("group-info/{id}") { backStack ->
                         val id=backStack.arguments?.getString("id") ?: return@composable

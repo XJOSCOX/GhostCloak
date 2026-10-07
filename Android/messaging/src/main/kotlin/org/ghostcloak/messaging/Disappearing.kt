@@ -34,6 +34,7 @@ object ConversationPayload {
     private val governanceV1Support = "GC/governance-v1!".toByteArray(Charsets.US_ASCII)
     private val governanceTextV2Support = "GC/group-text-v2!".toByteArray(Charsets.US_ASCII)
     private val groupModerationSupport = "GC/group-moderation-v1!".toByteArray(Charsets.US_ASCII)
+    private val groupMessageControlsSupport = "GC/group-controls-v1!".toByteArray(Charsets.US_ASCII)
     val reactionEmoji = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
     private val profileMarker = "GhostCloak/profile/v1!".toByteArray(Charsets.US_ASCII)
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
@@ -51,8 +52,11 @@ object ConversationPayload {
         val supportsBaselineV1:Boolean=false,val supportsGovernanceV1:Boolean=false,
         val supportsGovernanceTextV2:Boolean=false,
         val supportsGroupModeration:Boolean=false,
+        val supportsGroupMessageControls:Boolean=false,
         val groupControl:GroupControl?=null,
-        val groupText:GroupText?=null,val groupTextV2:GroupTextV2?=null) {
+        val groupText:GroupText?=null,val groupTextV2:GroupTextV2?=null,
+        val groupTextV3:GroupTextV3?=null,
+        val groupMessageControl:GroupMessageControlV1?=null) {
         override fun toString() = "Content(redacted)"
     }
     private fun profileBytes(displayName:String?):ByteArray = displayName?.let {
@@ -139,7 +143,8 @@ object ConversationPayload {
         val body=GroupControlCodec.encode(control)
         val basic=((16+body.size+255)/256)*256
         val markers=baselineV1Support.size+governanceV1Support.size+
-            governanceTextV2Support.size+groupModerationSupport.size
+            governanceTextV2Support.size+groupModerationSupport.size+
+            groupMessageControlsSupport.size
         val size=if(control.kind==GroupControlKind.GOVERNANCE_CAPABILITY_ECHO &&
             basic-16-body.size<markers) basic+256 else basic
         require(size<=16384)
@@ -154,9 +159,13 @@ object ConversationPayload {
             if(padding>=markers-groupModerationSupport.size)
                 governanceTextV2Support.copyInto(bytes,16+body.size+baselineV1Support.size+
                     governanceV1Support.size)
-            if(padding>=markers)
+            if(padding>=markers-groupMessageControlsSupport.size)
                 groupModerationSupport.copyInto(bytes,16+body.size+baselineV1Support.size+
                     governanceV1Support.size+governanceTextV2Support.size)
+            if(padding>=markers)
+                groupMessageControlsSupport.copyInto(bytes,16+body.size+
+                    baselineV1Support.size+governanceV1Support.size+
+                    governanceTextV2Support.size+groupModerationSupport.size)
         }
     }
     /** Type 14 is a group text inside a recipient-specific Signal envelope. */
@@ -277,6 +286,19 @@ object ConversationPayload {
             }
         } finally {body.fill(0)}
     }
+    /** Types 16 and 17 are separate from frozen group text and governance frames. */
+    fun encodeGroupTextV3(value:GroupTextV3):ByteArray=encodeGroupBody(16,GroupTextV3Codec.encode(value))
+    fun encodeGroupMessageControl(value:GroupMessageControlV1):ByteArray=
+        encodeGroupBody(17,GroupMessageControlCodecV1.encode(value))
+    private fun encodeGroupBody(type:Int,body:ByteArray):ByteArray=try {
+        val size=((16+body.size+255)/256)*256
+        require(size<=4096)
+        ByteArray(size).also {bytes ->
+            SecureRandom().nextBytes(bytes)
+            ByteBuffer.wrap(bytes).put(magic).put(1).put(type.toByte()).putShort(0)
+                .putInt(0).putInt(body.size).put(body)
+        }
+    } finally {body.fill(0)}
     /** Retain authenticated maintenance capability without inspecting blocked user content. */
     fun decodeBlockedGroupSystemContent(bytes: ByteArray): Content? {
         if (bytes.size < 6 || !bytes.copyOfRange(0,4).contentEquals(magic) || bytes[5].toInt()!=13)
@@ -295,7 +317,7 @@ object ConversationPayload {
         if (!ByteArray(4).also { input.get(it) }.contentEquals(magic) || input.get().toInt() != 1)
             throw AppFailure(AppError.INVALID_TEXT)
         val type = input.get().toInt()
-        if (type !in 1..15 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
+        if (type !in 1..17 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
         val seconds = input.int; DisappearingTimer.from(seconds)
         val length = input.int
         if (length !in 0..MAX_TEXT || length > input.remaining() || (type in setOf(2,4) && length != 0) ||
@@ -385,9 +407,14 @@ object ConversationPayload {
             val moderation=textV2 && moderationOffset+groupModerationSupport.size<=bytes.size &&
                 bytes.copyOfRange(moderationOffset,moderationOffset+groupModerationSupport.size)
                     .contentEquals(groupModerationSupport)
+            val controlsOffset=moderationOffset+groupModerationSupport.size
+            val groupControls=moderation && controlsOffset+groupMessageControlsSupport.size<=bytes.size &&
+                bytes.copyOfRange(controlsOffset,controlsOffset+groupMessageControlsSupport.size)
+                    .contentEquals(groupMessageControlsSupport)
             return Content("",0,true,groupControl=control,supportsGroups=true,
                 supportsBaselineV1=marker,supportsGovernanceV1=governanceAfterBaseline || governanceStandalone,
-                supportsGovernanceTextV2=textV2,supportsGroupModeration=moderation)
+                supportsGovernanceTextV2=textV2,supportsGroupModeration=moderation,
+                supportsGroupMessageControls=groupControls)
         }
         if(type==14) {
             if(seconds!=0 || length !in 1..GroupTextCodec.MAX_BYTES ||
@@ -407,6 +434,26 @@ object ConversationPayload {
                 catch (_:org.ghostcloak.protocol.ApiFailure) {throw AppFailure(AppError.INVALID_TEXT)}
                 finally {text.fill(0)}
             return Content("",0,true,groupTextV2=value,supportsGroups=true)
+        }
+        if(type==16) {
+            if(seconds!=0 || length !in 1..GroupTextV3Codec.MAX_BYTES ||
+                ((16+length+255)/256)*256!=bytes.size || bytes.size>4096)
+                throw AppFailure(AppError.INVALID_TEXT)
+            val value=try {GroupTextV3Codec.decode(text)}
+                catch (_:IllegalArgumentException) {throw AppFailure(AppError.INVALID_TEXT)}
+                catch (_:org.ghostcloak.protocol.ApiFailure) {throw AppFailure(AppError.INVALID_TEXT)}
+                finally {text.fill(0)}
+            return Content("",0,true,groupTextV3=value,supportsGroups=true)
+        }
+        if(type==17) {
+            if(seconds!=0 || length !in 1..GroupMessageControlCodecV1.MAX_BYTES ||
+                ((16+length+255)/256)*256!=bytes.size || bytes.size>4096)
+                throw AppFailure(AppError.INVALID_TEXT)
+            val value=try {GroupMessageControlCodecV1.decode(text)}
+                catch (_:IllegalArgumentException) {throw AppFailure(AppError.INVALID_TEXT)}
+                catch (_:org.ghostcloak.protocol.ApiFailure) {throw AppFailure(AppError.INVALID_TEXT)}
+                finally {text.fill(0)}
+            return Content("",0,true,groupMessageControl=value,supportsGroups=true)
         }
         val reply = if(type==7) {
             if(input.remaining()<37) throw AppFailure(AppError.INVALID_TEXT)

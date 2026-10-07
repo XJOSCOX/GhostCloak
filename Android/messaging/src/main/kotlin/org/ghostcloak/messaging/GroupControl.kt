@@ -96,7 +96,8 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val baselineV1Advertised:Boolean=false,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceV1Advertised:Boolean=false,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceTextV2Advertised:Boolean=false,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) val moderationAdvertised:Boolean=false) {
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val moderationAdvertised:Boolean=false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val messageControlsAdvertised:Boolean=false) {
     override fun toString() = "PendingGroupControl(redacted)"
 }
 
@@ -105,7 +106,9 @@ object GroupControlCodec {
     const val MAX_BYTES = 12_000
     fun encode(control: GroupControl): ByteArray {
         validate(control)
-        return NetworkCodec.encode(control).also { require(it.size in 1..MAX_BYTES) }
+        return NetworkCodec.encode(control).also {
+            require(it.size in 1..MAX_BYTES) { "group_control_size=${it.size}" }
+        }
     }
     fun decode(bytes: ByteArray): GroupControl {
         require(bytes.size in 1..MAX_BYTES)

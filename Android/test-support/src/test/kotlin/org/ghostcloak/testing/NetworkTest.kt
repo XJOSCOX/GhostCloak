@@ -15,6 +15,92 @@ import java.net.URI
 import java.util.concurrent.Executors
 
 class NetworkTest {
+    @Test fun governedGroupReplyReactionEditDeleteFanoutAndModerationPriority() = runBlocking {
+        Fixture().use {f ->
+            val a=f.person("alice",true);val b=f.person("bob",true)
+            val people=listOf(a,b)
+            val repos=people.associateWith {LocalRepository(it.records)}
+            val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
+                NetworkMailboxTransport(f.client(p),p.state))}
+            fun group(p:Person)=GroupMembershipTransport(p.records,repos.getValue(p),p.engine,p.state,
+                GroupAuthorityResolver(repos.getValue(p),p.engine,f.client(p),p.records),outboxes.getValue(p))
+            val conversations=people.associateWith {p ->ConversationService(p.engine,
+                repos.getValue(p)).also {it.open()}}
+            for(p in people) for(q in people) if(p!=q) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repos.getValue(p).save(Contact(RandomIdentifiers.create(),q.registration.accountId,
+                    q.name,q.registration.deviceId))
+                repos.getValue(p).groupPeer(q.registration.deviceId,true)
+                repos.getValue(p).admissionV2Peer(q.registration.deviceId,true)
+                repos.getValue(p).baselineV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceTextV2Peer(q.registration.deviceId,true)
+            }
+            suspend fun settle(rounds:Int=1) {repeat(rounds) {
+                for(p in people) outboxes.getValue(p).pendingIds().forEach {id ->
+                    val outbox=outboxes.getValue(p)
+                    if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)
+                }
+                for(p in people) {
+                    val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                    val deliveries=mailbox.fetch()
+                    deliveries.forEach {conversations.getValue(p).acceptNetwork(
+                        EnvelopeCodec.decode(it.encryptedEnvelope))}
+                    if(deliveries.isNotEmpty()) mailbox.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+                    group(p).processPending()
+                }
+            }}
+            val id=group(a).createAndInvite(b.registration.deviceId)
+            settle(2);group(b).accept(group(b).invitations().single().id);settle(4)
+            group(a).beginGroupManagementSetup(id);settle(10)
+            group(a).beginGroupManagementSetup(id);settle(12)
+            assertTrue(group(a).groupInfo(id)!!.messageControlsCapable)
+            assertTrue(group(b).groupInfo(id)!!.messageControlsCapable)
+            repos.getValue(a).groupMessageControlsPeer(b.registration.deviceId,false)
+            assertFalse(group(a).groupInfo(id)!!.messageControlsCapable)
+            rejectAsync {group(a).react(id,GroupIds.create(),"👍")}
+            settle(3)
+            assertTrue(group(a).groupInfo(id)!!.messageControlsCapable)
+            val original=group(b).sendText(id,"before edit");settle(4)
+            group(a).react(id,original,"👍");settle(4)
+            assertEquals("👍",group(b).conversation(id)!!.messages.single {
+                it.logicalId==original}.reactions.single().emoji)
+            group(b).editOwnText(id,original,"after edit");settle(4)
+            assertEquals("after edit",group(a).conversation(id)!!.messages.single {
+                it.logicalId==original}.text)
+            val reply=group(a).sendText(id,"reply",original);settle(4)
+            assertEquals(original,group(b).conversation(id)!!.messages.single {
+                it.logicalId==reply}.replyToLogicalId)
+            group(b).deleteOwnText(id,original);settle(4)
+            for(p in people) {
+                val row=group(p).conversation(id)!!.messages.single {it.logicalId==original}
+                assertEquals(GroupModerationState.DELETED_BY_SENDER,row.moderationState)
+                assertEquals("",row.text)
+                assertTrue(row.reactions.isEmpty())
+            }
+            group(a).removeGroupMessageGoverned(id,original);settle(8)
+            for(p in people) assertEquals(GroupModerationState.REMOVED_BY_ADMIN,
+                group(p).conversation(id)!!.messages.single {it.logicalId==original}.moderationState)
+            val ownerText=group(a).sendText(id,"owner text");settle(4)
+            group(a).setPostingModeGoverned(id,GroupPostingModeV1.ADMINS_ONLY);settle(8)
+            rejectAsync {group(b).sendText(id,"not allowed")}
+            group(b).react(id,ownerText,"🙏");settle(4)
+            assertEquals("🙏",group(a).conversation(id)!!.messages.single {
+                it.logicalId==ownerText}.reactions.single().emoji)
+            val bId=b.records.read("app/group/member/$id")!!.decodeToString()
+            group(a).restrictMemberGoverned(id,bId);settle(8)
+            group(b).react(id,ownerText,"❤️");settle(4)
+            assertEquals("❤️",group(a).conversation(id)!!.messages.single {
+                it.logicalId==ownerText}.reactions.single().emoji)
+            group(a).unrestrictMemberGoverned(id,bId);settle(8)
+            group(a).removeGroupMemberGoverned(id,bId);settle(8)
+            rejectAsync {group(b).react(id,ownerText,"❤️")}
+            rejectAsync {group(b).editOwnText(id,original,"late")}
+            rejectAsync {group(b).deleteOwnText(id,original)}
+        }
+    }
     @Test fun governedModerationScrubsBothEndpointsAndDemotedAdminCannotPropose() = runBlocking {
         Fixture().use {f ->
             val a=f.person("alice",true);val b=f.person("bob",true)
@@ -84,7 +170,8 @@ class NetworkTest {
         Fixture().use {f ->
             val a=f.person("alice",true);val b=f.person("bob",true)
             val c=f.person("charlie",true);val d=f.person("dana",true)
-            val people=listOf(a,b,c,d)
+            val e=f.person("erin",true)
+            val people=listOf(a,b,c,d,e)
             val repos=people.associateWith {LocalRepository(it.records)}
             val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
                 NetworkMailboxTransport(f.client(p),p.state))}
@@ -141,6 +228,9 @@ class NetworkTest {
                 assertEquals("",row.text)
                 assertEquals(GroupModerationState.REMOVED_BY_ADMIN,row.moderationState)
             }
+            val deletedFromC=group(c).sendText(id,"delete before later admission")
+            settle(4)
+            group(c).deleteOwnText(id,deletedFromC);settle(4)
             val aId=a.records.read("app/group/member/$id")!!.decodeToString()
             val bId=b.records.read("app/group/member/$id")!!.decodeToString()
             val cId=c.records.read("app/group/member/$id")!!.decodeToString()
@@ -152,6 +242,10 @@ class NetworkTest {
             assertEquals(1,group(d).invitations().size)
             group(d).accept(group(d).invitations().single().id);settle(15)
             assertEquals(4,group(a).state(id)!!.members.size)
+            group(b).invite(id,e.registration.deviceId);settle(8)
+            group(e).accept(group(e).invitations().single().id);settle(15)
+            assertEquals(5,group(a).state(id)!!.members.size)
+            assertTrue(group(e).conversation(id)!!.messages.none {it.logicalId==deletedFromC})
             rejectAsync {group(b).removeGroupMemberGoverned(id,aId)}
             group(a).promoteGroupMemberGoverned(id,cId);settle(10)
             rejectAsync {group(b).removeGroupMemberGoverned(id,cId)}
@@ -162,7 +256,7 @@ class NetworkTest {
             group(b).unrestrictMemberGoverned(id,cId);settle(10)
             group(b).removeGroupMemberGoverned(id,cId);settle(10)
             assertEquals(GroupLocalStatus.REMOVED,group(c).status(id))
-            assertEquals(3,group(a).state(id)!!.members.size)
+            assertEquals(4,group(a).state(id)!!.members.size)
             assertTrue(repos.getValue(a).isActiveContact(c.registration.deviceId))
         }
     }

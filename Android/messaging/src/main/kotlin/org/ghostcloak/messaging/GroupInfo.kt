@@ -17,6 +17,7 @@ data class GroupInfo(
     val postingMode:GroupPostingModeV1, val pending:Boolean,
     val journalFull:Boolean, val invitationPending:Boolean, val capable:Boolean=true,
     val waitingForMemberCheck:Boolean=false,val moderationCapable:Boolean=true,
+    val messageControlsCapable:Boolean=false,
 ) {
     val active get()=status==GroupLocalStatus.ACTIVE
     val ready get()=active && managementStatus==GroupManagementStatus.READY
@@ -28,6 +29,7 @@ data class GroupInfo(
     val canChangePosting get()=canManage && localRole in setOf(GroupRole.OWNER,GroupRole.ADMIN)
     val canModerate get()=canManage && moderationCapable &&
         localRole in setOf(GroupRole.OWNER,GroupRole.ADMIN)
+    val canUseMessageControls get()=ready && messageControlsCapable && !pending
     fun canRestrict(target:GroupInfoMember)=canManage && !target.isLocal &&
         target.role!=GroupRole.OWNER && (localRole==GroupRole.OWNER ||
             localRole==GroupRole.ADMIN && target.role==GroupRole.MEMBER)

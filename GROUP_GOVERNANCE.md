@@ -1,5 +1,18 @@
 # Group governance and management
 
+## P13.5 message-control boundary
+
+Group replies (`GroupTextV3`) and reaction/edit/sender-delete controls do not
+consume journal entries. They bind to the accepted activation digest, sequence,
+and head digest, and the recipient verifies the authenticated actor against
+the current canonical roster. A future head waits for resync; a stale head is
+discarded even if it was valid when sent, because old-head acceptance would
+permit backdating after removal. Posting restrictions prevent new replies but
+do not prevent reactions. Only the original sender can edit or delete their
+text. Admin moderation remains journal-ordered and has terminal precedence
+over sender deletion. A P13.5-capable invitee starts at its signed checkpoint,
+receives no old plaintext, and inherits bounded terminal ID filters.
+
 ## P13.4B management surface
 
 Group Info projects member labels, roles, posting mode, pending status, and the

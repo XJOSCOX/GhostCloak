@@ -1,5 +1,31 @@
 # P12 — private group architecture design
 
+**P13.5 group message controls:** A reply uses a separate `GroupTextV3` Signal
+frame with the target's logical ID; it carries no snapshot of the old text.
+Reactions, own-text edits, and sender deletion use a versioned, authenticated
+message-control frame. These are per-recipient Signal fan-outs with one durable
+logical intent and fixed recipients, never governance entries. Every current
+member must advertise `group-controls-v1`; otherwise ordinary group text keeps
+working and the controls remain unavailable. A newly created or received
+control must match the exact current accepted governance head. Future-head
+controls wait in a bounded hidden queue for resync; stale controls are dropped.
+This can lose a delayed valid edit/reaction/delete after a governance update,
+which is the deliberate anti-backdating tradeoff. Blocked sender controls are
+authenticated and ACKed without parsing or applying user content.
+
+One current reaction per actor/target uses an actor-local increasing revision;
+an older update cannot restore a previous emoji. Edits require the original
+sender and a higher per-message revision, replace the active text without an
+edit-history UI, and update reply previews through the current target. Sender
+delete also requires the original sender, clears active plaintext/reactions,
+and creates a distinct terminal notice. A delete arriving before its target
+remains a bounded candidate until the later authenticated target proves the
+claimed sender. Admin moderation is canonical and overrides sender deletion
+regardless of arrival order. Terminal targets cannot be edited or reacted to.
+The new invitee's dual-signed policy checkpoint carries a separate bounded
+sender-deletion ID filter; no pre-join text or reactions are transferred.
+Deletion is best effort and cannot retract content already seen or saved.
+
 **P13.4C group-text moderation (implementation under assurance):** An Owner or
 Admin may propose `REMOVE_GROUP_MESSAGE` for a logical group-text ID. It is a
 signed policy-entry variant in the same governance sequence as membership and

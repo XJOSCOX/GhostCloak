@@ -222,4 +222,54 @@ class GroupInvitationScreenTest {
         }}
         compose.onNodeWithText("Message removed by an admin").assertExists()
     }
+    @Test fun groupControlsOfferReplyReactionEditAndDistinctSenderDelete() {
+        val groupId=GroupIds.create();val own=GroupIds.create();val peer=GroupIds.create()
+        val id=GroupIds.create()
+        val info=GroupInfo(groupId,GroupRole.OWNER,GroupLocalStatus.ACTIVE,
+            GroupManagementStatus.READY,listOf(GroupInfoMember(own,"own-device",GroupRole.OWNER,
+                false,true,true)),GroupPostingModeV1.EVERYONE,false,false,false,
+            messageControlsCapable=true)
+        val group=GroupMembershipTransport.Conversation(groupId,GroupLocalStatus.ACTIVE,2,
+            mapOf(own to "own-device",peer to "peer-device"),listOf(GroupChatMessage(
+                groupId,id,2,own,true,"Hello group",1,
+                recipients=listOf(GroupRecipient("peer-device",GroupRecipientState.SENT)))),info=info)
+        var reacted:String?="none";var deleted="";var edited=""
+        compose.setContent {GhostCloakTheme {
+            GroupConversationScreen(AppState(loading=false),group,{},{_,_->},{},
+                react={_,emoji->reacted=emoji},
+                editOwn={_,text,done->edited=text;done()},deleteOwn={deleted=it})
+        }}
+        compose.onNodeWithText("Hello group").performTouchInput {longClick()}
+        compose.onNodeWithText("Reply").assertExists()
+        compose.onNodeWithText("Edit").assertExists()
+        compose.onNodeWithText("Delete for everyone").assertExists()
+        compose.onNodeWithText("Remove message").assertExists()
+        compose.onNodeWithText("👍").performClick()
+        assertEquals("👍",reacted)
+        compose.onNodeWithText("Hello group").performTouchInput {longClick()}
+        compose.onNodeWithText("Edit").performClick()
+        compose.onNodeWithTag("group-composer").performTextClearance()
+        compose.onNodeWithTag("group-composer").performTextInput("Updated")
+        compose.onNodeWithContentDescription("Send").performClick()
+        assertEquals("Updated",edited)
+        compose.onNodeWithText("Hello group").performTouchInput {longClick()}
+        compose.onNodeWithText("Delete for everyone").performClick()
+        compose.onNodeWithText("Delete this message?").assertExists()
+        compose.onNodeWithText("Delete for everyone").performClick()
+        assertEquals(id,deleted)
+    }
+    @Test fun groupReplyUsesReferenceAndTombstonesHaveDistinctLabels() {
+        val groupId=GroupIds.create();val own=GroupIds.create();val target=GroupIds.create()
+        val reply=GroupChatMessage(groupId,GroupIds.create(),2,own,true,"Reply",2,
+            replyToLogicalId=target)
+        val original=GroupChatMessage(groupId,target,2,own,true,"",1,
+            moderationState=GroupModerationState.DELETED_BY_SENDER)
+        val group=GroupMembershipTransport.Conversation(groupId,GroupLocalStatus.ACTIVE,2,
+            mapOf(own to "own-device"),listOf(original,reply))
+        compose.setContent {GhostCloakTheme {
+            GroupConversationScreen(AppState(loading=false),group,{},{_,_->},{})
+        }}
+        compose.onNodeWithText("This message was deleted").assertExists()
+        compose.onNodeWithText("You: Original message deleted").assertExists()
+    }
 }

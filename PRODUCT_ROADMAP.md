@@ -245,3 +245,14 @@ an action is proposed. Restricted Admins retain moderation authority; demoted
 and removed Admins cannot create new actions. Offline recipients replay the
 same signed journal. Sender group delete, media moderation, and local group
 notification mute remain deferred. No backend or DB deployment is needed.
+
+**P13.5 group message controls (implementation under validation):** Governance-ready
+groups gain reference-only replies, six emoji reactions with per-actor order,
+revisioned own-text edits, and own-text sender deletion. All current members
+must advertise the authenticated group-control capability; normal text remains
+available to mixed-version groups. Controls are per-recipient Signal content
+bound to the exact current governance head, not new governance entries. Admin
+moderation takes terminal precedence over sender deletion. A separate signed
+new-member terminal filter prevents late old ciphertext from restoring deleted
+content. Delayed controls can be discarded after governance advances. No
+backend deployment or database migration is involved.

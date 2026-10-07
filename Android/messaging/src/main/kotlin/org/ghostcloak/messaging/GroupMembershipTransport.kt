@@ -26,6 +26,7 @@ class GroupMembershipTransport(
     private val acceptanceMutex = Mutex()
     private val textMutex = Mutex()
     private val chats=GroupChatStore(records)
+    private val messageControls=GroupMessageControlStoreV1(records)
     private val currentAuthority=GroupCurrentAuthority(records)
     private val admissionV2=AdmissionV2Store(records)
     private val historicalAuthority=HistoricalGroupAuthority(records)
@@ -93,6 +94,9 @@ class GroupMembershipTransport(
     private fun allModerationPeers(state:GroupState,localId:String)=state.members.all {
         it.memberId==localId || repository.groupModerationPeer(it.deviceId)
     }
+    private fun allMessageControlPeers(state:GroupState,localId:String)=state.members.all {
+        it.memberId==localId || repository.groupMessageControlsPeer(it.deviceId)
+    }
     /** Only the coordinator retires a fully acknowledged prior entry before the next mutation. */
     private fun retireCompletedGovernanceEntry(groupId:String,state:GroupState,localId:String) {
         if(localId!=state.coordinatorId) return
@@ -117,7 +121,8 @@ class GroupMembershipTransport(
         for(member in state.members.filter {it.memberId!=localId &&
             (!repository.governanceV1Peer(it.deviceId) ||
                 !repository.governanceTextV2Peer(it.deviceId) ||
-                !repository.groupModerationPeer(it.deviceId))})
+                !repository.groupModerationPeer(it.deviceId) ||
+                !repository.groupMessageControlsPeer(it.deviceId))})
             sendGovernanceOnce(state.groupId,
                 if(repository.governanceV1Peer(member.deviceId)) "text-v2-capability" else "capability",
                 member.deviceId,
@@ -964,6 +969,8 @@ class GroupMembershipTransport(
                 GroupGovernancePolicyRulesV1.digest(head.activationDigest,policy)) ||
             policyProof.moderationFilter?.contentEquals(
                 chats.moderationFilter(control.groupId))!=true ||
+            (policyProof.senderDeleteFilter!=null &&
+                !policyProof.senderDeleteFilter.contentEquals(chats.senderDeleteFilter(control.groupId))) ||
             !MessageDigest.isEqual(checkpoint.activationStateDigest,barrier.activationStateDigest) ||
             checkpoint.activationStateRevision!=barrier.activationStateRevision ||
             !MessageDigest.isEqual(checkpoint.baselineCertificateDigest,
@@ -1937,7 +1944,8 @@ class GroupMembershipTransport(
             invitationPending || (barrier!=null && !noOutgoingInvitation(groupId)),
             barrier==null || allTextV2Peers(current,localId),
             records.transaction {records.read("app/group/baseline-v1/start-intent/$groupId")!=null},
-            allModerationPeers(current,localId))
+            allModerationPeers(current,localId),
+            allMessageControlPeers(current,localId))
     }
     suspend fun beginGroupManagementSetup(groupId:String) {
         val info=groupInfo(groupId) ?: throw ApiFailure(409,"group_unavailable")
@@ -1995,12 +2003,12 @@ class GroupMembershipTransport(
             }
         }
         Conversation(id,status,current.members.size,current.members.associate {it.memberId to it.deviceId},
-            chats.messages(id),pending,restriction,groupInfo(id,pending))
+            chats.messages(id,localId),pending,restriction,groupInfo(id,pending))
         }
     }
     fun conversation(id:String):Conversation?=conversations().firstOrNull {it.groupId==id}
     /** Persist one logical message and its immutable recipient set before any pairwise enqueue. */
-    suspend fun sendText(groupId:String,text:String):String = textMutex.withLock {
+    suspend fun sendText(groupId:String,text:String,replyToLogicalId:String?=null):String = textMutex.withLock {
         val local=localMember(groupId) ?: throw ApiFailure(409,"group_unavailable")
         val before=GroupLedger(records,GroupTrustedPeer {false},local).state(groupId)
             ?: throw ApiFailure(409,"group_unavailable")
@@ -2016,9 +2024,11 @@ class GroupMembershipTransport(
                 throw ApiFailure(409,"group_unavailable")
             val logicalId=GroupIds.create()
             val message=GroupChatMessage(groupId,logicalId,current.epoch,localId,true,text,
-                chats.nextOrder(),current.members.filter {it.memberId!=localId}.map {GroupRecipient(it.deviceId)})
+                chats.nextOrder(),current.members.filter {it.memberId!=localId}.map {GroupRecipient(it.deviceId)},
+                replyToLogicalId=replyToLogicalId)
             val barrier=ledger.governanceBarrier(groupId)
             if(barrier==null) {
+                if(replyToLogicalId!=null) throw ApiFailure(409,"group_controls_unavailable")
                 GroupTextCodec.validate(GroupText(groupId=groupId,epoch=current.epoch,
                     senderMemberId=localId,logicalId=logicalId,text=text))
                 chats.create(message)
@@ -2033,6 +2043,9 @@ class GroupMembershipTransport(
                     !allTextV2Peers(current,localId) ||
                     !GroupGovernancePolicyRulesV1.canSend(policy,current,localId))
                     throw ApiFailure(409,"group_send_unavailable")
+                if(replyToLogicalId!=null && (!allMessageControlPeers(current,localId) ||
+                        chats.message(groupId,replyToLogicalId)==null))
+                    throw ApiFailure(409,"group_controls_unavailable")
                 val binding=GroupTextV2Binding(head.activationDigest,head.sequence,
                     head.headDigest,GroupGovernancePolicyRulesV1.digest(head.activationDigest,policy))
                 GroupTextV2Codec.validate(GroupTextV2(groupId=groupId,epoch=current.epoch,
@@ -2040,11 +2053,71 @@ class GroupMembershipTransport(
                     governanceActivationDigest=head.activationDigest,
                     governanceSequence=head.sequence,governanceHeadDigest=head.headDigest,
                     policyDigest=binding.policyDigest,text=text))
+                if(replyToLogicalId!=null) GroupTextV3Codec.validate(GroupTextV3(
+                    groupId=groupId,epoch=current.epoch,senderMemberId=localId,logicalId=logicalId,
+                    governanceActivationDigest=head.activationDigest,
+                    governanceSequence=head.sequence,governanceHeadDigest=head.headDigest,
+                    policyDigest=binding.policyDigest,text=text,replyToLogicalId=replyToLogicalId))
                 chats.createV2(message,binding)
             }
             logicalId
         }
     }
+    private fun currentControlContext(groupId:String):Triple<GroupState,String,GovernanceHeadFoundationV1> {
+        val localId=localMember(groupId) ?: throw ApiFailure(409,"group_unavailable")
+        val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+        val state=ledger.state(groupId) ?: throw ApiFailure(409,"group_unavailable")
+        val head=ledger.governanceHead(groupId) ?: throw ApiFailure(409,"group_controls_unavailable")
+        if(ledger.status(groupId)!=GroupLocalStatus.ACTIVE || state.lifecycle!=GroupLifecycle.ACTIVE ||
+            ledger.governanceBarrier(groupId)==null ||
+            ledger.governanceJournalStatus(groupId)!=GovernanceJournalStatus.COMPLETE ||
+            (governanceV1.ready(groupId)==null && governedAdmission.join(groupId)==null) ||
+            governanceJournal.marker(groupId)!=null || groupInfo(groupId)?.pending==true ||
+            !allMessageControlPeers(state,localId))
+            throw ApiFailure(409,"group_controls_unavailable")
+        return Triple(state,localId,head)
+    }
+    private suspend fun createMessageControl(groupId:String,targetId:String,
+        kind:GroupMessageControlKindV1,emoji:String?=null,text:String?=null):String = textMutex.withLock {
+        val before=state(groupId) ?: throw ApiFailure(409,"group_unavailable")
+        val localId=localMember(groupId) ?: throw ApiFailure(409,"group_unavailable")
+        trusted(listOf(before.members.singleOrNull {it.memberId==localId}
+            ?: throw ApiFailure(409,"group_unavailable")))
+        records.transaction {
+            val (current,actor,head)=currentControlContext(groupId)
+            val target=chats.message(groupId,targetId) ?: throw ApiFailure(409,"group_message_unavailable")
+            if(target.outgoing && target.recipients.any {it.state!=GroupRecipientState.SENT})
+                throw ApiFailure(409,"group_message_pending_delivery")
+            if(target.moderationState!=GroupModerationState.NONE ||
+                kind!=GroupMessageControlKindV1.REACTION && target.senderMemberId!=actor)
+                throw ApiFailure(409,"group_message_unavailable")
+            val revision=when(kind) {
+                GroupMessageControlKindV1.REACTION -> chats.nextReactionSequence(groupId,targetId,actor)
+                GroupMessageControlKindV1.EDIT -> target.editRevision+1
+                GroupMessageControlKindV1.DELETE_BY_SENDER -> 0L
+            }
+            val value=GroupMessageControlV1(groupId=groupId,activationDigest=head.activationDigest,
+                governanceSequence=head.sequence,governanceHeadDigest=head.headDigest,
+                actorMemberId=actor,targetLogicalId=targetId,controlId=GroupIds.create(),
+                kind=kind,revision=revision,emoji=emoji,text=text)
+            messageControls.create(value,current.members.filter {it.memberId!=actor}.map {
+                GroupRecipient(it.deviceId)
+            })
+            val applied=when(kind) {
+                GroupMessageControlKindV1.REACTION -> chats.react(groupId,targetId,actor,revision,emoji)
+                GroupMessageControlKindV1.EDIT -> chats.edit(groupId,targetId,actor,revision,text!!)
+                GroupMessageControlKindV1.DELETE_BY_SENDER -> chats.deleteBySender(groupId,targetId,actor)
+            }
+            if(!applied) throw ApiFailure(409,"group_message_unavailable")
+            value.controlId
+        }
+    }
+    suspend fun react(groupId:String,targetId:String,emoji:String?):String =
+        createMessageControl(groupId,targetId,GroupMessageControlKindV1.REACTION,emoji=emoji)
+    suspend fun editOwnText(groupId:String,targetId:String,replacement:String):String =
+        createMessageControl(groupId,targetId,GroupMessageControlKindV1.EDIT,text=replacement)
+    suspend fun deleteOwnText(groupId:String,targetId:String):String =
+        createMessageControl(groupId,targetId,GroupMessageControlKindV1.DELETE_BY_SENDER)
     /** Public management actions use the signed, single-head governance path only. */
     suspend fun removeGroupMemberGoverned(groupId:String,targetId:String)=textMutex.withLock {
         proposeGovernedGroupChange(groupId,GroupAction.REMOVE,targetId)
@@ -2546,6 +2619,15 @@ class GroupMembershipTransport(
                         authority.matchesCurrentGroupMember(current.groupId,peer))
                         repository.groupModerationPeer(pending.senderDeviceId,true)
                 }
+                if(pending.messageControlsAdvertised) {
+                    val current=state(pending.control.groupId)
+                    val peer=current?.members?.singleOrNull {
+                        it.deviceId==pending.senderDeviceId
+                    }
+                    if(current!=null && peer!=null &&
+                        authority.matchesCurrentGroupMember(current.groupId,peer))
+                        repository.groupMessageControlsPeer(pending.senderDeviceId,true)
+                }
                 when(pending.control.kind) {
                     GroupControlKind.INVITE -> receiveInvite(pending.senderDeviceId,pending.control)
                     GroupControlKind.ACCEPT -> receiveAcceptance(pending.senderDeviceId,pending.control)
@@ -2612,14 +2694,17 @@ class GroupMembershipTransport(
             val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
             if(ledger.governanceBarrier(groupId)==null) continue
             val current=ledger.state(groupId) ?: continue
-            if(!allTextV2Peers(current,localId) || !allModerationPeers(current,localId))
+            if(!allTextV2Peers(current,localId) || !allModerationPeers(current,localId) ||
+                !allMessageControlPeers(current,localId))
                 probeMissingGovernancePeers(current,localId)
         }
         processSystemOutbox()
         retryMarkedResync()
         retryMarkedGovernanceResync()
+        processPendingMessageControls()
         processPendingTexts()
         flushTexts()
+        flushMessageControls()
     }
     private suspend fun receiveProposalV2(sender:String,control:GroupControl) {
         val proposal=control.proposalV2 ?: throw ApiFailure(400,"group_invalid")
@@ -2750,24 +2835,98 @@ class GroupMembershipTransport(
             admissionV2.clearQueued(control.groupId,eventId)
         }
     }
+    private suspend fun processPendingMessageControls() {
+        for(groupId in chats.groups()) {
+            val member=localMember(groupId) ?: continue
+            val head=GroupLedger(records,GroupTrustedPeer {false},member).governanceHead(groupId)
+                ?: continue
+            messageControls.discardStalePendingTargets(groupId,head.sequence,head.headDigest)
+        }
+        for((envelopeId,pending) in messageControls.pending()) {
+            val value=pending.control
+            val localId=localMember(value.groupId)
+            if(localId==null) {messageControls.discard(envelopeId);continue}
+            val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+            val current=ledger.state(value.groupId)
+            val head=ledger.governanceHead(value.groupId)
+            if(current==null || ledger.status(value.groupId)!=GroupLocalStatus.ACTIVE ||
+                ledger.governanceBarrier(value.groupId)==null) {
+                messageControls.discard(envelopeId);continue
+            }
+            if(head==null || ledger.governanceJournalStatus(value.groupId)!=GovernanceJournalStatus.COMPLETE ||
+                (governanceV1.ready(value.groupId)==null && governedAdmission.join(value.groupId)==null))
+                continue
+            if(!allMessageControlPeers(current,localId)) {
+                probeMissingGovernancePeers(current,localId)
+                continue
+            }
+            if(!MessageDigest.isEqual(value.activationDigest,head.activationDigest)) {
+                messageControls.discard(envelopeId);continue
+            }
+            if(value.governanceSequence>head.sequence) {
+                runCatching {requestGovernanceResync(value.groupId)}
+                continue
+            }
+            if(governanceJournal.marker(value.groupId)!=null) continue
+            val actor=current.members.singleOrNull {it.memberId==value.actorMemberId}
+            if(value.governanceSequence!=head.sequence ||
+                !MessageDigest.isEqual(value.governanceHeadDigest,head.headDigest) ||
+                actor?.deviceId!=pending.senderDeviceId ||
+                !repository.isActiveContact(pending.senderDeviceId)) {
+                messageControls.discard(envelopeId);continue
+            }
+            try {trusted(listOf(actor ?: continue))}
+            catch(e:CancellationException) {throw e}
+            catch(_:ApiFailure) {continue}
+            try { records.transaction {
+                val fresh=ledger.state(value.groupId)
+                val freshHead=ledger.governanceHead(value.groupId)
+                if(fresh!=null && freshHead!=null && ledger.status(value.groupId)==GroupLocalStatus.ACTIVE &&
+                    ledger.governanceJournalStatus(value.groupId)==GovernanceJournalStatus.COMPLETE &&
+                    governanceJournal.marker(value.groupId)==null &&
+                    value.governanceSequence==freshHead.sequence &&
+                    MessageDigest.isEqual(value.activationDigest,freshHead.activationDigest) &&
+                    MessageDigest.isEqual(value.governanceHeadDigest,freshHead.headDigest) &&
+                    fresh.members.singleOrNull {it.memberId==value.actorMemberId}?.deviceId==pending.senderDeviceId &&
+                    repository.isActiveContact(pending.senderDeviceId))
+                    messageControls.apply(envelopeId,value)
+            }} catch(_:IllegalArgumentException) {messageControls.discard(envelopeId)}
+        }
+    }
     private suspend fun processPendingTexts() {
-        for((envelopeId,pending) in chats.pendingV2()) {
+        val governedPending=chats.pendingV2().map {Triple(it.first,it.second,null as GroupTextV3?)} +
+            chats.pendingV3().map {pair ->
+                val v3=pair.second.text
+                Triple(pair.first,PendingGroupTextV2(pair.second.senderDeviceId,GroupTextV2(
+                    groupId=v3.groupId,epoch=v3.epoch,senderMemberId=v3.senderMemberId,
+                    logicalId=v3.logicalId,governanceActivationDigest=v3.governanceActivationDigest,
+                    governanceSequence=v3.governanceSequence,
+                    governanceHeadDigest=v3.governanceHeadDigest,policyDigest=v3.policyDigest,
+                    text=v3.text)),v3)
+            }
+        for((envelopeId,pending,v3) in governedPending) {
+            fun discard() {if(v3==null) chats.discardPendingV2(envelopeId)
+                else chats.discardPendingV3(envelopeId)}
             val value=pending.text
             val localId=localMember(value.groupId)
-            if(localId==null) {chats.discardPendingV2(envelopeId);continue}
+            if(localId==null) {discard();continue}
             val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
             val current=ledger.state(value.groupId)
             val head=ledger.governanceHead(value.groupId)
             val policy=ledger.governancePolicy(value.groupId)
             if(current==null || ledger.status(value.groupId)!=GroupLocalStatus.ACTIVE) {
-                chats.discardPendingV2(envelopeId);continue
+                discard();continue
             }
             if(ledger.governanceBarrier(value.groupId)==null || head==null || policy==null ||
                 ledger.governanceJournalStatus(value.groupId)!=GovernanceJournalStatus.COMPLETE ||
                 (governanceV1.ready(value.groupId)==null && governedAdmission.join(value.groupId)==null))
                 continue // The frame remains encrypted and hidden until signed authority exists.
+            if(v3!=null && !allMessageControlPeers(current,localId)) {
+                probeMissingGovernancePeers(current,localId)
+                continue
+            }
             if(!MessageDigest.isEqual(value.governanceActivationDigest,head.activationDigest)) {
-                chats.discardPendingV2(envelopeId);continue
+                discard();continue
             }
             if(value.governanceSequence>head.sequence) {
                 runCatching {requestGovernanceResync(value.groupId)}
@@ -2779,12 +2938,12 @@ class GroupMembershipTransport(
                 !MessageDigest.isEqual(value.policyDigest,
                     GroupGovernancePolicyRulesV1.digest(head.activationDigest,policy)) ||
                 !GroupGovernancePolicyRulesV1.canSend(policy,current,value.senderMemberId)) {
-                chats.discardPendingV2(envelopeId);continue
+                discard();continue
             }
             val sender=current.members.singleOrNull {it.memberId==value.senderMemberId}
             if(sender==null || sender.deviceId!=pending.senderDeviceId ||
                 !repository.isActiveContact(sender.deviceId)) {
-                chats.discardPendingV2(envelopeId);continue
+                discard();continue
             }
             try {trusted(listOf(sender))}
             catch(e:CancellationException) {throw e}
@@ -2804,7 +2963,8 @@ class GroupMembershipTransport(
                     fresh.members.singleOrNull {it.memberId==value.senderMemberId}?.deviceId==pending.senderDeviceId &&
                     repository.isActiveContact(pending.senderDeviceId) &&
                     GroupGovernancePolicyRulesV1.canSend(freshPolicy,fresh,value.senderMemberId))
-                    chats.acceptV2(envelopeId,pending)
+                    if(v3==null) chats.acceptV2(envelopeId,pending) else
+                        chats.acceptV3(envelopeId,PendingGroupTextV3(pending.senderDeviceId,v3))
             }
         }
         for((envelopeId,pending) in chats.pending()) {
@@ -2836,6 +2996,66 @@ class GroupMembershipTransport(
             chats.accept(envelopeId,pending)
         }
     }
+    private suspend fun flushMessageControls() {
+        var budget=8
+        for(item in messageControls.outgoing()) {
+            if(budget<=0) break
+            val value=item.control
+            val localId=localMember(value.groupId) ?: continue
+            val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
+            val state=ledger.state(value.groupId) ?: continue
+            val head=ledger.governanceHead(value.groupId) ?: continue
+            messageControls.cancelStale(value.groupId,head.sequence,head.headDigest,
+                state.members.map {it.deviceId}.toSet())
+            if(ledger.status(value.groupId)!=GroupLocalStatus.ACTIVE ||
+                ledger.governanceJournalStatus(value.groupId)!=GovernanceJournalStatus.COMPLETE ||
+                governanceJournal.marker(value.groupId)!=null ||
+                (governanceV1.ready(value.groupId)==null && governedAdmission.join(value.groupId)==null) ||
+                !allMessageControlPeers(state,localId) ||
+                value.governanceSequence!=head.sequence ||
+                !MessageDigest.isEqual(value.activationDigest,head.activationDigest) ||
+                !MessageDigest.isEqual(value.governanceHeadDigest,head.headDigest)) continue
+            val currentItem=messageControls.outgoing().firstOrNull {
+                it.control.controlId==value.controlId
+            } ?: continue
+            for(recipient in currentItem.recipients) {
+                if(budget<=0) break
+                if(recipient.state !in setOf(GroupRecipientState.PENDING,GroupRecipientState.QUEUED)) continue
+                budget--
+                val member=state.members.singleOrNull {it.deviceId==recipient.deviceId}
+                if(member==null || !repository.isActiveContact(recipient.deviceId)) {
+                    messageControls.markUnavailable(value.groupId,value.controlId,recipient.deviceId);continue
+                }
+                try {trusted(listOf(member))} catch(e:CancellationException) {throw e}
+                catch(_:ApiFailure) {continue}
+                if(recipient.state==GroupRecipientState.PENDING) {
+                    val payload=ConversationPayload.encodeGroupMessageControl(value)
+                    try {outbox.enqueue(recipient.deviceId,payload) {id ->
+                        messageControls.markQueued(value.groupId,value.controlId,recipient.deviceId,id)
+                    }} catch(e:CancellationException) {throw e}
+                    catch(_:ApiFailure) {continue}
+                    finally {payload.fill(0)}
+                }
+                val slot=messageControls.outgoing().firstOrNull {
+                    it.control.controlId==value.controlId
+                }?.recipients?.singleOrNull {it.deviceId==recipient.deviceId} ?: continue
+                if(slot.state!=GroupRecipientState.QUEUED || slot.outboxId==null) continue
+                val result=try {outbox.process(slot.outboxId)}
+                    catch(e:CancellationException) {throw e}
+                    catch(e:ApiFailure) {if(e.status==429) return else continue}
+                    catch(e:CryptoFailure) {
+                        if(e.error in setOf(CryptoError.IdentityChanged,CryptoError.UnknownSession,
+                                CryptoError.ReauthenticationRequired)) continue
+                        throw e
+                    }
+                if(result.state in setOf(OutboxState.SERVER_ACCEPTED,OutboxState.FAILED,
+                        OutboxState.SUBMISSION_EXPIRED)) {
+                    messageControls.markResult(slot.outboxId,result.state==OutboxState.SERVER_ACCEPTED)
+                    outbox.removeFinished(slot.outboxId)
+                }
+            }
+        }
+    }
     private suspend fun flushTexts() {
         var budget=8
         for(groupId in chats.groups()) {
@@ -2861,6 +3081,8 @@ class GroupMembershipTransport(
                 val binding=chats.binding(groupId,message.logicalId)
                 if(barrier!=null && (head==null || policy==null ||
                     binding?.matches(head,policy)!=true)) continue
+                if(message.replyToLogicalId!=null && (binding==null ||
+                    !allMessageControlPeers(current,localId))) continue
                 for(recipient in message.recipients) {
                     if(budget<=0) break
                     if(recipient.state !in setOf(GroupRecipientState.PENDING,GroupRecipientState.QUEUED)) continue
@@ -2877,7 +3099,15 @@ class GroupMembershipTransport(
                         catch(_:ApiFailure) {continue}
                         val payload=if(binding==null) ConversationPayload.encodeGroupText(GroupText(
                             groupId=groupId,epoch=message.epoch,senderMemberId=localId,
-                            logicalId=message.logicalId,text=message.text)) else
+                            logicalId=message.logicalId,text=message.text)) else if(message.replyToLogicalId!=null)
+                            ConversationPayload.encodeGroupTextV3(GroupTextV3(groupId=groupId,
+                                epoch=message.epoch,senderMemberId=localId,
+                                logicalId=message.logicalId,
+                                governanceActivationDigest=binding.activationDigest,
+                                governanceSequence=binding.sequence,
+                                governanceHeadDigest=binding.headDigest,
+                                policyDigest=binding.policyDigest,text=message.text,
+                                replyToLogicalId=message.replyToLogicalId)) else
                             ConversationPayload.encodeGroupTextV2(GroupTextV2(groupId=groupId,
                                 epoch=message.epoch,senderMemberId=localId,
                                 logicalId=message.logicalId,
@@ -3123,7 +3353,8 @@ class GroupMembershipTransport(
             val currentPolicy=GroupLedger(records,GroupTrustedPeer {false},localId)
                 .governancePolicy(control.groupId) ?: throw ApiFailure(409,"group_invalid")
             val unsignedPolicy=GroupGovernancePolicyCheckpointRulesV1.unsigned(checkpoint,
-                currentPolicy,chats.moderationFilter(control.groupId))
+                currentPolicy,chats.moderationFilter(control.groupId),
+                chats.senderDeleteFilter(control.groupId))
             val coordinatorPolicy=unsignedPolicy.copy(coordinatorSignature=network.signGroupStatement(
                 GroupGovernancePolicyCheckpointRulesV1.coordinatorStatement(unsignedPolicy)))
             val policyProof=if(current.ownerId==localId) coordinatorPolicy.copy(

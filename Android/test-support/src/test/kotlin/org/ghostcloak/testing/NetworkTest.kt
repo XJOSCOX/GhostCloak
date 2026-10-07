@@ -58,7 +58,13 @@ class NetworkTest {
             group(a).invite(id,c.registration.deviceId);settle(3)
             group(c).accept(group(c).invitations().single().id);settle(10)
             assertEquals(3,group(a).state(id)!!.members.size)
-            group(a).beginGroupManagementSetup(id);settle(12)
+            repos.getValue(a).baselineV1Peer(b.registration.deviceId,false)
+            group(a).beginGroupManagementSetup(id)
+            assertEquals(GroupManagementStatus.SETTING_UP_BASELINE,
+                group(a).groupInfo(id)!!.managementStatus)
+            settle(12)
+            assertEquals(GroupManagementStatus.BASELINE_READY,
+                group(a).groupInfo(id)!!.managementStatus)
             group(a).beginGroupManagementSetup(id);settle(15)
             assertEquals(GroupManagementStatus.READY,group(c).groupInfo(id)!!.managementStatus)
             val aId=a.records.read("app/group/member/$id")!!.decodeToString()
@@ -127,7 +133,7 @@ class NetworkTest {
             settle(2);group(b).accept(group(b).invitations().single().id);settle(4)
             assertEquals(GroupManagementStatus.NOT_CONFIGURED,group(a).groupInfo(id)!!.managementStatus)
             group(a).beginGroupManagementSetup(id);settle(10)
-            assertEquals(GroupManagementStatus.NOT_CONFIGURED,group(a).groupInfo(id)!!.managementStatus)
+            assertEquals(GroupManagementStatus.BASELINE_READY,group(a).groupInfo(id)!!.managementStatus)
             group(a).beginGroupManagementSetup(id);settle(12)
             assertEquals(GroupManagementStatus.READY,group(a).groupInfo(id)!!.managementStatus)
             val bId=b.records.read("app/group/member/$id")!!.decodeToString()

@@ -2,7 +2,7 @@ package org.ghostcloak.messaging
 
 /** UI-safe local projection. Member IDs remain internal navigation keys, never labels. */
 enum class GroupManagementStatus {
-    NOT_CONFIGURED, SETTING_UP_BASELINE, ACTIVATING, READY, NEEDS_RESYNC,
+    NOT_CONFIGURED, SETTING_UP_BASELINE, BASELINE_READY, ACTIVATING, READY, NEEDS_RESYNC,
     FORKED, LEGACY_INCOMPLETE
 }
 

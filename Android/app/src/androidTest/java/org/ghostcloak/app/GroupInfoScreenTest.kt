@@ -77,6 +77,22 @@ class GroupInfoScreenTest {
         compose.onNodeWithTag("group-posting-mode").assertDoesNotExist()
     }
 
+    @Test fun setupShowsProgressContinuationAndErrorsOnTheSamePage() {
+        val status=mutableStateOf(GroupManagementStatus.NOT_CONFIGURED)
+        val error=mutableStateOf<String?>(null)
+        compose.setContent {GhostCloakTheme {
+            GroupInfoScreen(state.copy(error=error.value),info(status=status.value),{},actions())
+        }}
+        compose.onNodeWithTag("group-setup").assertExists()
+        compose.runOnUiThread {status.value=GroupManagementStatus.SETTING_UP_BASELINE}
+        compose.onNodeWithText("Preparing secure group management…").assertExists()
+        compose.onNodeWithTag("group-setup").assertDoesNotExist()
+        compose.runOnUiThread {status.value=GroupManagementStatus.BASELINE_READY}
+        compose.onNodeWithText("Continue group setup").assertExists()
+        compose.runOnUiThread {error.value="Waiting for updated group members."}
+        compose.onNodeWithText("Waiting for updated group members.").assertExists()
+    }
+
     @Test fun groupHeaderOpensInfo() {
         var opened=0
         val conversation=GroupMembershipTransport.Conversation("group-id",GroupLocalStatus.ACTIVE,

@@ -1841,7 +1841,10 @@ class GroupMembershipTransport(
             barrier!=null && (governanceV1.ready(groupId)!=null ||
                 governedAdmission.join(groupId)!=null) -> GroupManagementStatus.READY
             barrier!=null || governanceV1.pending(groupId)!=null -> GroupManagementStatus.ACTIVATING
-            baselineV1.pending(groupId)!=null -> GroupManagementStatus.SETTING_UP_BASELINE
+            baselineV1.pending(groupId)!=null || records.transaction {
+                records.read("app/group/baseline-v1/start-intent/$groupId")!=null
+            } -> GroupManagementStatus.SETTING_UP_BASELINE
+            baselineV1.active(groupId)!=null -> GroupManagementStatus.BASELINE_READY
             else -> GroupManagementStatus.NOT_CONFIGURED
         }
         val policy=ledger.governancePolicy(groupId) ?: GroupGovernancePolicyV1()
@@ -1871,7 +1874,8 @@ class GroupMembershipTransport(
             info.localRole !in setOf(GroupRole.OWNER,GroupRole.ADMIN) ||
             info.members.firstOrNull {it.isLocal}?.isCoordinator!=true)
             throw ApiFailure(409,"group_policy_denied")
-        if(info.managementStatus!=GroupManagementStatus.NOT_CONFIGURED)
+        if(info.managementStatus !in setOf(GroupManagementStatus.NOT_CONFIGURED,
+                GroupManagementStatus.BASELINE_READY))
             throw ApiFailure(409,"group_governance_entry_pending")
         if(baselineV1.active(groupId)==null) beginAuthorityBaseline(groupId)
         else beginGovernanceActivation(groupId)

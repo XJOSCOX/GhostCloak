@@ -378,6 +378,10 @@ class GhostViewModel internal constructor(application: Application, private val 
         error.code == "group_governance_entry_pending" -> "A group update is already pending."
         error.code == "group_policy_denied" -> "You don't have permission to make that group change."
         error.code == "group_governance_resync" -> "Group security state is still syncing."
+        error.code == "group_governance_capability_pending" ->
+            "Waiting for updated group members. Ask everyone to open Ghost Cloak and Sync, then continue setup."
+        error.code == "group_baseline_unavailable" ->
+            "Group setup cannot start while another group update is pending. Sync and try again."
         error.code == "group_governance_legacy_incomplete" ->
             "This group uses an earlier development version of group management. Create a new group to use management features."
         error.code == "group_transfer_stale" -> "The ownership request expired after a group change. Ask for a new request."

@@ -10,6 +10,11 @@ activation. Every current member must participate; an offline member leaves
 setup pending. Ordinary pre-governance text groups remain usable without a
 reset. Forked, resyncing, and legacy-incomplete groups do not expose management
 actions; a legacy-incomplete group needs a new group for management.
+The first setup tap shows baseline preparation, including when an updated peer
+has not yet confirmed capability. Once all baseline approvals are installed,
+Group Info explicitly offers **Continue group setup** for activation. A missing
+peer capability or other setup failure is shown on Group Info itself; no tap
+silently appears to do nothing.
 
 All member changes use the current signed `GroupTransition` and `GroupRules`,
 wrapped in one A6 governance entry with the exact head and pre-state. A

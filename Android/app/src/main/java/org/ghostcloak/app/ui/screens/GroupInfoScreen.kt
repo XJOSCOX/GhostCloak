@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.PageHeader
+import org.ghostcloak.app.ui.components.ErrorNotice
 import org.ghostcloak.app.ui.theme.GhostLayout
 import org.ghostcloak.messaging.*
 import org.ghostcloak.identity.IdentityTrustState
@@ -38,6 +39,7 @@ private fun GroupRole.label()=when(this) {
 private fun GroupManagementStatus.description()=when(this) {
     GroupManagementStatus.NOT_CONFIGURED -> "Group management isn't enabled yet."
     GroupManagementStatus.SETTING_UP_BASELINE -> "Preparing secure group management…"
+    GroupManagementStatus.BASELINE_READY -> "Member checks are complete. Continue setup to enable group management."
     GroupManagementStatus.ACTIVATING -> "Waiting for all members to update group security…"
     GroupManagementStatus.READY -> "Group management is ready."
     GroupManagementStatus.NEEDS_RESYNC -> "Syncing secure group state…"
@@ -60,6 +62,7 @@ private fun GroupManagementStatus.description()=when(this) {
         PageHeader("Group info","${info.members.size} members",back,avatarName="Group")
         LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(
             horizontal=GhostLayout.pageInset,vertical=16.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
+            if(state.error!=null) item {ErrorNotice(state.error,important=state.errorImportant)}
             item {
                 Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surface) {
                     Column(Modifier.fillMaxWidth().padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -72,11 +75,17 @@ private fun GroupManagementStatus.description()=when(this) {
                         if(info.journalFull) Text(
                             "Group management history is full. Create a new group to make additional management changes.",
                             color=MaterialTheme.colorScheme.onSurfaceVariant)
-                        if(info.managementStatus==GroupManagementStatus.NOT_CONFIGURED &&
+                        if(info.invitationPending && info.managementStatus in setOf(
+                                GroupManagementStatus.NOT_CONFIGURED,GroupManagementStatus.BASELINE_READY))
+                            Text("Finish the pending invitation before setting up group management.",
+                                color=MaterialTheme.colorScheme.onSurfaceVariant)
+                        if(info.managementStatus in setOf(GroupManagementStatus.NOT_CONFIGURED,
+                                GroupManagementStatus.BASELINE_READY) && !info.invitationPending &&
                             info.localRole in setOf(GroupRole.OWNER,GroupRole.ADMIN) &&
                             info.members.firstOrNull {it.isLocal}?.isCoordinator==true && info.active)
                             Button(onClick=actions.setup,enabled=!busy,modifier=Modifier.testTag("group-setup")) {
-                                Text("Enable group management")
+                                Text(if(info.managementStatus==GroupManagementStatus.BASELINE_READY)
+                                    "Continue group setup" else "Enable group management")
                             }
                     }
                 }

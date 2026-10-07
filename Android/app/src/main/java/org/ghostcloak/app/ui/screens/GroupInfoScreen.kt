@@ -1,5 +1,6 @@
 package org.ghostcloak.app.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -28,6 +29,7 @@ class GroupInfoActions(
 )
 
 private enum class MemberAction { RESTRICT, UNRESTRICT, REMOVE, PROMOTE, DEMOTE, TRANSFER }
+private enum class GroupInfoPage { OVERVIEW, MEMBER, CONFIRM_MEMBER, POSTING, INVITE, CONFIRM_LEAVE, CONFIRM_END }
 private fun GroupInfoMember.label(state:AppState):String = if(isLocal) "You" else
     state.contacts.firstOrNull {it.contact.remoteDeviceId==deviceId &&
         !it.contact.request}?.contact?.visibleName ?: "Group member"
@@ -50,14 +52,26 @@ private fun GroupManagementStatus.description()=when(this) {
 
 /** IDs are used only for callbacks. No cryptographic identifiers become on-screen labels. */
 @Composable fun GroupInfoScreen(state:AppState,info:GroupInfo,back:()->Unit,actions:GroupInfoActions) {
-    var selected by remember(info.groupId) {mutableStateOf<GroupInfoMember?>(null)}
-    var confirm by remember(info.groupId) {mutableStateOf<Pair<MemberAction,GroupInfoMember>?>(null)}
-    var confirmLeave by remember(info.groupId) {mutableStateOf(false)}
-    var confirmEnd by remember(info.groupId) {mutableStateOf(false)}
-    var postingPicker by remember(info.groupId) {mutableStateOf(false)}
-    var inviting by remember(info.groupId) {mutableStateOf(false)}
+    var page by remember(info.groupId) {mutableStateOf(GroupInfoPage.OVERVIEW)}
+    var selectedMemberId by remember(info.groupId) {mutableStateOf<String?>(null)}
+    var selectedAction by remember(info.groupId) {mutableStateOf<MemberAction?>(null)}
     val busy=state.loading || info.pending
+    val selected=info.members.firstOrNull {it.memberId==selectedMemberId}
+    val goBack:()->Unit={
+        page=when(page) {
+            GroupInfoPage.OVERVIEW -> {back();GroupInfoPage.OVERVIEW}
+            GroupInfoPage.CONFIRM_MEMBER -> GroupInfoPage.MEMBER
+            else -> GroupInfoPage.OVERVIEW
+        }
+    }
+    BackHandler(page!=GroupInfoPage.OVERVIEW) {goBack()}
     val transferRequest=state.groupOwnershipRequests.firstOrNull {it.groupId==info.groupId}
+    if(page!=GroupInfoPage.OVERVIEW) {
+        GroupInfoDetailPage(state,info,page,selected,selectedAction,busy,goBack,
+            onPage={page=it},onAction={selectedAction=it;page=GroupInfoPage.CONFIRM_MEMBER},
+            actions=actions)
+        return
+    }
     Column(Modifier.fillMaxSize().imePadding().testTag("group-info")) {
         PageHeader("Group info","${info.members.size} members",back,avatarName="Group")
         LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(
@@ -116,7 +130,7 @@ private fun GroupManagementStatus.description()=when(this) {
             if(info.ready) item {
                 Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surface) {
                     Row(Modifier.fillMaxWidth().clickable(enabled=info.canChangePosting && !state.loading) {
-                        postingPicker=true
+                        page=GroupInfoPage.POSTING
                     }.padding(16.dp).testTag("group-posting-mode"),
                         verticalAlignment=Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -131,7 +145,7 @@ private fun GroupManagementStatus.description()=when(this) {
             item {Text("Members",style=MaterialTheme.typography.titleMedium)}
             items(info.members,key={it.memberId}) {member ->
                 Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surface) {
-                    Row(Modifier.fillMaxWidth().clickable {selected=member}
+                    Row(Modifier.fillMaxWidth().clickable {selectedMemberId=member.memberId;page=GroupInfoPage.MEMBER}
                         .padding(16.dp).testTag("group-member-${if(member.isLocal) "you" else member.role.label().lowercase()}"),
                         verticalAlignment=Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -147,7 +161,7 @@ private fun GroupManagementStatus.description()=when(this) {
                 }
             }
             if(info.canInvite) item {
-                OutlinedButton(onClick={inviting=true},enabled=!busy,
+                OutlinedButton(onClick={page=GroupInfoPage.INVITE},enabled=!busy,
                     modifier=Modifier.fillMaxWidth().testTag("group-add-member")) {Text("Add member")}
             }
             if(info.ready) item {
@@ -155,98 +169,164 @@ private fun GroupManagementStatus.description()=when(this) {
                     info.localRole==GroupRole.OWNER -> {
                         Text("Transfer ownership before leaving this group.",
                             color=MaterialTheme.colorScheme.onSurfaceVariant)
-                        if(info.canDissolve) TextButton(onClick={confirmEnd=true},enabled=!busy,
+                        if(info.canDissolve) TextButton(onClick={page=GroupInfoPage.CONFIRM_END},enabled=!busy,
                             modifier=Modifier.testTag("group-end")) {Text("End group")}
                     }
                     info.members.firstOrNull {it.isLocal}?.isCoordinator==true ->
                         Text("The group coordinator must change before you can leave.",
                             color=MaterialTheme.colorScheme.onSurfaceVariant)
-                    info.canLeave -> TextButton(onClick={confirmLeave=true},enabled=!busy,
+                    info.canLeave -> TextButton(onClick={page=GroupInfoPage.CONFIRM_LEAVE},enabled=!busy,
                         modifier=Modifier.testTag("group-leave")) {Text("Leave group")}
                 }
             }
         }
     }
-    if(selected!=null) {
-        val member=selected!!
-        AlertDialog(onDismissRequest={selected=null},title={Text(member.label(state))},
-            text={Column {
-                Text(member.role.label())
-                if(member.isCoordinator && member.role==GroupRole.ADMIN)
-                    Text("This admin is currently coordinating group updates.")
-                if(!member.isLocal && state.contacts.any {it.contact.remoteDeviceId==member.deviceId &&
-                    !it.contact.request && !it.contact.blocked})
-                    TextButton(onClick={selected=null;actions.openChat(member.deviceId)}) {Text("Open direct chat")}
-                fun choose(action:MemberAction) {selected=null;confirm=action to member}
-                if(info.canRestrict(member)) TextButton(onClick={choose(if(member.restricted)
-                    MemberAction.UNRESTRICT else MemberAction.RESTRICT)}) {
-                    Text(if(member.restricted) "Allow sending" else "Restrict from sending")
-                }
-                if(info.canPromote(member)) TextButton(onClick={choose(MemberAction.PROMOTE)}) {Text("Make admin")}
-                if(info.canDemote(member)) TextButton(onClick={choose(MemberAction.DEMOTE)}) {Text("Remove admin role")}
-                if(info.canTransfer(member)) TextButton(onClick={choose(MemberAction.TRANSFER)}) {Text("Transfer ownership")}
-                if(info.canRemove(member)) TextButton(onClick={choose(MemberAction.REMOVE)}) {Text("Remove from group")}
-            }},confirmButton={TextButton(onClick={selected=null}) {Text("Close")}})
+}
+
+@Composable private fun GroupInfoDetailPage(state:AppState,info:GroupInfo,page:GroupInfoPage,
+    member:GroupInfoMember?,action:MemberAction?,busy:Boolean,back:()->Unit,
+    onPage:(GroupInfoPage)->Unit,onAction:(MemberAction)->Unit,actions:GroupInfoActions) {
+    val title=when(page) {
+        GroupInfoPage.MEMBER -> member?.label(state) ?: "Group member"
+        GroupInfoPage.CONFIRM_MEMBER -> "Confirm change"
+        GroupInfoPage.POSTING -> "Who can send messages"
+        GroupInfoPage.INVITE -> "Add member"
+        GroupInfoPage.CONFIRM_LEAVE -> "Leave group"
+        GroupInfoPage.CONFIRM_END -> "End group"
+        GroupInfoPage.OVERVIEW -> "Group info"
     }
-    if(confirm!=null) {
-        val (action,member)=confirm!!
-        val name=member.label(state)
-        val title=when(action) {
-            MemberAction.RESTRICT -> "Restrict $name from sending?"
-            MemberAction.UNRESTRICT -> "Allow $name to send?"
-            MemberAction.REMOVE -> "Remove $name from this group?"
-            MemberAction.PROMOTE -> "Make $name an admin?"
-            MemberAction.DEMOTE -> "Remove $name's admin role?"
-            MemberAction.TRANSFER -> "Transfer ownership to $name?"
+    Column(Modifier.fillMaxSize().imePadding().testTag("group-info-detail")) {
+        PageHeader(title,back=back)
+        LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(
+            horizontal=GhostLayout.pageInset,vertical=16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            if(state.error!=null) item {ErrorNotice(state.error,important=state.errorImportant)}
+            when(page) {
+                GroupInfoPage.MEMBER -> if(member!=null) {
+                    item {
+                        Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surface) {
+                            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                                Text(member.label(state),style=MaterialTheme.typography.titleLarge)
+                                Text(member.role.label()+if(member.restricted) " · Restricted from sending" else "",
+                                    color=MaterialTheme.colorScheme.onSurfaceVariant)
+                                if(member.isCoordinator && member.role==GroupRole.ADMIN)
+                                    Text("This admin is currently coordinating group updates.",
+                                        color=MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                    if(!member.isLocal && state.contacts.any {it.contact.remoteDeviceId==member.deviceId &&
+                        !it.contact.request && !it.contact.blocked}) item {
+                        GroupInfoOption("Open direct chat",true) {actions.openChat(member.deviceId)}
+                    }
+                    if(info.canRestrict(member)) item {GroupInfoOption(
+                        if(member.restricted) "Allow sending" else "Restrict from sending",!busy) {
+                        onAction(if(member.restricted) MemberAction.UNRESTRICT else MemberAction.RESTRICT)
+                    }}
+                    if(info.canPromote(member)) item {GroupInfoOption("Make admin",!busy) {
+                        onAction(MemberAction.PROMOTE)
+                    }}
+                    if(info.canDemote(member)) item {GroupInfoOption("Remove admin role",!busy) {
+                        onAction(MemberAction.DEMOTE)
+                    }}
+                    if(info.canTransfer(member)) item {GroupInfoOption("Transfer ownership",!busy) {
+                        onAction(MemberAction.TRANSFER)
+                    }}
+                    if(info.canRemove(member)) item {GroupInfoOption("Remove from group",!busy) {
+                        onAction(MemberAction.REMOVE)
+                    }}
+                }
+                GroupInfoPage.CONFIRM_MEMBER -> if(member!=null && action!=null) {
+                    val name=member.label(state)
+                    val question=when(action) {
+                        MemberAction.RESTRICT -> "Restrict $name from sending?"
+                        MemberAction.UNRESTRICT -> "Allow $name to send?"
+                        MemberAction.REMOVE -> "Remove $name from this group?"
+                        MemberAction.PROMOTE -> "Make $name an admin?"
+                        MemberAction.DEMOTE -> "Remove $name's admin role?"
+                        MemberAction.TRANSFER -> "Transfer ownership to $name?"
+                    }
+                    val explanation=when(action) {
+                        MemberAction.RESTRICT -> "They'll remain in the group and continue receiving messages, but won't be able to send until allowed again."
+                        MemberAction.REMOVE -> "They will stop receiving new group messages after the signed group update is applied. Messages they already received cannot be recalled."
+                        MemberAction.TRANSFER -> "After transfer, $name will control owner-only group settings. You will become an admin. They must accept first."
+                        else -> "This change will be shared with the group after the signed update is accepted."
+                    }
+                    item {GroupInfoExplanation(question,explanation)}
+                    item {Button(onClick={
+                        onPage(GroupInfoPage.OVERVIEW)
+                        when(action) {
+                            MemberAction.RESTRICT -> actions.restrict(member.memberId)
+                            MemberAction.UNRESTRICT -> actions.unrestrict(member.memberId)
+                            MemberAction.REMOVE -> actions.remove(member.memberId)
+                            MemberAction.PROMOTE -> actions.promote(member.memberId)
+                            MemberAction.DEMOTE -> actions.demote(member.memberId)
+                            MemberAction.TRANSFER -> actions.transfer(member.memberId)
+                        }
+                    },enabled=!busy,modifier=Modifier.fillMaxWidth().testTag("group-confirm-action")) {
+                        Text("Confirm")
+                    }}
+                    item {OutlinedButton(onClick=back,modifier=Modifier.fillMaxWidth()) {Text("Cancel")}}
+                }
+                GroupInfoPage.POSTING -> {
+                    item {Text("Choose who can send messages to this group.",
+                        color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                    items(GroupPostingModeV1.entries) {mode ->
+                        val label=if(mode==GroupPostingModeV1.EVERYONE) "Everyone" else "Admins only"
+                        GroupInfoOption(label+if(mode==info.postingMode) " · Current" else "",!busy) {
+                            onPage(GroupInfoPage.OVERVIEW)
+                            if(mode!=info.postingMode) actions.posting(mode)
+                        }
+                    }
+                }
+                GroupInfoPage.INVITE -> {
+                    val existing=info.members.map {it.deviceId}.toSet()
+                    val candidates=state.contacts.filter {!it.contact.request && !it.contact.blocked &&
+                        it.contact.remoteDeviceId !in existing && it.groupCapable &&
+                        it.session==SessionLifecycle.ACTIVE &&
+                        it.identity?.trustState!=IdentityTrustState.CHANGED}
+                    if(candidates.isEmpty()) item {GroupInfoExplanation("No contacts ready",
+                        "No accepted contacts are ready for a group invitation.")}
+                    items(candidates,key={it.contact.remoteDeviceId}) {candidate ->
+                        GroupInfoOption(candidate.contact.visibleName,!busy) {
+                            onPage(GroupInfoPage.OVERVIEW)
+                            actions.invite(candidate.contact.remoteDeviceId)
+                        }
+                    }
+                }
+                GroupInfoPage.CONFIRM_LEAVE -> {
+                    item {GroupInfoExplanation("Leave this group?",
+                        "You will no longer receive new group messages. Your existing history stays on this device.")}
+                    item {Button(onClick={onPage(GroupInfoPage.OVERVIEW);actions.leave()},enabled=!busy,
+                        modifier=Modifier.fillMaxWidth()) {Text("Leave group")}}
+                    item {OutlinedButton(onClick=back,modifier=Modifier.fillMaxWidth()) {Text("Cancel")}}
+                }
+                GroupInfoPage.CONFIRM_END -> {
+                    item {GroupInfoExplanation("End this group?",
+                        "No one will be able to send new group messages. Existing messages already stored on members' devices are not erased.")}
+                    item {Button(onClick={onPage(GroupInfoPage.OVERVIEW);actions.dissolve()},enabled=!busy,
+                        modifier=Modifier.fillMaxWidth()) {Text("End group")}}
+                    item {OutlinedButton(onClick=back,modifier=Modifier.fillMaxWidth()) {Text("Cancel")}}
+                }
+                GroupInfoPage.OVERVIEW -> Unit
+            }
         }
-        val body=when(action) {
-            MemberAction.RESTRICT -> "They'll remain in the group and continue receiving messages, but won't be able to send until allowed again."
-            MemberAction.REMOVE -> "They will stop receiving new group messages after the signed group update is applied. Messages they already received cannot be recalled."
-            MemberAction.TRANSFER -> "After transfer, $name will control owner-only group settings. You will become an admin. They must accept first."
-            else -> "This change will be shared with the group after the signed update is accepted."
+    }
+}
+
+@Composable private fun GroupInfoOption(label:String,enabled:Boolean,onClick:()->Unit) {
+    Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surface) {
+        Row(Modifier.fillMaxWidth().clickable(enabled=enabled,onClick=onClick).padding(16.dp),
+            verticalAlignment=Alignment.CenterVertically) {
+            Text(label,style=MaterialTheme.typography.bodyLarge)
         }
-        AlertDialog(onDismissRequest={confirm=null},title={Text(title)},text={Text(body)},
-            confirmButton={TextButton(onClick={
-                confirm=null
-                when(action) {
-                    MemberAction.RESTRICT -> actions.restrict(member.memberId)
-                    MemberAction.UNRESTRICT -> actions.unrestrict(member.memberId)
-                    MemberAction.REMOVE -> actions.remove(member.memberId)
-                    MemberAction.PROMOTE -> actions.promote(member.memberId)
-                    MemberAction.DEMOTE -> actions.demote(member.memberId)
-                    MemberAction.TRANSFER -> actions.transfer(member.memberId)
-                }
-            },enabled=!busy) {Text("Confirm")}},
-            dismissButton={TextButton(onClick={confirm=null}) {Text("Cancel")}})
     }
-    if(postingPicker) AlertDialog(onDismissRequest={postingPicker=false},title={Text("Who can send messages")},
-        text={Column {
-            for(mode in GroupPostingModeV1.entries) TextButton(onClick={
-                postingPicker=false
-                if(mode!=info.postingMode) actions.posting(mode)
-            },enabled=!busy) {Text(if(mode==GroupPostingModeV1.EVERYONE) "Everyone" else "Admins only")}
-        }},confirmButton={TextButton(onClick={postingPicker=false}) {Text("Cancel")}})
-    if(inviting) {
-        val existing=info.members.map {it.deviceId}.toSet()
-        val candidates=state.contacts.filter {!it.contact.request && !it.contact.blocked &&
-            it.contact.remoteDeviceId !in existing && it.groupCapable &&
-            it.session==SessionLifecycle.ACTIVE &&
-            it.identity?.trustState!=IdentityTrustState.CHANGED}
-        AlertDialog(onDismissRequest={inviting=false},title={Text("Add one member")},
-            text={LazyColumn(Modifier.heightIn(max=320.dp)) {
-                if(candidates.isEmpty()) item {Text("No accepted contacts are ready for a group invitation.")}
-                items(candidates,key={it.contact.remoteDeviceId}) {candidate ->
-                    TextButton(onClick={inviting=false;actions.invite(candidate.contact.remoteDeviceId)},
-                        enabled=!busy) {Text(candidate.contact.visibleName)}
-                }
-            }},confirmButton={TextButton(onClick={inviting=false}) {Text("Close")}})
+}
+
+@Composable private fun GroupInfoExplanation(title:String,body:String) {
+    Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surface) {
+        Column(Modifier.fillMaxWidth().padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text(title,style=MaterialTheme.typography.titleMedium)
+            Text(body,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
-    if(confirmLeave) AlertDialog(onDismissRequest={confirmLeave=false},title={Text("Leave group?")},
-        text={Text("You will no longer receive new group messages. Your existing history stays on this device.")},
-        confirmButton={TextButton(onClick={confirmLeave=false;actions.leave()},enabled=!busy) {Text("Leave group")}},
-        dismissButton={TextButton(onClick={confirmLeave=false}) {Text("Cancel")}})
-    if(confirmEnd) AlertDialog(onDismissRequest={confirmEnd=false},title={Text("End this group?")},
-        text={Text("No one will be able to send new group messages. Existing messages already stored on members' devices are not erased.")},
-        confirmButton={TextButton(onClick={confirmEnd=false;actions.dissolve()},enabled=!busy) {Text("End group")}},
-        dismissButton={TextButton(onClick={confirmEnd=false}) {Text("Cancel")}})
 }

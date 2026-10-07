@@ -1,6 +1,8 @@
 package org.ghostcloak.app.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -20,15 +22,42 @@ import org.ghostcloak.messaging.GroupMembershipTransport
 import org.ghostcloak.messaging.GroupLocalStatus
 import org.ghostcloak.messaging.GroupRecipientState
 import org.ghostcloak.messaging.GroupTextCodec
+import org.ghostcloak.messaging.GroupModerationState
 import org.ghostcloak.identity.IdentityTrustState
 import org.ghostcloak.identity.SessionLifecycle
 
 /** P13.3 deliberately exposes only text and sequential invitation management. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable fun GroupConversationScreen(state:AppState,group:GroupMembershipTransport.Conversation,
     back:()->Unit,send:(String,()->Unit)->Unit,invite:(String)->Unit,openChat:(String)->Unit={},
-    acceptInvitation:(String)->Unit={},declineInvitation:(String)->Unit={},openInfo:()->Unit={}) {
+    acceptInvitation:(String)->Unit={},declineInvitation:(String)->Unit={},openInfo:()->Unit={},
+    removeMessage:(String)->Unit={}) {
     var draft by remember(group.groupId) {mutableStateOf("")}
     var inviting by remember {mutableStateOf(false)}
+    var selectedMessage by remember(group.groupId) {mutableStateOf<String?>(null)}
+    var confirmingRemoval by remember(group.groupId) {mutableStateOf<String?>(null)}
+    val canModerate=group.info?.canModerate==true
+    if(selectedMessage!=null && !canModerate) selectedMessage=null
+    if(confirmingRemoval!=null && !canModerate) confirmingRemoval=null
+    if(selectedMessage!=null) ModalBottomSheet(onDismissRequest={selectedMessage=null}) {
+        TextButton(onClick={
+            val id=selectedMessage
+            selectedMessage=null
+            if(canModerate && id!=null) confirmingRemoval=id
+        },modifier=Modifier.fillMaxWidth().testTag("group-remove-message-action")) {
+            Text("Remove message")
+        }
+        Spacer(Modifier.height(GhostDimensions.medium))
+    }
+    if(confirmingRemoval!=null) AlertDialog(onDismissRequest={confirmingRemoval=null},
+        title={Text("Remove this message?")},
+        text={Text("It will be replaced with a moderation notice on updated group members' devices. Copies already seen or saved cannot be recalled.")},
+        confirmButton={TextButton(onClick={
+            val id=confirmingRemoval
+            confirmingRemoval=null
+            if(canModerate && id!=null) removeMessage(id)
+        }) {Text("Remove message")}},
+        dismissButton={TextButton(onClick={confirmingRemoval=null}) {Text("Cancel")}})
     val active=group.status==GroupLocalStatus.ACTIVE && group.memberCount>=2
     val sendRestriction=group.sendRestriction
     val invitation=state.groupInvitations.firstOrNull {it.groupId==group.groupId}
@@ -39,6 +68,49 @@ import org.ghostcloak.identity.SessionLifecycle
         it.contact.remoteDeviceId !in group.memberDevices.values}
     val readyCandidates=candidates.filter {it.groupCapable && it.session==SessionLifecycle.ACTIVE &&
         it.identity?.trustState!=IdentityTrustState.CHANGED}
+    BackHandler(inviting) {inviting=false}
+    if(inviting) {
+        var query by remember(group.groupId) {mutableStateOf("")}
+        Column(Modifier.fillMaxSize().imePadding().testTag("group-invite-page")) {
+            PageHeader("Invite member",back={inviting=false})
+            OutlinedTextField(query,{query=it},modifier=Modifier.fillMaxWidth().padding(
+                horizontal=GhostLayout.pageInset),placeholder={Text("Search contacts")},singleLine=true)
+            LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(GhostLayout.pageInset),
+                verticalArrangement=Arrangement.spacedBy(GhostDimensions.medium)) {
+                item {Text("Add members one at a time after each membership is confirmed.",
+                    color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                if(readyCandidates.isEmpty()) item {Text(
+                    "No other contacts are ready yet. Group invites require an active, unchanged identity and a recent group-support message from the updated app.",
+                    color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                items(candidates.filter {it.contact.visibleName.contains(query,ignoreCase=true)},
+                    key={it.contact.remoteDeviceId}) {candidate ->
+                    val ready=candidate in readyCandidates
+                    val reason=when {
+                        candidate.identity?.trustState==IdentityTrustState.CHANGED -> "Identity changed — review contact security"
+                        candidate.session!=SessionLifecycle.ACTIVE -> "Secure session unavailable"
+                        !candidate.groupCapable -> "Waiting for group support confirmation"
+                        else -> null
+                    }
+                    Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surface) {
+                        Row(Modifier.fillMaxWidth().padding(GhostDimensions.medium),
+                            verticalAlignment=Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(candidate.contact.visibleName)
+                                if(reason!=null) Text(reason,style=MaterialTheme.typography.bodySmall,
+                                    color=MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            TextButton(onClick={
+                                inviting=false
+                                if(ready) invite(candidate.contact.remoteDeviceId)
+                                else openChat(candidate.contact.remoteDeviceId)
+                            }) {Text(if(ready) "Invite" else "Open chat")}
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
     Column(Modifier.fillMaxSize().imePadding().testTag("group-page")) {
         PageHeader(if(invitation!=null) "Group invitation" else "Group conversation",
             back=back,avatarName="Group",leading={
@@ -96,7 +168,10 @@ import org.ghostcloak.identity.SessionLifecycle
             }
             items(group.messages,key={it.logicalId}) { message ->
                 Column(Modifier.fillMaxWidth(),horizontalAlignment=if(message.outgoing) Alignment.End else Alignment.Start) {
-                    Surface(color=if(message.outgoing) MaterialTheme.colorScheme.primary
+                    Surface(modifier=Modifier.combinedClickable(onClick={},onLongClick={
+                        if(canModerate && message.moderationState==GroupModerationState.NONE)
+                            selectedMessage=message.logicalId
+                    }),color=if(message.outgoing) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.surface,shape=MaterialTheme.shapes.large) {
                         Column(Modifier.widthIn(max=GhostDimensions.previewWidth).padding(GhostDimensions.medium),
                             verticalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
@@ -106,11 +181,13 @@ import org.ghostcloak.identity.SessionLifecycle
                                     ?: "Group member",style=MaterialTheme.typography.labelSmall,
                                     color=MaterialTheme.colorScheme.primary)
                             }
-                            Text(message.text,color=if(message.outgoing) MaterialTheme.colorScheme.onPrimary
+                            Text(if(message.moderationState==GroupModerationState.REMOVED_BY_ADMIN)
+                                "Message removed by an admin" else message.text,
+                                color=if(message.outgoing) MaterialTheme.colorScheme.onPrimary
                                 else MaterialTheme.colorScheme.onSurface)
                         }
                     }
-                    if(message.outgoing) {
+                    if(message.outgoing && message.moderationState==GroupModerationState.NONE) {
                         val sent=message.recipients.count {it.state==GroupRecipientState.SENT}
                         val failed=message.recipients.count {it.state==GroupRecipientState.UNAVAILABLE}
                         Text(when {
@@ -151,32 +228,4 @@ import org.ghostcloak.identity.SessionLifecycle
             }
         }
     }
-    if(inviting) AlertDialog(onDismissRequest={inviting=false},title={Text("Invite one contact")},
-        text={Column {
-            Text("Add members one at a time after each membership is confirmed.")
-            if(readyCandidates.isEmpty()) Text(
-                "No other contacts are ready yet. Group invites require an active, unchanged identity and a recent group-support message from the updated app.",
-                color=MaterialTheme.colorScheme.onSurfaceVariant)
-            LazyColumn(Modifier.heightIn(max=320.dp)) {items(candidates,key={it.contact.remoteDeviceId}) {candidate ->
-                val ready=candidate in readyCandidates
-                val reason=when {
-                    candidate.identity?.trustState==IdentityTrustState.CHANGED -> "Identity changed — review contact security"
-                    candidate.session!=SessionLifecycle.ACTIVE -> "Secure session unavailable"
-                    !candidate.groupCapable -> "Waiting for group support confirmation"
-                    else -> null
-                }
-                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(candidate.contact.visibleName)
-                        if(reason!=null) Text(reason,style=MaterialTheme.typography.bodySmall,
-                            color=MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    TextButton(onClick={
-                        inviting=false
-                        if(ready) invite(candidate.contact.remoteDeviceId)
-                        else openChat(candidate.contact.remoteDeviceId)
-                    }) {Text(if(ready) "Invite" else "Open chat")}
-                }
-            }}
-        }},confirmButton={TextButton(onClick={inviting=false}) {Text("Close")}})
 }

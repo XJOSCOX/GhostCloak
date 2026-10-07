@@ -52,7 +52,10 @@ class NotificationLedger(private val records: EndpointRecords, private val clock
                 val local=records.read("app/group/member/$groupId")?.decodeToString()
                 val active=local?.let {GroupLedger(records,GroupTrustedPeer {false},it).status(groupId)}==GroupLocalStatus.ACTIVE
                 val groupMessage=if(active) GroupChatStore(records).message(groupId,parts[1]) else null
-                if(groupMessage==null || groupMessage.outgoing) {records.remove(key);return@mapNotNull null}
+                if(groupMessage==null || groupMessage.outgoing ||
+                    groupMessage.moderationState!=GroupModerationState.NONE) {
+                    records.remove(key);return@mapNotNull null
+                }
                 return@mapNotNull Entry(key,state(key),Presentation(null,null,null,false,false,false,groupMessage.localOrder))
             }
             val message = unread[parts[0]]?.get(parts[1])

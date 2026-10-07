@@ -1,35 +1,40 @@
 package org.ghostcloak.messaging
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import org.ghostcloak.crypto.EndpointRecords
 import org.ghostcloak.protocol.DeviceAuth
 import org.ghostcloak.protocol.NetworkCodec
 import java.security.MessageDigest
 
 /** Additive, invitee-only proof; frozen A6.3 checkpoint bytes remain unchanged. */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable data class GroupGovernancePolicyCheckpointV1(
     val version:Int=1,val groupId:String,val inviteId:String,val checkpointId:String,
     val checkpointBodyDigest:ByteArray,val activationDigest:ByteArray,
     val parentSequence:Long,val parentHeadDigest:ByteArray,
     val policy:GroupGovernancePolicyV1,val policyDigest:ByteArray,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val moderationFilter:ByteArray?=null,
     val ownerSignature:ByteArray=byteArrayOf(),
     val coordinatorSignature:ByteArray=byteArrayOf(),
 ) { override fun toString()="GroupGovernancePolicyCheckpointV1(redacted)" }
 
 internal object GroupGovernancePolicyCheckpointRulesV1 {
-    const val MAX_BYTES=1536
+    const val MAX_BYTES=4096
     private fun body(value:GroupGovernancePolicyCheckpointV1)=NetworkCodec.encode(value.copy(
         ownerSignature=byteArrayOf(),coordinatorSignature=byteArrayOf()))
     private fun checkpointBodyDigest(checkpoint:GroupGovernanceInviteeCheckpointV1)=
         DeviceAuth.digest(NetworkCodec.encode(checkpoint.copy(ownerSignature=byteArrayOf(),
             coordinatorSignature=byteArrayOf())))
     fun unsigned(checkpoint:GroupGovernanceInviteeCheckpointV1,
-        policy:GroupGovernancePolicyV1)=GroupGovernancePolicyCheckpointV1(
+        policy:GroupGovernancePolicyV1,moderationFilter:ByteArray?=null)=GroupGovernancePolicyCheckpointV1(
         groupId=checkpoint.groupId,inviteId=checkpoint.inviteId,
         checkpointId=checkpoint.checkpointId,
         checkpointBodyDigest=checkpointBodyDigest(checkpoint),
         activationDigest=checkpoint.activationDigest,parentSequence=checkpoint.parentSequence,
         parentHeadDigest=checkpoint.parentHeadDigest,policy=policy,
+        moderationFilter=moderationFilter,
         policyDigest=GroupGovernancePolicyRulesV1.digest(checkpoint.activationDigest,policy))
     fun ownerStatement(value:GroupGovernancePolicyCheckpointV1)=GroupStatements.governanceStatement(
         "GhostCloak.GroupGovernancePolicyCheckpointOwner.v1",body(value))
@@ -47,6 +52,8 @@ internal object GroupGovernancePolicyCheckpointRulesV1 {
             MessageDigest.isEqual(value.parentHeadDigest,checkpoint.parentHeadDigest) &&
             MessageDigest.isEqual(value.policyDigest,
                 GroupGovernancePolicyRulesV1.digest(value.activationDigest,value.policy)) &&
+            (value.moderationFilter==null ||
+                value.moderationFilter.size==GroupModerationFilterV1.BYTES) &&
             NetworkCodec.encode(value).size<=MAX_BYTES)
         GroupGovernancePolicyRulesV1.validate(value.policy,parent)
         val coordinator=parent.members.single {it.memberId==parent.coordinatorId}

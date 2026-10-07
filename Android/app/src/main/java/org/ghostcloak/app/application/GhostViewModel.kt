@@ -202,6 +202,9 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun unrestrictGroupMember(id:String,memberId:String)=groupManagementAction {
         runtime.unrestrictGroupMember(id,memberId)
     }
+    fun removeGroupMessage(id:String,logicalId:String)=groupManagementAction {
+        runtime.removeGroupMessage(id,logicalId)
+    }
     fun removeGroupMember(id:String,memberId:String)=groupManagementAction {
         runtime.removeGroupMember(id,memberId)
     }
@@ -377,6 +380,10 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun leaveDemo() = run { runtime.leaveDemo(); selected = null; safetyNumberSelection.clear(); mutable.value = mutable.value.copy(card = "", safetyNumber = null); null }
     private fun networkError(error: org.ghostcloak.protocol.ApiFailure) = when {
         error.code == "group_governance_entry_pending" -> "A group update is already pending."
+        error.code == "group_management_history_full" -> "Group management history is full."
+        error.code == "group_message_already_removed" -> "This message has already been removed."
+          error.code == "group_moderation_capability_pending" ->
+              "Waiting for updated group members. Ask everyone to open Ghost Cloak and Sync."
         error.code == "group_policy_denied" -> "You don't have permission to make that group change."
         error.code == "group_governance_resync" -> "Group security state is still syncing."
         error.code == "group_governance_capability_pending" ->

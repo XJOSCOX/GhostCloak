@@ -1,13 +1,15 @@
 package org.ghostcloak.messaging
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import org.ghostcloak.protocol.DeviceAuth
 import org.ghostcloak.protocol.NetworkCodec
 import java.security.MessageDigest
 
 /** Separate from every frozen GroupState and GroupTransition v1 encoding. */
 @Serializable enum class GroupPostingModeV1 { EVERYONE, ADMINS_ONLY }
-@Serializable enum class GroupPolicyActionV1 { SET_POSTING_MODE, RESTRICT_MEMBER, UNRESTRICT_MEMBER }
+@Serializable enum class GroupPolicyActionV1 { SET_POSTING_MODE, RESTRICT_MEMBER, UNRESTRICT_MEMBER, REMOVE_GROUP_MESSAGE }
 @Serializable data class GroupGovernancePolicyV1(
     val version:Int=1,
     val postingMode:GroupPostingModeV1=GroupPostingModeV1.EVERYONE,
@@ -15,11 +17,13 @@ import java.security.MessageDigest
 ) { override fun toString()="GroupGovernancePolicyV1(redacted)" }
 
 /** Policy-only action in the same signed governance sequence as wrapped v1 transitions. */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable data class GroupGovernancePolicyEntryV1(
     val version:Int=1,val groupId:String,val activationDigest:ByteArray,val sequence:Long,
     val previousHeadDigest:ByteArray,val eventId:String,val stateRevision:Long,
     val stateDigest:ByteArray,val actorId:String,val action:GroupPolicyActionV1,
     val targetMemberId:String?=null,val postingMode:GroupPostingModeV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val targetLogicalId:String?=null,
     val prePolicyDigest:ByteArray,val postPolicyDigest:ByteArray,
     val actorSignature:ByteArray,val coordinatorSignature:ByteArray,
 ) { override fun toString()="GroupGovernancePolicyEntryV1(redacted)" }
@@ -51,18 +55,19 @@ internal object GroupGovernancePolicyRulesV1 {
     }
     /** No-op policy entries are rejected to keep one canonical effect per signed sequence. */
     fun apply(value:GroupGovernancePolicyV1,state:GroupState,actorId:String,
-        action:GroupPolicyActionV1,targetId:String?,mode:GroupPostingModeV1?):GroupGovernancePolicyV1 {
+        action:GroupPolicyActionV1,targetId:String?,mode:GroupPostingModeV1?,
+        logicalId:String?=null):GroupGovernancePolicyV1 {
         validate(value,state)
         require(state.lifecycle==GroupLifecycle.ACTIVE)
         val actor=state.members.single {it.memberId==actorId }
         require(actor.role!=GroupRole.MEMBER)
         val next=when(action) {
             GroupPolicyActionV1.SET_POSTING_MODE -> {
-                require(targetId==null && mode!=null && mode!=value.postingMode)
+                require(targetId==null && logicalId==null && mode!=null && mode!=value.postingMode)
                 value.copy(postingMode=mode)
             }
             GroupPolicyActionV1.RESTRICT_MEMBER,GroupPolicyActionV1.UNRESTRICT_MEMBER -> {
-                require(mode==null && targetId!=null && targetId!=actorId)
+                require(mode==null && logicalId==null && targetId!=null && targetId!=actorId)
                 val target=state.members.single {it.memberId==targetId}
                 require(target.role!=GroupRole.OWNER &&
                     (actor.role==GroupRole.OWNER || target.role==GroupRole.MEMBER))
@@ -71,6 +76,11 @@ internal object GroupGovernancePolicyRulesV1 {
                 value.copy(restrictedMemberIds=if(restricted)
                     value.restrictedMemberIds.filterNot {it==targetId}
                 else (value.restrictedMemberIds+targetId).sorted())
+            }
+            GroupPolicyActionV1.REMOVE_GROUP_MESSAGE -> {
+                require(mode==null && targetId==null && logicalId!=null && GroupIds.valid(logicalId))
+                // Moderation changes the signed governance head, not the posting policy.
+                value
             }
         }
         validate(next,state)
@@ -99,7 +109,8 @@ internal object GroupGovernancePolicyRulesV1 {
             GroupIds.valid(value.eventId) && value.prePolicyDigest.size==32 &&
             value.postPolicyDigest.size==32 &&
             MessageDigest.isEqual(value.prePolicyDigest,digest(head.activationDigest,policy)))
-        val next=apply(policy,state,value.actorId,value.action,value.targetMemberId,value.postingMode)
+        val next=apply(policy,state,value.actorId,value.action,value.targetMemberId,
+            value.postingMode,value.targetLogicalId)
         require(MessageDigest.isEqual(value.postPolicyDigest,digest(head.activationDigest,next)) &&
             NetworkCodec.encode(value).size<=MAX_ENTRY_BYTES)
         val actor=state.members.single {it.memberId==value.actorId}

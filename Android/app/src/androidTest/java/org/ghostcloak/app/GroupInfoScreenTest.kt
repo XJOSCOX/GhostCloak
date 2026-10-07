@@ -58,8 +58,24 @@ class GroupInfoScreenTest {
         compose.onNodeWithText("Carol").performClick()
         compose.onNodeWithText("Remove from group").assertDoesNotExist()
         compose.onNodeWithText("Make admin").assertDoesNotExist()
-        compose.onNodeWithText("Close").performClick()
+        compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithTag("group-add-member").assertDoesNotExist()
+    }
+
+    @Test fun memberActionPagesGoBackWithoutApplyingChange() {
+        var removed:String?=null
+        compose.setContent {GhostCloakTheme {
+            GroupInfoScreen(state,info(),{},actions(onRemove={removed=it}))
+        }}
+        compose.onNodeWithText("Carol").performClick()
+        compose.onNodeWithText("Remove from group").performClick()
+        compose.onNodeWithText("Messages they already received cannot be recalled.",substring=true)
+            .assertExists()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithText("Remove from group").assertExists()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithText("Members").assertExists()
+        assertEquals(null,removed)
     }
 
     @Test fun setupAndLockedStatesAreExplicit() {

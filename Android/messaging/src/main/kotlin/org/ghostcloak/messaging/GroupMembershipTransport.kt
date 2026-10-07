@@ -90,6 +90,9 @@ class GroupMembershipTransport(
     private fun allTextV2Peers(state:GroupState,localId:String)=state.members.all {
         it.memberId==localId || repository.governanceTextV2Peer(it.deviceId)
     }
+    private fun allModerationPeers(state:GroupState,localId:String)=state.members.all {
+        it.memberId==localId || repository.groupModerationPeer(it.deviceId)
+    }
     /** Only the coordinator retires a fully acknowledged prior entry before the next mutation. */
     private fun retireCompletedGovernanceEntry(groupId:String,state:GroupState,localId:String) {
         if(localId!=state.coordinatorId) return
@@ -113,7 +116,8 @@ class GroupMembershipTransport(
     private suspend fun probeMissingGovernancePeers(state:GroupState,localId:String) {
         for(member in state.members.filter {it.memberId!=localId &&
             (!repository.governanceV1Peer(it.deviceId) ||
-                !repository.governanceTextV2Peer(it.deviceId))})
+                !repository.governanceTextV2Peer(it.deviceId) ||
+                !repository.groupModerationPeer(it.deviceId))})
             sendGovernanceOnce(state.groupId,
                 if(repository.governanceV1Peer(member.deviceId)) "text-v2-capability" else "capability",
                 member.deviceId,
@@ -509,8 +513,11 @@ class GroupMembershipTransport(
     suspend fun unrestrictMemberGoverned(groupId:String,memberId:String)=textMutex.withLock {
         proposePolicyChange(groupId,GroupPolicyActionV1.UNRESTRICT_MEMBER,memberId,null)
     }
+    suspend fun removeGroupMessageGoverned(groupId:String,logicalId:String)=textMutex.withLock {
+        proposePolicyChange(groupId,GroupPolicyActionV1.REMOVE_GROUP_MESSAGE,null,null,logicalId)
+    }
     private suspend fun proposePolicyChange(groupId:String,action:GroupPolicyActionV1,
-        targetId:String?,mode:GroupPostingModeV1?) {
+        targetId:String?,mode:GroupPostingModeV1?,logicalId:String?=null) {
         val (current,localId)=baselineState(groupId)
         val head=activeGovernanceHead(groupId) ?: throw ApiFailure(409,"group_governance_unavailable")
         reconcileGovernedChange(groupId,current,head)
@@ -518,20 +525,30 @@ class GroupMembershipTransport(
         val policy=ledger.governancePolicy(groupId) ?: throw ApiFailure(409,"group_governance_unavailable")
         if(!allTextV2Peers(current,localId))
             throw ApiFailure(409,"group_governance_capability_pending")
+        if(action==GroupPolicyActionV1.REMOVE_GROUP_MESSAGE &&
+            !allModerationPeers(current,localId)) {
+            probeMissingGovernancePeers(current,localId)
+            throw ApiFailure(409,"group_moderation_capability_pending")
+        }
         if(localId==current.coordinatorId)
             retireCompletedGovernanceEntry(groupId,current,localId)
-        if(head.sequence>=GroupGovernanceJournalV1.MAX_ENTRIES ||
-            governanceJournal.marker(groupId)!=null ||
+        if(head.sequence>=GroupGovernanceJournalV1.MAX_ENTRIES)
+            throw ApiFailure(409,"group_management_history_full")
+        if(governanceJournal.marker(groupId)!=null ||
             governedChanges.own(groupId)!=null || governedChanges.prepared(groupId)!=null ||
             governedChanges.outgoingTransfer(groupId)!=null)
             throw ApiFailure(409,"group_governance_entry_pending")
-        val next=try {GroupGovernancePolicyRulesV1.apply(policy,current,localId,action,targetId,mode)}
+        if(action==GroupPolicyActionV1.REMOVE_GROUP_MESSAGE &&
+            chats.isModerated(groupId,checkNotNull(logicalId)))
+            throw ApiFailure(409,"group_message_already_removed")
+        val next=try {GroupGovernancePolicyRulesV1.apply(policy,current,localId,action,targetId,mode,logicalId)}
             catch(_:IllegalArgumentException) {throw ApiFailure(409,"group_policy_denied")}
         val unsigned=GroupGovernancePolicyEntryV1(groupId=groupId,
             activationDigest=head.activationDigest,sequence=head.sequence+1,
             previousHeadDigest=head.headDigest,eventId=GroupIds.create(),
             stateRevision=current.revision,stateDigest=GroupStatements.digest(current),
             actorId=localId,action=action,targetMemberId=targetId,postingMode=mode,
+            targetLogicalId=logicalId,
             prePolicyDigest=GroupGovernancePolicyRulesV1.digest(head.activationDigest,policy),
             postPolicyDigest=GroupGovernancePolicyRulesV1.digest(head.activationDigest,next),
             actorSignature=byteArrayOf(),coordinatorSignature=byteArrayOf())
@@ -557,7 +574,15 @@ class GroupMembershipTransport(
         val policy=ledger.governancePolicy(control.groupId) ?: throw ApiFailure(409,"group_invalid")
         if(!allTextV2Peers(current,localId))
             throw ApiFailure(409,"group_governance_capability_pending")
+        if(proposal.action==GroupPolicyActionV1.REMOVE_GROUP_MESSAGE &&
+            !allModerationPeers(current,localId))
+            throw ApiFailure(409,"group_moderation_capability_pending")
         retireCompletedGovernanceEntry(control.groupId,current,localId)
+        if(proposal.action==GroupPolicyActionV1.REMOVE_GROUP_MESSAGE) {
+            val target=proposal.targetLogicalId ?: throw ApiFailure(409,"group_invalid")
+            if(chats.isModerated(control.groupId,target))
+                throw ApiFailure(409,"group_message_already_removed")
+        }
         if(localId!=current.coordinatorId || current.members.singleOrNull {
                 it.memberId==proposal.actorId}?.deviceId!=sender ||
             governedChanges.prepared(control.groupId)!=null ||
@@ -937,6 +962,8 @@ class GroupMembershipTransport(
                 requireOwner=false) ||
             !MessageDigest.isEqual(policyProof.policyDigest,
                 GroupGovernancePolicyRulesV1.digest(head.activationDigest,policy)) ||
+            policyProof.moderationFilter?.contentEquals(
+                chats.moderationFilter(control.groupId))!=true ||
             !MessageDigest.isEqual(checkpoint.activationStateDigest,barrier.activationStateDigest) ||
             checkpoint.activationStateRevision!=barrier.activationStateRevision ||
             !MessageDigest.isEqual(checkpoint.baselineCertificateDigest,
@@ -1909,7 +1936,8 @@ class GroupMembershipTransport(
             head?.sequence?.let {it>=GroupGovernanceJournalV1.MAX_ENTRIES}==true,
             invitationPending || (barrier!=null && !noOutgoingInvitation(groupId)),
             barrier==null || allTextV2Peers(current,localId),
-            records.transaction {records.read("app/group/baseline-v1/start-intent/$groupId")!=null})
+            records.transaction {records.read("app/group/baseline-v1/start-intent/$groupId")!=null},
+            allModerationPeers(current,localId))
     }
     suspend fun beginGroupManagementSetup(groupId:String) {
         val info=groupInfo(groupId) ?: throw ApiFailure(409,"group_unavailable")
@@ -2509,6 +2537,15 @@ class GroupMembershipTransport(
                         authority.matchesCurrentGroupMember(current.groupId,peer))
                         repository.governanceTextV2Peer(pending.senderDeviceId,true)
                 }
+                if(pending.moderationAdvertised) {
+                    val current=state(pending.control.groupId)
+                    val peer=current?.members?.singleOrNull {
+                        it.deviceId==pending.senderDeviceId
+                    }
+                    if(current!=null && peer!=null &&
+                        authority.matchesCurrentGroupMember(current.groupId,peer))
+                        repository.groupModerationPeer(pending.senderDeviceId,true)
+                }
                 when(pending.control.kind) {
                     GroupControlKind.INVITE -> receiveInvite(pending.senderDeviceId,pending.control)
                     GroupControlKind.ACCEPT -> receiveAcceptance(pending.senderDeviceId,pending.control)
@@ -2575,7 +2612,7 @@ class GroupMembershipTransport(
             val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
             if(ledger.governanceBarrier(groupId)==null) continue
             val current=ledger.state(groupId) ?: continue
-            if(!allTextV2Peers(current,localId))
+            if(!allTextV2Peers(current,localId) || !allModerationPeers(current,localId))
                 probeMissingGovernancePeers(current,localId)
         }
         processSystemOutbox()
@@ -3086,7 +3123,7 @@ class GroupMembershipTransport(
             val currentPolicy=GroupLedger(records,GroupTrustedPeer {false},localId)
                 .governancePolicy(control.groupId) ?: throw ApiFailure(409,"group_invalid")
             val unsignedPolicy=GroupGovernancePolicyCheckpointRulesV1.unsigned(checkpoint,
-                currentPolicy)
+                currentPolicy,chats.moderationFilter(control.groupId))
             val coordinatorPolicy=unsignedPolicy.copy(coordinatorSignature=network.signGroupStatement(
                 GroupGovernancePolicyCheckpointRulesV1.coordinatorStatement(unsignedPolicy)))
             val policyProof=if(current.ownerId==localId) coordinatorPolicy.copy(

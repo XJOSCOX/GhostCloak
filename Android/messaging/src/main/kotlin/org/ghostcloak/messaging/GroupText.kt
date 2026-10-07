@@ -1,6 +1,8 @@
 package org.ghostcloak.messaging
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import org.ghostcloak.crypto.EndpointRecords
 import org.ghostcloak.crypto.EndpointStorageFailure
 import org.ghostcloak.identity.RandomIdentifiers
@@ -34,9 +36,12 @@ object GroupTextCodec {
 enum class GroupRecipientState { PENDING, QUEUED, SENT, UNAVAILABLE }
 @Serializable data class GroupRecipient(val deviceId:String,val state:GroupRecipientState=GroupRecipientState.PENDING,
     val outboxId:String?=null)
+@Serializable enum class GroupModerationState { NONE, REMOVED_BY_ADMIN }
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable data class GroupChatMessage(val groupId:String,val logicalId:String,val epoch:Long,
     val senderMemberId:String,val outgoing:Boolean,val text:String,val localOrder:Long,
-    val recipients:List<GroupRecipient> = emptyList()) {
+    val recipients:List<GroupRecipient> = emptyList(),
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val moderationState:GroupModerationState=GroupModerationState.NONE) {
     override fun toString()="GroupChatMessage(redacted)"
 }
 @Serializable data class PendingGroupText(val senderDeviceId:String,val text:GroupText) {
@@ -45,6 +50,59 @@ enum class GroupRecipientState { PENDING, QUEUED, SENT, UNAVAILABLE }
 
 /** All rows live in the existing SQLCipher endpoint store and are destroyed with it. */
 class GroupChatStore(private val records:EndpointRecords) {
+    private fun moderationKey(groupId:String,id:String):String {
+        require(GroupIds.valid(groupId) && GroupIds.valid(id))
+        return "app/group-text/moderated/$groupId/$id"
+    }
+    internal fun moderationFilter(groupId:String):ByteArray=records.transaction {
+        require(GroupIds.valid(groupId))
+        val bits=GroupModerationFilterV1.empty()
+        val prefix="app/group-text/moderated/$groupId/"
+        val keys=records.keys(prefix)
+        require(keys.size<=GroupGovernanceJournalV1.MAX_ENTRIES)
+        keys.forEach {key -> GroupModerationFilterV1.add(bits,groupId,key.removePrefix(prefix)) }
+        // A join-point filter inherited from an earlier checkpoint also has to
+        // accompany invitations issued by this newly joined member.
+        val inherited=GovernedAdmissionStore(records).joinV2(groupId)?.policyProof?.moderationFilter
+        if(inherited!=null) for(i in bits.indices)
+            bits[i]=(bits[i].toInt() or inherited[i].toInt()).toByte()
+        bits
+    }
+    /** The marker survives message arrival, restart, and replay. It carries no plaintext. */
+    internal fun moderate(groupId:String,id:String):Boolean=records.transaction {
+        val marker=moderationKey(groupId,id)
+        if(records.read(marker)!=null) return@transaction false
+        // One signed governance entry creates at most one marker; the journal itself stops at 511.
+        require(records.keys("app/group-text/moderated/$groupId/").size<
+            GroupGovernanceJournalV1.MAX_ENTRIES)
+        val key=messageKey(groupId,id)
+        val old=records.read(key)?.let {NetworkCodec.decode<GroupChatMessage>(it,8192)}
+        if(old!=null) records.write(key,NetworkCodec.encode(old.copy(text="",
+            moderationState=GroupModerationState.REMOVED_BY_ADMIN)))
+        records.write(marker,byteArrayOf(1))
+        NotificationLedger.remove(records,groupId,id)
+        // Signal has already authenticated queued frames. Do not retain their plaintext
+        // after the signed moderation entry commits, even if their old head cannot display.
+        for(path in records.keys("app/group-text/pending-v2/")) {
+            val pending=NetworkCodec.decode<PendingGroupTextV2>(
+                records.read(path) ?: throw EndpointStorageFailure(),4096)
+            if(pending.text.groupId==groupId && pending.text.logicalId==id)
+                records.remove(path)
+        }
+        for(path in records.keys("app/group-text/pending/")) {
+            val pending=NetworkCodec.decode<PendingGroupText>(
+                records.read(path) ?: throw EndpointStorageFailure(),4096)
+            if(pending.text.groupId==groupId && pending.text.logicalId==id)
+                records.remove(path)
+        }
+        true
+    }
+    internal fun isModerated(groupId:String,id:String):Boolean=records.transaction {
+        records.read(moderationKey(groupId,id))!=null ||
+            GovernedAdmissionStore(records).joinV2(groupId)?.policyProof?.moderationFilter?.let {
+                GroupModerationFilterV1.contains(it,groupId,id)
+            }==true
+    }
     private fun messageKey(groupId:String,id:String):String {
         require(GroupIds.valid(groupId) && GroupIds.valid(id));return "app/group-text/message/$groupId/$id"
     }
@@ -80,7 +138,8 @@ class GroupChatStore(private val records:EndpointRecords) {
         require(value.recipients.all {RandomIdentifiers.valid(it.deviceId) && it.state==GroupRecipientState.PENDING && it.outboxId==null})
         GroupTextCodec.validate(GroupText(groupId=value.groupId,epoch=value.epoch,
             senderMemberId=value.senderMemberId,logicalId=value.logicalId,text=value.text))
-        require(records.keys("app/group-text/message/").size<4096 && records.read(messageKey(value.groupId,value.logicalId))==null)
+        require(records.keys("app/group-text/message/").size<4096 && records.read(messageKey(value.groupId,value.logicalId))==null &&
+            !isModerated(value.groupId,value.logicalId))
         records.write(messageKey(value.groupId,value.logicalId),NetworkCodec.encode(value))
     }
     internal fun createV2(value:GroupChatMessage,binding:GroupTextV2Binding)=records.transaction {
@@ -95,12 +154,21 @@ class GroupChatStore(private val records:EndpointRecords) {
     }
     fun queue(sender:String,envelopeId:String,value:GroupText)=records.transaction {
         require(RandomIdentifiers.valid(sender));GroupTextCodec.validate(value)
+        if(isModerated(value.groupId,value.logicalId)) {
+            // The signed marker is already durable. Do not let an unvalidated late
+            // sender supply attribution or ordering for a new visible row.
+            return@transaction
+        }
         require(records.keys("app/group-text/pending/").size+
             records.keys("app/group-text/pending-v2/").size<128)
         records.write(pendingKey(envelopeId),NetworkCodec.encode(PendingGroupText(sender,value)))
     }
     fun queueV2(sender:String,envelopeId:String,value:GroupTextV2)=records.transaction {
         require(RandomIdentifiers.valid(sender));GroupTextV2Codec.validate(value)
+        if(isModerated(value.groupId,value.logicalId)) {
+            // Signal receipt commits in the caller; retain no late plaintext.
+            return@transaction
+        }
         require(records.keys("app/group-text/pending/").size+
             records.keys("app/group-text/pending-v2/").size<128)
         val existing=records.keys("app/group-text/pending-v2/").count {key ->
@@ -129,10 +197,13 @@ class GroupChatStore(private val records:EndpointRecords) {
             records.keys("app/group-text/message/").size<4096)
         val order=(records.read("app/group-text/order")?.decodeToString()?.toLongOrNull() ?: 0L)+1
         records.write("app/group-text/order",order.toString().encodeToByteArray())
+        val moderated=isModerated(value.groupId,value.logicalId)
         records.write(messageKey(value.groupId,value.logicalId),NetworkCodec.encode(GroupChatMessage(
-            value.groupId,value.logicalId,value.epoch,value.senderMemberId,false,value.text,order)))
+            value.groupId,value.logicalId,value.epoch,value.senderMemberId,false,
+            if(moderated) "" else value.text,order,moderationState=if(moderated)
+                GroupModerationState.REMOVED_BY_ADMIN else GroupModerationState.NONE)))
         records.write(replay,byteArrayOf(1))
-        NotificationLedger.acceptedGroup(records,value.groupId,value.logicalId)
+        if(!moderated) NotificationLedger.acceptedGroup(records,value.groupId,value.logicalId)
         records.remove(pendingV2Key(envelopeId))
         true
     }
@@ -157,10 +228,13 @@ class GroupChatStore(private val records:EndpointRecords) {
             records.keys("app/group-text/message/").size<4096)
         val order=(records.read("app/group-text/order")?.decodeToString()?.toLongOrNull() ?: 0L)+1
         records.write("app/group-text/order",order.toString().encodeToByteArray())
+        val moderated=isModerated(value.groupId,value.logicalId)
         records.write(messageKey(value.groupId,value.logicalId),NetworkCodec.encode(GroupChatMessage(
-            value.groupId,value.logicalId,value.epoch,value.senderMemberId,false,value.text,order)))
+            value.groupId,value.logicalId,value.epoch,value.senderMemberId,false,
+            if(moderated) "" else value.text,order,moderationState=if(moderated)
+                GroupModerationState.REMOVED_BY_ADMIN else GroupModerationState.NONE)))
         records.write(replay,byteArrayOf(1))
-        NotificationLedger.acceptedGroup(records,value.groupId,value.logicalId)
+        if(!moderated) NotificationLedger.acceptedGroup(records,value.groupId,value.logicalId)
         records.remove(pendingKey(envelopeId))
         true
     }

@@ -175,4 +175,36 @@ A governed group derives one version-1 policy from its retained signed journal. 
 
 Pre-governance groups retain the frozen `GroupText` v1 path. Installing a governance barrier freezes legacy sending and retires unsent v1 fanout; after READY, only V2 may display. A group without a complete retained journal, with a fork, or awaiting the authenticated V2 capability of every current member is read-only for new text. Blocked canonical members still exchange only A4 maintenance controls; blocked user text is discarded before application parsing and cannot create a notification. No server group-policy processing or block oracle is added.
 
-New invitees receive the existing A6.3 join checkpoint plus a separate owner-and-coordinator-signed policy proof bound to its unsigned body and exact parent head. The new join anchor stores that proof and checkpoint indivisibly as `GovernedJoinEvidenceV2`; existing members cannot use it to skip retained history. The resulting ADD inherits the parent's posting mode and does not restrict the new member automatically. Older A6.3 join records remain readable; new A7 bootstraps require the companion proof. Group Info, role management UI, admin message removal, edits, reactions, and moderation remain disabled for later phases.
+New invitees receive the existing A6.3 join checkpoint plus a separate owner-and-coordinator-signed policy proof bound to its unsigned body and exact parent head. The new join anchor stores that proof and checkpoint indivisibly as `GovernedJoinEvidenceV2`; existing members cannot use it to skip retained history. The resulting ADD inherits the parent's posting mode and does not restrict the new member automatically. Older A6.3 join records remain readable; new A7 bootstraps require the companion proof. This paragraph records the A7 boundary; P13.4B and P13.4C add management and text moderation later.
+
+## P13.4C text-moderation order
+
+`REMOVE_GROUP_MESSAGE` extends the versioned governance policy action, without
+altering frozen `GroupAction` or direct-chat delete controls. It binds the
+logical message ID, actor, current state/policy digests, activation digest,
+sequence, previous head, and both signatures. Policy content is unchanged;
+the same governance head advances by one. The pre-entry Owner/Admin role is
+required even for text by the Owner or another Admin. Restriction governs
+posting, not moderation. Current authority, all-member authenticated
+moderation capability, READY status, complete journal, absence of a pending
+action, and capacity are required for a new proposal. An exact duplicate
+entry is idempotent; a new action for an already moderated ID is rejected.
+Signed entries remain in the contiguous journal for offline resync, including
+after a moderator is later demoted or removed. New invitees start at their
+signed join checkpoint and receive no historical message bodies. A fixed
+2 KiB moderation filter is included in the owner/coordinator-signed policy
+proof, computed from bounded earlier logical IDs. The owner checks the
+coordinator's exact filter before signing. A false positive fails closed by
+suppressing the affected new text; it cannot reveal a moderated body.
+
+The encrypted endpoint store retains at most one moderation marker per
+governance entry, bounded by the 511-entry journal. Existing text rows become
+explicit `REMOVED_BY_ADMIN` tombstones with an empty body in the same storage
+transaction as the governance advance. Queued/late target plaintext is
+removed or discarded; no content notification is generated afterward.
+Already posted notifications are reconciled against the ledger. Search over
+group text is not implemented. A tombstone is a local presentation change,
+not a promise to erase screenshots, copied text, notification history, or
+content already viewed. Blocked user content stays opaque; only authenticated
+internal maintenance can carry the moderation entry. Sender group delete and
+moderation of media remain outside this phase.

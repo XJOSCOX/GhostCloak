@@ -1,5 +1,28 @@
 # P12 — private group architecture design
 
+**P13.4C group-text moderation (implementation under assurance):** An Owner or
+Admin may propose `REMOVE_GROUP_MESSAGE` for a logical group-text ID. It is a
+signed policy-entry variant in the same governance sequence as membership and
+posting changes, with actor and coordinator signatures over the exact target.
+Every current member must first advertise the new authenticated moderation
+capability; an older client cannot silently receive an unsupported entry.
+The canonical pre-entry role authorizes the actor, so an Admin may moderate
+Owner/Admin/Member text even while restricted from sending. A demotion or
+removal prevents fresh moderation at the new head, while a valid earlier entry
+remains verifiable during signed resync. The journal, one-outstanding-action
+rule, 511-entry cap, fork lock, and legacy-incomplete lock apply unchanged.
+The invitee-only owner/coordinator-signed policy checkpoint carries a fixed
+2 KiB filter of earlier moderated IDs; it cannot reveal old plaintext. Its
+rare false positives suppress a new text rather than expose an old one.
+The action makes an explicit local tombstone and scrubs active text atomically
+with advancing the head. A target not yet present leaves a bounded marker;
+late ciphertext is authenticated and acknowledged, then discarded without
+storing its plaintext or accepting unverified sender attribution. A new
+invitee gets the current join checkpoint, never pre-join message bodies. This
+is logical moderation, not guaranteed erasure of content already seen, copied,
+captured, or retained by an older client. Group sender delete and media
+moderation remain deferred. No server or database change is involved.
+
 **P13.4B current management layer:** Group Info displays safe member labels,
 roles, posting permissions, and setup/sync/locked states. Existing groups
 enter A5/A6 setup only by an explicit coordinator action; all-member evidence

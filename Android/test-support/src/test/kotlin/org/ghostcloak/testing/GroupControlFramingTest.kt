@@ -60,6 +60,24 @@ class GroupControlFramingTest {
         assertTrue(payload.supportsGroups)
     }
 
+    @Test fun moderationCapabilityRequiresAuthenticatedUpdatedControlFrame() {
+        val control=GroupControl(kind=GroupControlKind.GOVERNANCE_CAPABILITY_ECHO,
+            groupId=GroupIds.create())
+        val frame=ConversationPayload.encodeGroup(control)
+        assertTrue(ConversationPayload.decode(frame).supportsGroupModeration)
+        // A valid legacy frame with no moderation marker must never enable removal.
+        val marker="GC/group-moderation-v1!".toByteArray(Charsets.US_ASCII)
+        val offset=frame.indexOfSubsequence(marker)
+        assertTrue(offset>=0)
+        frame[offset]=0
+        assertFalse(ConversationPayload.decode(frame).supportsGroupModeration)
+    }
+
+    private fun ByteArray.indexOfSubsequence(needle:ByteArray):Int =
+        (0..size-needle.size).firstOrNull {start -> needle.indices.all {
+            this[start+it]==needle[it]
+        }} ?: -1
+
     @Test fun sharedDisplayNameDoesNotCrowdOutGroupCapability() {
         for(name in listOf("JOSCOX","SRosier","A".repeat(32))) {
             val encoded=ConversationPayload.encode("Hi",0,displayName=name)

@@ -139,6 +139,131 @@ class GovernanceFoundationV1Test {
                 GroupGovernancePolicyRulesV1.coordinatorStatement(unsigned)))
     }
 
+    private fun moderationEntry(f:Fixture,head:GovernanceHeadFoundationV1,state:GroupState,
+        actorId:String,logicalId:String,policy:GroupGovernancePolicyV1=GroupGovernancePolicyRulesV1.initial()):
+        GroupGovernancePolicyEntryV1 {
+        val digest=GroupGovernancePolicyRulesV1.digest(head.activationDigest,policy)
+        val unsigned=GroupGovernancePolicyEntryV1(groupId=state.groupId,
+            activationDigest=head.activationDigest,sequence=head.sequence+1,
+            previousHeadDigest=head.headDigest,eventId=GroupIds.create(),
+            stateRevision=state.revision,stateDigest=GroupStatements.digest(state),
+            actorId=actorId,action=GroupPolicyActionV1.REMOVE_GROUP_MESSAGE,
+            targetLogicalId=logicalId,prePolicyDigest=digest,postPolicyDigest=digest,
+            actorSignature=byteArrayOf(),coordinatorSignature=byteArrayOf())
+        return unsigned.copy(actorSignature=sign(f.people.single {it.member.memberId==actorId}.key,
+            GroupGovernancePolicyRulesV1.actorStatement(unsigned)),
+            coordinatorSignature=sign(f.owner.key,
+                GroupGovernancePolicyRulesV1.coordinatorStatement(unsigned)))
+    }
+
+    @Test fun boundedJoinFilterCoversEveryModeratedIdWithoutPlaintext() {
+        val groupId=GroupIds.create()
+        val ids=(1..GroupGovernanceJournalV1.MAX_ENTRIES).map {GroupIds.create()}
+        val filter=GroupModerationFilterV1.empty()
+        ids.forEach {GroupModerationFilterV1.add(filter,groupId,it)}
+        assertEquals(GroupModerationFilterV1.BYTES,filter.size)
+        assertTrue(ids.all {GroupModerationFilterV1.contains(filter,groupId,it)})
+        assertFalse(GroupModerationFilterV1.contains(filter,groupId,GroupIds.create()))
+        assertFalse(String(filter,Charsets.ISO_8859_1).contains("message text"))
+    }
+
+    @Test fun unknownTargetMarkersStopAtJournalCapacity() {
+        val records=Records();val groupId=GroupIds.create();val store=GroupChatStore(records)
+        repeat(GroupGovernanceJournalV1.MAX_ENTRIES) {
+            records.write("app/group-text/moderated/$groupId/${GroupIds.create()}",byteArrayOf(1))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            store.moderate(groupId,GroupIds.create())
+        }
+    }
+
+    @Test fun moderationUsesGovernanceSequenceScrubsBodyAndRejectsRepeat() {
+        val f=fixture();val head0=install(f)
+        val id=GroupIds.create();val chat=GroupChatStore(f.records)
+        chat.create(GroupChatMessage(f.state.groupId,id,f.state.epoch,f.state.ownerId,true,
+            "sensitive group text",chat.nextOrder(),listOf(GroupRecipient(RandomIdentifiers.create()))))
+        val entry=moderationEntry(f,head0,f.state,f.state.ownerId,id)
+        assertTrue(GroupGovernancePolicyRulesV1.verifyEntry(entry,f.state,head0,
+            GroupGovernancePolicyRulesV1.initial()))
+        assertEquals(GroupApply.ACCEPTED,f.ledger.applyGovernedPolicy(entry))
+        assertEquals(1L,f.ledger.governanceHead(f.state.groupId)?.sequence)
+        assertEquals("",chat.message(f.state.groupId,id)?.text)
+        assertEquals(GroupModerationState.REMOVED_BY_ADMIN,
+            chat.message(f.state.groupId,id)?.moderationState)
+        assertEquals(GovernanceJournalStatus.COMPLETE,
+            f.ledger.governanceJournalStatus(f.state.groupId))
+        assertEquals(GroupApply.DUPLICATE,f.ledger.markGovernancePolicyForkIfValid(entry))
+        val current=checkNotNull(f.ledger.governanceHead(f.state.groupId))
+        val repeated=moderationEntry(f,current,f.state,f.state.ownerId,id)
+        assertEquals(GroupApply.REJECTED,f.ledger.applyGovernedPolicy(repeated))
+        assertEquals(1L,f.ledger.governanceHead(f.state.groupId)?.sequence)
+        assertEquals(GovernanceJournalStatus.COMPLETE,f.ledger.governanceJournalStatus(f.state.groupId))
+    }
+
+    @Test fun adminCanModerateAnyRoleButMemberAndDemotedAdminCannot() {
+        val f=fixture(3,10);val head=install(f)
+        val admin=f.state.members.single {it.role==GroupRole.ADMIN}.memberId
+        val member=f.state.members.single {it.role==GroupRole.MEMBER}.memberId
+        val adminEntry=moderationEntry(f,head,f.state,admin,GroupIds.create())
+        val memberEntry=moderationEntry(f,head,f.state,member,GroupIds.create())
+        assertTrue(GroupGovernancePolicyRulesV1.verifyEntry(adminEntry,f.state,head,
+            GroupGovernancePolicyRulesV1.initial()))
+        assertFalse(GroupGovernancePolicyRulesV1.verifyEntry(memberEntry,f.state,head,
+            GroupGovernancePolicyRulesV1.initial()))
+        val demotion=transition(f,f.state,GroupChange(GroupIds.create(),GroupAction.DEMOTE,
+            f.state.ownerId,targetId=admin))
+        val nextHead=head.copy(sequence=head.sequence+1,headDigest=DeviceAuth.digest(byteArrayOf(9)),
+            stateRevision=demotion.next.revision,stateDigest=GroupStatements.digest(demotion.next))
+        assertFalse(GroupGovernancePolicyRulesV1.verifyEntry(adminEntry,demotion.next,nextHead,
+            GroupGovernancePolicyRulesV1.initial()))
+        val fresh=moderationEntry(f,nextHead,demotion.next,admin,GroupIds.create())
+        assertFalse(GroupGovernancePolicyRulesV1.verifyEntry(fresh,demotion.next,nextHead,
+            GroupGovernancePolicyRulesV1.initial()))
+    }
+
+    @Test fun moderationBeforeTargetSurvivesRestartAndPreventsNotificationOrResurrection() {
+        val f=fixture();val head=install(f)
+        val id=GroupIds.create()
+        val entry=moderationEntry(f,head,f.state,f.state.ownerId,id)
+        assertEquals(GroupApply.ACCEPTED,f.ledger.applyGovernedPolicy(entry))
+        val restarted=GroupChatStore(f.records)
+        val target=GroupTextV2(groupId=f.state.groupId,epoch=f.state.epoch,
+            senderMemberId=f.state.ownerId,logicalId=id,
+            governanceActivationDigest=head.activationDigest,governanceSequence=head.sequence,
+            governanceHeadDigest=head.headDigest,
+            policyDigest=GroupGovernancePolicyRulesV1.digest(head.activationDigest,
+                GroupGovernancePolicyRulesV1.initial()),text="late sensitive text")
+        val envelope=RandomIdentifiers.create()
+        restarted.queueV2(RandomIdentifiers.create(),envelope,target)
+        assertTrue(restarted.pendingV2().isEmpty())
+        assertNull(restarted.message(f.state.groupId,id))
+        assertTrue(f.records.keys("app/notification/${f.state.groupId}/").isEmpty())
+        val duplicate=RandomIdentifiers.create()
+        restarted.queueV2(RandomIdentifiers.create(),duplicate,target)
+        assertTrue(restarted.pendingV2().isEmpty())
+        assertTrue(restarted.messages(f.state.groupId).isEmpty())
+        assertTrue(restarted.isModerated(f.state.groupId,id))
+    }
+
+    @Test fun moderationScrubsAlreadyQueuedTargetInSameTransaction() {
+        val f=fixture();val head=install(f);val id=GroupIds.create()
+        val target=GroupTextV2(groupId=f.state.groupId,epoch=f.state.epoch,
+            senderMemberId=f.state.ownerId,logicalId=id,
+            governanceActivationDigest=head.activationDigest,governanceSequence=head.sequence,
+            governanceHeadDigest=head.headDigest,
+            policyDigest=GroupGovernancePolicyRulesV1.digest(head.activationDigest,
+                GroupGovernancePolicyRulesV1.initial()),text="queued secret")
+        val chat=GroupChatStore(f.records)
+        chat.queueV2(RandomIdentifiers.create(),RandomIdentifiers.create(),target)
+        assertEquals(1,chat.pendingV2().size)
+        val entry=moderationEntry(f,head,f.state,f.state.ownerId,id)
+        assertEquals(GroupApply.ACCEPTED,f.ledger.applyGovernedPolicy(entry))
+        assertTrue(chat.pendingV2().isEmpty())
+        assertNull(GroupChatStore(f.records).message(f.state.groupId,id))
+        assertTrue(chat.isModerated(f.state.groupId,id))
+        assertTrue(f.records.keys("app/notification/${f.state.groupId}/").isEmpty())
+    }
+
     @Test fun policyAndMembershipShareOneDurableJournalAndMissingMiddleLocksIt() {
         val f=fixture()
         val original=install(f)
@@ -341,8 +466,12 @@ class GovernanceFoundationV1Test {
                 GroupGovernedAdmissionV1.coordinatorStatement(checkpointUnsigned)))
         assertTrue(GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint,f.state,proof,
             certificate,binding))
+        val moderatedBeforeJoin=GroupIds.create()
+        val filter=GroupModerationFilterV1.empty().also {
+            GroupModerationFilterV1.add(it,f.state.groupId,moderatedBeforeJoin)
+        }
         val unsignedPolicy=GroupGovernancePolicyCheckpointRulesV1.unsigned(checkpoint,
-            GroupGovernancePolicyRulesV1.initial())
+            GroupGovernancePolicyRulesV1.initial(),filter)
         val policyProof=unsignedPolicy.copy(ownerSignature=sign(f.owner.key,
             GroupGovernancePolicyCheckpointRulesV1.ownerStatement(unsignedPolicy)),
             coordinatorSignature=sign(f.owner.key,
@@ -352,6 +481,8 @@ class GovernanceFoundationV1Test {
             policyDigest=ByteArray(32)),checkpoint,f.state))
         assertFalse(GroupGovernancePolicyCheckpointRulesV1.verify(policyProof.copy(
             parentHeadDigest=ByteArray(32)),checkpoint,f.state))
+        assertFalse(GroupGovernancePolicyCheckpointRulesV1.verify(policyProof.copy(
+            moderationFilter=GroupModerationFilterV1.empty()),checkpoint,f.state))
         val evidence=GovernedJoinEvidenceV1(checkpoint,binding,proof,certificate)
         val add=transition(f,f.state,GroupChange(proposal.eventId,GroupAction.ADD,
             f.state.ownerId,added=target,invite=accepted))
@@ -381,6 +512,8 @@ class GovernanceFoundationV1Test {
             policyLedger.governanceJournalStatus(f.state.groupId))
         assertEquals(GroupGovernancePolicyRulesV1.initial(),
             policyLedger.governancePolicy(f.state.groupId))
+        assertTrue(GroupChatStore(joinedWithPolicy).isModerated(f.state.groupId,moderatedBeforeJoin))
+        assertNull(GroupChatStore(joinedWithPolicy).message(f.state.groupId,moderatedBeforeJoin))
         assertFalse(GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint.copy(
             inviteId=GroupIds.create()),f.state,proof,certificate,binding))
         assertFalse(GroupGovernedAdmissionV1.verifyCheckpoint(checkpoint.copy(

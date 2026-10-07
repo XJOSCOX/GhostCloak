@@ -386,7 +386,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                     repository.queueGroupScopedSystem(contact.remoteDeviceId,envelope.envelopeId,
                         maintenance.groupControl!!,signalDigest,maintenance.supportsBaselineV1,
                         maintenance.supportsGovernanceV1,
-                        maintenance.supportsGovernanceTextV2)
+                        maintenance.supportsGovernanceTextV2,
+                        maintenance.supportsGroupModeration)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
             }
             return@action
@@ -417,11 +418,12 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                     repository.groupPeer(contact.remoteDeviceId,true)
                     repository.queueGroupControl(contact.remoteDeviceId,envelope.envelopeId,
                         content.groupControl,content.supportsBaselineV1,content.supportsGovernanceV1,
-                        content.supportsGovernanceTextV2)
+                        content.supportsGovernanceTextV2,content.supportsGroupModeration)
                 } else if(content.groupControl.kind.blockSafeMaintenance() && scopedDigest!=null) {
                     repository.queueGroupScopedSystem(contact.remoteDeviceId,envelope.envelopeId,
                         content.groupControl,scopedDigest,content.supportsBaselineV1,
-                        content.supportsGovernanceV1,content.supportsGovernanceTextV2)
+                        content.supportsGovernanceV1,content.supportsGovernanceTextV2,
+                        content.supportsGroupModeration)
                 }
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit

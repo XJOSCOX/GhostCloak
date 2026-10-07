@@ -321,6 +321,9 @@ class NetworkController(
     suspend fun unrestrictGroupMember(id:String,memberId:String)=operation(NetworkOperation.SEND) {
         groups.unrestrictMemberGoverned(id,memberId)
     }
+    suspend fun removeGroupMessage(id:String,logicalId:String)=operation(NetworkOperation.SEND) {
+        groups.removeGroupMessageGoverned(id,logicalId)
+    }
     suspend fun removeGroupMember(id:String,memberId:String)=operation(NetworkOperation.SEND) {
         groups.removeGroupMemberGoverned(id,memberId)
     }

@@ -15,6 +15,7 @@ class GroupInfoTest {
         val ownerInfo=info(GroupRole.OWNER)
         assertTrue(ownerInfo.canInvite)
         assertTrue(ownerInfo.canChangePosting)
+        assertTrue(ownerInfo.canModerate)
         assertTrue(ownerInfo.canRestrict(admin))
         assertTrue(ownerInfo.canRemove(admin))
         assertTrue(ownerInfo.canPromote(member))
@@ -25,6 +26,7 @@ class GroupInfoTest {
         val adminInfo=info(GroupRole.ADMIN)
         assertTrue(adminInfo.canInvite)
         assertTrue(adminInfo.canChangePosting)
+        assertTrue(adminInfo.canModerate)
         assertTrue(adminInfo.canRestrict(member))
         assertTrue(adminInfo.canRemove(member))
         assertFalse(adminInfo.canRestrict(admin))
@@ -37,6 +39,7 @@ class GroupInfoTest {
         val memberInfo=info(GroupRole.MEMBER)
         assertFalse(memberInfo.canInvite)
         assertFalse(memberInfo.canChangePosting)
+        assertFalse(memberInfo.canModerate)
         assertFalse(memberInfo.canRestrict(member))
         assertFalse(memberInfo.canRemove(member))
         assertTrue(memberInfo.canLeave)
@@ -47,11 +50,14 @@ class GroupInfoTest {
         assertFalse(info(GroupRole.OWNER).copy(members=listOf(owner,coordinator,member))
             .canDemote(coordinator))
         assertFalse(info(GroupRole.OWNER,true).canRemove(member))
+        assertFalse(info(GroupRole.OWNER,true).canModerate)
         assertFalse(info(GroupRole.OWNER).copy(journalFull=true).canDissolve)
+        assertFalse(info(GroupRole.ADMIN).copy(moderationCapable=false).canModerate)
         for(status in listOf(GroupManagementStatus.FORKED,
             GroupManagementStatus.LEGACY_INCOMPLETE,GroupManagementStatus.NEEDS_RESYNC)) {
             val locked=info(GroupRole.OWNER).copy(managementStatus=status)
             assertFalse(locked.canChangePosting)
+            assertFalse(locked.canModerate)
             assertFalse(locked.canRemove(member))
         }
     }

@@ -384,10 +384,15 @@ class GroupLedger(
         val policy=governancePolicy(id) ?: return@transaction GroupApply.REJECTED
         if(!GroupGovernancePolicyRulesV1.verifyEntry(entry,record.state,head,policy))
             return@transaction GroupApply.REJECTED
+        if(entry.action==GroupPolicyActionV1.REMOVE_GROUP_MESSAGE &&
+            GroupChatStore(records).isModerated(id,checkNotNull(entry.targetLogicalId)))
+            return@transaction GroupApply.REJECTED
         val digest=GroupGovernancePolicyRulesV1.entryDigest(entry)
         if(!governance.advancePolicy(head,digest)) return@transaction GroupApply.REJECTED
         val nextHead=checkNotNull(governance.head(id))
         GroupGovernanceJournalV1(records).appendPolicy(entry,barrier,nextHead)
+        if(entry.action==GroupPolicyActionV1.REMOVE_GROUP_MESSAGE)
+            check(GroupChatStore(records).moderate(id,checkNotNull(entry.targetLogicalId)))
         onAccepted()
         GroupApply.ACCEPTED
     }

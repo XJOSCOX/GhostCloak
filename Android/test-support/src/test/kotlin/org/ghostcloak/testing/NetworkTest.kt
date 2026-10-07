@@ -15,6 +15,71 @@ import java.net.URI
 import java.util.concurrent.Executors
 
 class NetworkTest {
+    @Test fun governedModerationScrubsBothEndpointsAndDemotedAdminCannotPropose() = runBlocking {
+        Fixture().use {f ->
+            val a=f.person("alice",true);val b=f.person("bob",true)
+            val people=listOf(a,b)
+            val repos=people.associateWith {LocalRepository(it.records)}
+            val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
+                NetworkMailboxTransport(f.client(p),p.state))}
+            fun group(p:Person)=GroupMembershipTransport(p.records,repos.getValue(p),p.engine,p.state,
+                GroupAuthorityResolver(repos.getValue(p),p.engine,f.client(p),p.records),outboxes.getValue(p))
+            val conversations=people.associateWith {p ->ConversationService(p.engine,
+                repos.getValue(p)).also {it.open()}}
+            for(p in people) for(q in people) if(p!=q) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repos.getValue(p).save(Contact(RandomIdentifiers.create(),q.registration.accountId,
+                    q.name,q.registration.deviceId))
+                repos.getValue(p).groupPeer(q.registration.deviceId,true)
+                repos.getValue(p).admissionV2Peer(q.registration.deviceId,true)
+                repos.getValue(p).baselineV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceTextV2Peer(q.registration.deviceId,true)
+            }
+            suspend fun settle(rounds:Int=1) {repeat(rounds) {
+                for(p in people) outboxes.getValue(p).pendingIds().forEach {id ->
+                    val outbox=outboxes.getValue(p)
+                    if(outbox.get(id).state!=OutboxState.SERVER_ACCEPTED) outbox.process(id)
+                }
+                for(p in people) {
+                    val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                    val deliveries=mailbox.fetch()
+                    deliveries.forEach {conversations.getValue(p).acceptNetwork(
+                        EnvelopeCodec.decode(it.encryptedEnvelope))}
+                    if(deliveries.isNotEmpty()) mailbox.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+                    group(p).processPending()
+                }
+            }}
+            val id=group(a).createAndInvite(b.registration.deviceId)
+            settle(2);group(b).accept(group(b).invitations().single().id);settle(4)
+            group(a).beginGroupManagementSetup(id);settle(10)
+            group(a).beginGroupManagementSetup(id);settle(12)
+            assertEquals(GroupManagementStatus.READY,group(a).groupInfo(id)!!.managementStatus)
+            val first=group(b).sendText(id,"sender plaintext")
+            settle(3)
+            rejectAsync {group(b).removeGroupMessageGoverned(id,first)}
+            assertTrue(repos.getValue(a).groupModerationPeer(b.registration.deviceId))
+            assertTrue(repos.getValue(b).groupModerationPeer(a.registration.deviceId))
+            group(a).removeGroupMessageGoverned(id,first);settle(8)
+            for(p in people) {
+                val row=group(p).conversation(id)!!.messages.single {it.logicalId==first}
+                assertEquals("",row.text)
+                assertEquals(GroupModerationState.REMOVED_BY_ADMIN,row.moderationState)
+            }
+            rejectAsync {group(a).removeGroupMessageGoverned(id,first)}
+            val bId=b.records.read("app/group/member/$id")!!.decodeToString()
+            group(a).promoteGroupMemberGoverned(id,bId);settle(8)
+            val second=group(a).sendText(id,"owner plaintext");settle(3)
+            group(b).removeGroupMessageGoverned(id,second);settle(8)
+            assertEquals(GroupModerationState.REMOVED_BY_ADMIN,
+                group(a).conversation(id)!!.messages.single {it.logicalId==second}.moderationState)
+            group(a).demoteGroupAdminGoverned(id,bId);settle(8)
+            rejectAsync {group(b).removeGroupMessageGoverned(id,GroupIds.create())}
+        }
+    }
+
     @Test fun governedThreeMemberAdminPermissionsAndRemoval() = runBlocking {
         Fixture().use {f ->
             val a=f.person("alice",true);val b=f.person("bob",true)
@@ -67,6 +132,15 @@ class NetworkTest {
                 group(a).groupInfo(id)!!.managementStatus)
             group(a).beginGroupManagementSetup(id);settle(15)
             assertEquals(GroupManagementStatus.READY,group(c).groupInfo(id)!!.managementStatus)
+            val moderatedFromC=group(c).sendText(id,"three member moderation target")
+            settle(4)
+            group(a).removeGroupMessageGoverned(id,moderatedFromC)
+            settle(10)
+            for(p in listOf(a,b,c)) {
+                val row=group(p).conversation(id)!!.messages.single {it.logicalId==moderatedFromC}
+                assertEquals("",row.text)
+                assertEquals(GroupModerationState.REMOVED_BY_ADMIN,row.moderationState)
+            }
             val aId=a.records.read("app/group/member/$id")!!.decodeToString()
             val bId=b.records.read("app/group/member/$id")!!.decodeToString()
             val cId=c.records.read("app/group/member/$id")!!.decodeToString()

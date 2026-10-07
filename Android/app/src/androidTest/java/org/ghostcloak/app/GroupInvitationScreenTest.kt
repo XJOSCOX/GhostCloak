@@ -20,6 +20,12 @@ import org.ghostcloak.messaging.GroupLocalStatus
 import org.ghostcloak.messaging.GroupChatMessage
 import org.ghostcloak.messaging.GroupRecipient
 import org.ghostcloak.messaging.GroupRecipientState
+import org.ghostcloak.messaging.GroupInfo
+import org.ghostcloak.messaging.GroupInfoMember
+import org.ghostcloak.messaging.GroupManagementStatus
+import org.ghostcloak.messaging.GroupRole
+import org.ghostcloak.messaging.GroupPostingModeV1
+import org.ghostcloak.messaging.GroupModerationState
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -168,5 +174,52 @@ class GroupInvitationScreenTest {
         compose.onNodeWithTag("group-composer").performTextInput("Hello")
         compose.onNodeWithTag("group-composer").assertIsDisplayed()
         compose.onNodeWithContentDescription("Send").assertIsEnabled()
+    }
+
+    @Test fun ownerCanConfirmModeration() {
+        val groupId=GroupIds.create();val own=GroupIds.create();val peer=GroupIds.create()
+        val id=GroupIds.create()
+        val message=GroupChatMessage(groupId,id,2,peer,false,"Moderate this",1)
+        fun group(role:GroupRole,pending:Boolean=false)=GroupMembershipTransport.Conversation(
+            groupId,GroupLocalStatus.ACTIVE,2,mapOf(own to "own-device",peer to "peer-device"),
+            listOf(message),info=GroupInfo(groupId,role,GroupLocalStatus.ACTIVE,
+                GroupManagementStatus.READY,listOf(GroupInfoMember(own,"own-device",role,false,true,true)),
+                GroupPostingModeV1.EVERYONE,pending,false,false))
+        var removed=""
+        compose.setContent {GhostCloakTheme {
+            GroupConversationScreen(AppState(loading=false),group(GroupRole.OWNER),{},{_,_->},{},
+                removeMessage={removed=it})
+        }}
+        compose.onNodeWithText("Moderate this").performTouchInput {longClick()}
+        compose.onNodeWithText("Remove message").performClick()
+        compose.onNodeWithText("Remove this message?").assertExists()
+        compose.onNodeWithText("Remove message").performClick()
+        assertEquals(id,removed)
+    }
+
+    @Test fun memberCannotModerate() {
+        val groupId=GroupIds.create();val own=GroupIds.create();val peer=GroupIds.create()
+        val group=GroupMembershipTransport.Conversation(groupId,GroupLocalStatus.ACTIVE,2,
+            mapOf(own to "own-device",peer to "peer-device"),listOf(GroupChatMessage(
+                groupId,GroupIds.create(),2,peer,false,"No member action",1)),
+            info=GroupInfo(groupId,GroupRole.MEMBER,GroupLocalStatus.ACTIVE,
+                GroupManagementStatus.READY,listOf(GroupInfoMember(own,"own-device",
+                    GroupRole.MEMBER,false,true,false)),GroupPostingModeV1.EVERYONE,false,false,false))
+        compose.setContent {GhostCloakTheme {
+            GroupConversationScreen(AppState(loading=false),group,{},{_,_->},{})
+        }}
+        compose.onNodeWithText("No member action").performTouchInput {longClick()}
+        compose.onNodeWithText("Remove message").assertDoesNotExist()
+    }
+
+    @Test fun moderatedGroupMessageShowsNoticeWithoutOldText() {
+        val groupId=GroupIds.create();val own=GroupIds.create()
+        val group=GroupMembershipTransport.Conversation(groupId,GroupLocalStatus.ACTIVE,2,
+            mapOf(own to "own-device"),listOf(GroupChatMessage(groupId,GroupIds.create(),2,
+                own,true,"",1,moderationState=GroupModerationState.REMOVED_BY_ADMIN)))
+        compose.setContent {GhostCloakTheme {
+            GroupConversationScreen(AppState(loading=false),group,{},{_,_->},{})
+        }}
+        compose.onNodeWithText("Message removed by an admin").assertExists()
     }
 }

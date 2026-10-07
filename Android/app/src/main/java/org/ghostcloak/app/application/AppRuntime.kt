@@ -272,6 +272,7 @@ class AppRuntime internal constructor(
         activeGroupNetwork().setGroupPostingMode(id,mode)
     suspend fun restrictGroupMember(id:String,memberId:String)=activeGroupNetwork().restrictGroupMember(id,memberId)
     suspend fun unrestrictGroupMember(id:String,memberId:String)=activeGroupNetwork().unrestrictGroupMember(id,memberId)
+    suspend fun removeGroupMessage(id:String,logicalId:String)=activeGroupNetwork().removeGroupMessage(id,logicalId)
     suspend fun removeGroupMember(id:String,memberId:String)=activeGroupNetwork().removeGroupMember(id,memberId)
     suspend fun promoteGroupMember(id:String,memberId:String)=activeGroupNetwork().promoteGroupMember(id,memberId)
     suspend fun demoteGroupAdmin(id:String,memberId:String)=activeGroupNetwork().demoteGroupAdmin(id,memberId)

@@ -235,3 +235,13 @@ Canonical group management is not yet enabled. [GROUP_GOVERNANCE.md](GROUP_GOVER
 **P13.4A7 governance-bound text and policy:** Android adds a separate GroupTextV2 frame, exact-current-head receive rule, bounded hidden future-head queue, stale-head discard, and retirement of unsent old-head fanout. Signed posting-mode and member-restriction actions share the same retained governance sequence as membership changes. The default policy is `EVERYONE`; owner/admin authorization is checked at the pre-entry state, and the policy is derived from the verified journal. An additive dual-signed policy proof binds each new invitee's A6.3 checkpoint. Existing pre-governance P13.3 groups retain GroupText v1. Group management UI, admin moderation, media, and message edits/reactions remain later work. No backend deployment or DB migration is involved.
 
 **P13.4B governed member-management UI:** Group Info provides explicit A5/A6 setup, status, roles, posting mode, member restrictions, governed remove/promote/demote/leave/dissolve, and target-consented ownership transfer. The existing signed GroupRules path remains authoritative; non-coordinator actions require an exact actor proposal and coordinator co-signing in the same journal order. Pending, forked, resyncing, legacy-incomplete, and full-journal states fail closed for management. Remove and end preserve local message history, with best-effort terminal evidence for departing/blocked members. Local Block remains distinct from group restriction. Local notification mute, admin message moderation, group media, and message controls are deferred. The controlled physical A/B/C plan is in [P134B_PHYSICAL_VALIDATION.md](P134B_PHYSICAL_VALIDATION.md). No backend deployment or DB migration is involved.
+
+**P13.4C owner/admin group-text moderation (under validation):** Android adds a
+governance-ordered, dual-signed removal action for a logical group-text ID,
+explicit local tombstones, bounded delayed-target markers, and a long-press
+Owner/Admin action with a no-erasure-promise confirmation. A new authenticated
+capability gate requires every current member to understand moderation before
+an action is proposed. Restricted Admins retain moderation authority; demoted
+and removed Admins cannot create new actions. Offline recipients replay the
+same signed journal. Sender group delete, media moderation, and local group
+notification mute remain deferred. No backend or DB deployment is needed.

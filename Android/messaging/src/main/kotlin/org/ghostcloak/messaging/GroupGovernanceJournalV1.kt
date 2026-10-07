@@ -223,7 +223,7 @@ internal class GroupGovernanceJournalV1(private val records:EndpointRecords) {
                 if(!GroupGovernancePolicyRulesV1.verifyEntry(action,pre,expected,policy))
                     return@transaction GovernanceJournalStatus.LEGACY_INCOMPLETE
                 policy=GroupGovernancePolicyRulesV1.apply(policy,pre,action.actorId,
-                    action.action,action.targetMemberId,action.postingMode)
+                    action.action,action.targetMemberId,action.postingMode,action.targetLogicalId)
                 previous=GroupGovernancePolicyRulesV1.entryDigest(action)
             }
         }
@@ -254,7 +254,7 @@ internal class GroupGovernanceJournalV1(private val records:EndpointRecords) {
                                 event -> event.next.revision==revision
                             }.next
                         } ?: error("governance_activation_state_missing"),
-                        it.actorId,it.action,it.targetMemberId,it.postingMode)
+                        it.actorId,it.action,it.targetMemberId,it.postingMode,it.targetLogicalId)
                 }
             }
             policy

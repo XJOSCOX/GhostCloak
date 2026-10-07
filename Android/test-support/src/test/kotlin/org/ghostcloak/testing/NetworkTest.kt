@@ -272,6 +272,62 @@ class NetworkTest {
                 assertEquals(next.filename,row.mediaFilename)
                 assertArrayEquals(next.key,repos.getValue(b).attachment(id,nextId)!!.key)
             }
+            // Force submission offline after Signal ciphertext has committed. A restart
+            // must deliver that exact envelope even after the active sender descriptor is gone.
+            val offlineTransport=object:IdempotentMessageTransport by NetworkMailboxTransport(
+                f.client(a),a.state) {
+                override suspend fun submit(submissionId:String,routingDestination:String,
+                    envelope:EncryptedEnvelope):String = throw ApiFailure(503,"offline")
+            }
+            val heldOutbox=DurableOutbox(a.records,a.engine,offlineTransport)
+            val heldGroup=GroupMembershipTransport(a.records,repos.getValue(a),a.engine,a.state,
+                GroupAuthorityResolver(repos.getValue(a),a.engine,f.client(a),a.records),heldOutbox)
+            val heldId=heldGroup.sendMedia(id,descriptor,"Retry after scrub")
+            assertFalse(heldGroup.conversation(id)!!.messages.single {it.logicalId==heldId}
+                .mediaDeliveryPrepared)
+            heldGroup.processPending()
+            val prepared=heldGroup.conversation(id)!!.messages.single {it.logicalId==heldId}
+            assertTrue(prepared.mediaDeliveryPrepared)
+            val heldSubmission=prepared.recipients.single().outboxId!!
+            val heldEntry=heldOutbox.get(heldSubmission)
+            assertEquals(OutboxState.UPLOAD_PENDING,heldEntry.state)
+            assertTrue(heldEntry.plaintext.isEmpty())
+            assertNotNull(heldEntry.groupMediaBinding)
+            val ciphertext=heldEntry.ciphertext.clone()
+            a.records.transaction {a.records.remove("app/attachment/$id/$heldId")}
+            assertNull(repos.getValue(a).attachment(id,heldId))
+            val restartedOutbox=DurableOutbox(a.records,SignalProtocolEngine(a.records),
+                NetworkMailboxTransport(f.client(a),a.state))
+            assertEquals(OutboxState.SERVER_ACCEPTED,restartedOutbox.process(heldSubmission).state)
+            val mailbox=NetworkMailboxTransport(f.client(b),b.state)
+            val delivery=mailbox.fetch().single()
+            assertArrayEquals(ciphertext,delivery.encryptedEnvelope)
+            conversations.getValue(b).acceptNetwork(EnvelopeCodec.decode(delivery.encryptedEnvelope))
+            mailbox.acknowledgeAccepted(listOf(delivery.serverMessageId))
+            group(b).processPending()
+            group(a).processPending()
+            assertEquals("Retry after scrub",group(b).conversation(id)!!.messages
+                .single {it.logicalId==heldId}.mediaCaption)
+            assertArrayEquals(descriptor.key,repos.getValue(b).attachment(id,heldId)!!.key)
+            val crashOutbox=DurableOutbox(a.records,a.engine,
+                NetworkMailboxTransport(f.client(a),a.state),crash={point ->
+                    if(point==CrashPoint.AFTER_LOCAL) throw SimulatedDeath()
+                })
+            val crashGroup=GroupMembershipTransport(a.records,repos.getValue(a),a.engine,a.state,
+                GroupAuthorityResolver(repos.getValue(a),a.engine,f.client(a),a.records),crashOutbox)
+            val crashId=crashGroup.sendMedia(id,descriptor,"Crash before preparation")
+            try {crashGroup.processPending();fail("Expected interrupted preparation")}
+            catch(_:SimulatedDeath) { }
+            val interrupted=GroupMembershipTransport(a.records,repos.getValue(a),a.engine,a.state,
+                GroupAuthorityResolver(repos.getValue(a),a.engine,f.client(a),a.records),
+                outboxes.getValue(a)).conversation(id)!!.messages.single {it.logicalId==crashId}
+            assertFalse(interrupted.mediaDeliveryPrepared)
+            assertEquals(OutboxState.LOCAL,crashOutbox.get(interrupted.recipients.single().outboxId!!).state)
+            settle(4)
+            assertTrue(group(a).conversation(id)!!.messages.single {it.logicalId==crashId}
+                .mediaDeliveryPrepared)
+            assertEquals("Crash before preparation",group(b).conversation(id)!!.messages
+                .single {it.logicalId==crashId}.mediaCaption)
             group(a).deleteOwnText(id,logical);settle(4)
             assertNull(repos.getValue(a).attachment(id,logical))
             assertNull(repos.getValue(b).attachment(id,logical))
@@ -2141,6 +2197,31 @@ class NetworkTest {
                 restart.process(id)
                 assertEquals(1, f.call(b, ApiRequest.Fetch()).deliveries.size)
             }
+        }
+    }
+    @Test fun preparedSignalCiphertextSurvivesRestartBeforeAnySubmission() = runBlocking {
+        Fixture().use {f ->
+            val a=f.person("alice");val b=f.person("bob")
+            val client=f.client(a)
+            NetworkAccount(client,a.state).connect(b.state.ghostCloakId(),a.engine)
+            val transport=NetworkMailboxTransport(client,a.state)
+            val payload="prepared group media fixture".encodeToByteArray()
+            val outbox=DurableOutbox(a.records,a.engine,transport)
+            val id=outbox.enqueue(b.registration.deviceId,payload)
+            val ready=outbox.prepare(id)
+            assertEquals(OutboxState.CIPHERTEXT_READY,ready.state)
+            assertTrue(ready.plaintext.isEmpty())
+            assertTrue(f.call(b,ApiRequest.Fetch()).deliveries.isEmpty())
+            val ciphertext=ready.ciphertext.clone()
+            val restarted=DurableOutbox(a.records,SignalProtocolEngine(a.records),transport)
+            assertArrayEquals(ciphertext,restarted.prepare(id).ciphertext)
+            assertEquals(OutboxState.SERVER_ACCEPTED,restarted.process(id).state)
+            val delivery=f.call(b,ApiRequest.Fetch()).deliveries.single()
+            assertArrayEquals(ciphertext,delivery.encryptedEnvelope)
+            assertEquals("prepared group media fixture",b.engine.decrypt(
+                EnvelopeCodec.decode(delivery.encryptedEnvelope)).decodeToString())
+            restarted.process(id)
+            assertEquals(1,f.call(b,ApiRequest.Fetch()).deliveries.size)
         }
     }
     private class SimulatedDeath : RuntimeException()

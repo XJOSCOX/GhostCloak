@@ -2480,11 +2480,13 @@ class GroupMembershipTransport(
                 governanceHeadDigest=head.headDigest,
                 policyDigest=GroupGovernancePolicyRulesV1.digest(head.activationDigest,policy),
                 descriptor=descriptor,kind=descriptor.kind,caption=caption)
-            GroupMediaCodecV1.encode(value).fill(0)
+            val body=GroupMediaCodecV1.encode(value)
+            val bodyDigest=try {DeviceAuth.digest(body)} finally {body.fill(0)}
             chats.createMedia(GroupChatMessage(groupId,logicalId,current.epoch,localId,true,"",
                 chats.nextOrder(),current.members.filter {it.memberId!=localId}.map {GroupRecipient(it.deviceId)},
                 mediaKind=descriptor.kind,mediaCaption=caption,mediaFilename=descriptor.filename,
-                mediaBytes=descriptor.plaintextLength,mediaDurationMillis=descriptor.durationMillis),value)
+                mediaBytes=descriptor.plaintextLength,mediaDurationMillis=descriptor.durationMillis,
+                mediaBodyDigest=bodyDigest),value)
             logicalId
         }
     }
@@ -3593,13 +3595,79 @@ class GroupMembershipTransport(
                     !allMediaPeers(current,localId))) continue
                 if(message.replyToLogicalId!=null && (binding==null ||
                     !allMessageControlPeers(current,localId))) continue
-                for(recipient in message.recipients) {
+                val durableMedia=message.mediaKind!=null && message.mediaBodyDigest!=null
+                if(durableMedia) {
+                    val mediaBinding=checkNotNull(binding)
+                    // Media is never eligible for a future sender-side timer while even one
+                    // frozen recipient still needs descriptor/key reconstruction.
+                    for(recipient in message.recipients.filter {it.state in setOf(
+                        GroupRecipientState.PENDING,GroupRecipientState.QUEUED)}) {
+                        if(budget<=0) break
+                        budget--
+                        if(current.members.none {it.deviceId==recipient.deviceId} ||
+                            !repository.isActiveContact(recipient.deviceId) ||
+                            !repository.groupPeer(recipient.deviceId)) {
+                            chats.markUnavailable(groupId,message.logicalId,recipient.deviceId)
+                            continue
+                        }
+                        val member=current.members.single {it.deviceId==recipient.deviceId}
+                        try {trusted(listOf(member))} catch(e:CancellationException) {throw e}
+                        catch(_:ApiFailure) {continue}
+                        if(recipient.state==GroupRecipientState.PENDING) {
+                            val descriptor=repository.attachment(groupId,message.logicalId)
+                                ?: continue
+                            val media=GroupMediaV1(
+                                groupId=groupId,epoch=message.epoch,senderMemberId=localId,
+                                logicalId=message.logicalId,
+                                governanceActivationDigest=mediaBinding.activationDigest,
+                                governanceSequence=mediaBinding.sequence,
+                                governanceHeadDigest=mediaBinding.headDigest,
+                                policyDigest=mediaBinding.policyDigest,descriptor=descriptor,
+                                kind=message.mediaKind,caption=message.mediaCaption.orEmpty())
+                            val mediaBody=GroupMediaCodecV1.encode(media)
+                            val mediaDigest=try {DeviceAuth.digest(mediaBody)}
+                                finally {mediaBody.fill(0)}
+                            if(!MessageDigest.isEqual(mediaDigest,message.mediaBodyDigest))
+                                throw ApiFailure(409,"group_media_payload_changed")
+                            val payload=ConversationPayload.encodeGroupMedia(media)
+                            try {
+                                val digest=DeviceAuth.digest(payload)
+                                val proof=GroupMediaOutboxBinding(groupId,message.logicalId,
+                                    recipient.deviceId,mediaBinding.headDigest,digest,mediaDigest)
+                                outbox.enqueue(recipient.deviceId,payload,proof) {id ->
+                                    chats.markQueued(groupId,message.logicalId,recipient.deviceId,id)
+                                }
+                            } catch(e:CancellationException) {throw e}
+                            catch(_:ApiFailure) {continue}
+                            finally {payload.fill(0)}
+                        }
+                        val slot=chats.message(groupId,message.logicalId)?.recipients
+                            ?.singleOrNull {it.deviceId==recipient.deviceId} ?: continue
+                        val id=slot.outboxId ?: continue
+                        val prepared=try {outbox.prepare(id)}
+                            catch(e:CancellationException) {throw e}
+                            catch(_:ApiFailure) {continue}
+                            catch(_:CryptoFailure) {continue}
+                        if(prepared.state in setOf(OutboxState.FAILED,OutboxState.SUBMISSION_EXPIRED)) {
+                            chats.markResult(id,false)
+                            outbox.removeFinished(id)
+                        } else if(prepared.state==OutboxState.SERVER_ACCEPTED) {
+                            chats.markResult(id,true)
+                            outbox.removeFinished(id)
+                        }
+                    }
+                    if(!chats.markMediaDeliveryPreparedIfReady(groupId,message.logicalId)) continue
+                }
+                val readyMessage=if(durableMedia)
+                    chats.message(groupId,message.logicalId) ?: continue else message
+                for(recipient in readyMessage.recipients) {
                     if(budget<=0) break
                     if(recipient.state !in setOf(GroupRecipientState.PENDING,GroupRecipientState.QUEUED)) continue
                     // Include trust failures and offline peers in the bound; no single
                     // recipient may monopolize a sync pass.
                     budget--
                     if(recipient.state==GroupRecipientState.PENDING) {
+                        if(durableMedia) continue
                         if(current.members.none {it.deviceId==recipient.deviceId} ||
                             !repository.isActiveContact(recipient.deviceId) || !repository.groupPeer(recipient.deviceId)) {
                             chats.markUnavailable(groupId,message.logicalId,recipient.deviceId);continue

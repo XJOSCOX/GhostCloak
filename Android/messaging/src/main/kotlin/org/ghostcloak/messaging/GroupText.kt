@@ -9,6 +9,9 @@ import org.ghostcloak.identity.RandomIdentifiers
 import org.ghostcloak.protocol.NetworkCodec
 import org.ghostcloak.attachments.AttachmentFormat
 import org.ghostcloak.attachments.AttachmentKind
+import org.ghostcloak.protocol.DeviceAuth
+import org.ghostcloak.protocol.EnvelopeCodec
+import java.security.MessageDigest
 
 /** This content is framed inside a pairwise authenticated Signal message, never sent as routing metadata. */
 @Serializable data class GroupText(val version:Int=1,val groupId:String,val epoch:Long,
@@ -54,6 +57,8 @@ data class GroupReactionBadge(val emoji:String,val count:Int,val mine:Boolean)
     @EncodeDefault(EncodeDefault.Mode.NEVER) val mediaBytes:Long=0,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val mediaDurationMillis:Long?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val mediaSenderDeviceId:String?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val mediaBodyDigest:ByteArray?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val mediaDeliveryPrepared:Boolean=false,
     @kotlinx.serialization.Transient val reactions:List<GroupReactionBadge> = emptyList()) {
     override fun toString()="GroupChatMessage(redacted)"
 }
@@ -112,7 +117,7 @@ class GroupChatStore(private val records:EndpointRecords) {
     }
     private fun retirePendingRecipients(message:GroupChatMessage):GroupChatMessage {
         if(!message.outgoing) return message
-        return message.copy(recipients=message.recipients.map {recipient ->
+        return message.copy(mediaDeliveryPrepared=false,recipients=message.recipients.map {recipient ->
             if(recipient.state !in setOf(GroupRecipientState.PENDING,GroupRecipientState.QUEUED)) recipient
             else {
                 val accepted=recipient.outboxId?.let {id ->
@@ -324,7 +329,11 @@ class GroupChatStore(private val records:EndpointRecords) {
         require(value.outgoing && value.groupId==media.groupId && value.logicalId==media.logicalId &&
             value.senderMemberId==media.senderMemberId && value.mediaKind==media.kind &&
             value.recipients.size in 1..4 && value.recipients.map {it.deviceId}.distinct().size==value.recipients.size &&
-            value.recipients.all {RandomIdentifiers.valid(it.deviceId) && it.state==GroupRecipientState.PENDING})
+            value.recipients.all {RandomIdentifiers.valid(it.deviceId) && it.state==GroupRecipientState.PENDING} &&
+            value.mediaBodyDigest?.let {digest ->
+                val payload=GroupMediaCodecV1.encode(media)
+                try {MessageDigest.isEqual(digest,DeviceAuth.digest(payload))} finally {payload.fill(0)}
+            }!=false)
         require(records.keys("app/group-text/message/").size<4096 &&
             records.read(messageKey(value.groupId,value.logicalId))==null &&
             !isModerated(value.groupId,value.logicalId))
@@ -574,14 +583,45 @@ class GroupChatStore(private val records:EndpointRecords) {
         })))
         records.write("app/group-text/outbox/$outboxId",key.encodeToByteArray())
     }
+    /** True only when every frozen recipient has exact Signal ciphertext in the protected outbox,
+     * or the server has already accepted that recipient's immutable envelope. */
+    fun markMediaDeliveryPreparedIfReady(groupId:String,id:String):Boolean=records.transaction {
+        val key=messageKey(groupId,id)
+        val old=decodeMessage(key)
+        if(!old.outgoing || old.mediaKind==null || old.mediaBodyDigest?.size!=32)
+            return@transaction false
+        val binding=binding(groupId,id) ?: return@transaction false
+        val ready=old.recipients.isNotEmpty() && old.recipients.all {recipient ->
+            if(recipient.state==GroupRecipientState.SENT) true
+            else if(recipient.state!=GroupRecipientState.QUEUED || recipient.outboxId==null) false
+            else records.read("outbox/${recipient.outboxId}")?.let {
+                val entry=NetworkCodec.decode<OutboxEntry>(it)
+                val proof=entry.groupMediaBinding
+                val envelope=runCatching {EnvelopeCodec.decode(entry.ciphertext)}.getOrNull()
+                entry.state in setOf(OutboxState.CIPHERTEXT_READY,OutboxState.UPLOAD_PENDING,
+                    OutboxState.SERVER_ACCEPTED) && entry.submissionId==recipient.outboxId &&
+                    entry.deviceId==recipient.deviceId && envelope?.recipientDeviceId==recipient.deviceId &&
+                    envelope.envelopeId==entry.envelopeId &&
+                    proof!=null && proof.groupId==groupId && proof.logicalId==id &&
+                    proof.recipientDeviceId==recipient.deviceId &&
+                    MessageDigest.isEqual(proof.governanceHeadDigest,binding.headDigest) &&
+                    MessageDigest.isEqual(proof.mediaBodyDigest,old.mediaBodyDigest)
+            }==true
+        }
+        if(ready && !old.mediaDeliveryPrepared)
+            records.write(key,NetworkCodec.encode(old.copy(mediaDeliveryPrepared=true)))
+        ready
+    }
     fun markResult(outboxId:String,success:Boolean) = records.transaction {
         require(RandomIdentifiers.valid(outboxId))
         val link="app/group-text/outbox/$outboxId"
         val key=records.read(link)?.decodeToString() ?: return@transaction
         val old=decodeMessage(key)
-        records.write(key,NetworkCodec.encode(old.copy(recipients=old.recipients.map {
+        val next=old.recipients.map {
             if(it.outboxId==outboxId) it.copy(state=if(success) GroupRecipientState.SENT else GroupRecipientState.UNAVAILABLE) else it
-        })))
+        }
+        records.write(key,NetworkCodec.encode(old.copy(recipients=next,
+            mediaDeliveryPrepared=old.mediaDeliveryPrepared && success)))
         records.remove(link)
     }
     fun outboxIds():Set<String> = records.transaction {
@@ -590,10 +630,13 @@ class GroupChatStore(private val records:EndpointRecords) {
     fun markUnavailable(groupId:String,id:String,device:String)=records.transaction {
         val key=messageKey(groupId,id);val old=decodeMessage(key)
         require(old.outgoing)
-        records.write(key,NetworkCodec.encode(old.copy(recipients=old.recipients.map {
+        val next=old.recipients.map {
             if(it.deviceId==device && it.state==GroupRecipientState.PENDING)
                 it.copy(state=GroupRecipientState.UNAVAILABLE) else it
-        })))
+        }
+        records.write(key,NetworkCodec.encode(old.copy(recipients=next,
+            mediaDeliveryPrepared=old.mediaDeliveryPrepared && next.none {
+                it.state==GroupRecipientState.UNAVAILABLE})))
     }
     fun markRemoved(groupId:String,device:String) = records.transaction {
         require(GroupIds.valid(groupId) && RandomIdentifiers.valid(device))
@@ -612,7 +655,9 @@ class GroupChatStore(private val records:EndpointRecords) {
                     recipient.copy(state=if(accepted) GroupRecipientState.SENT else GroupRecipientState.UNAVAILABLE,outboxId=null)
                 } else recipient
             }
-            records.write(key,NetworkCodec.encode(old.copy(recipients=next)))
+            records.write(key,NetworkCodec.encode(old.copy(recipients=next,
+                mediaDeliveryPrepared=old.mediaDeliveryPrepared && next.none {
+                    it.state==GroupRecipientState.UNAVAILABLE})))
         }
     }
     fun cancelStale(groupId:String,currentEpoch:Long)=records.transaction {
@@ -632,7 +677,9 @@ class GroupChatStore(private val records:EndpointRecords) {
                     recipient.copy(state=if(accepted) GroupRecipientState.SENT else GroupRecipientState.UNAVAILABLE,outboxId=null)
                 } else recipient
             }
-            records.write(key,NetworkCodec.encode(old.copy(recipients=next)))
+            records.write(key,NetworkCodec.encode(old.copy(recipients=next,
+                mediaDeliveryPrepared=old.mediaDeliveryPrepared && next.none {
+                    it.state==GroupRecipientState.UNAVAILABLE})))
         }
     }
     /** Submitted ciphertext is recorded as sent; every unsent old-head slot is retired. */
@@ -659,7 +706,9 @@ class GroupChatStore(private val records:EndpointRecords) {
                         GroupRecipientState.UNAVAILABLE,outboxId=null)
                 }
             }
-            records.write(key,NetworkCodec.encode(old.copy(recipients=next)))
+            records.write(key,NetworkCodec.encode(old.copy(recipients=next,
+                mediaDeliveryPrepared=old.mediaDeliveryPrepared && next.none {
+                    it.state==GroupRecipientState.UNAVAILABLE})))
         }
     }
 }

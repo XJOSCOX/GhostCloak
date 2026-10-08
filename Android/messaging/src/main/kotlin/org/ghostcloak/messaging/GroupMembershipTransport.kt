@@ -111,6 +111,9 @@ class GroupMembershipTransport(
     private fun allDisappearingPeers(state:GroupState,localId:String)=state.members.all {
         it.memberId==localId || repository.groupDisappearingPeer(it.deviceId)
     }
+    private fun allOrderingPeers(state:GroupState,localId:String)=state.members.all {
+        it.memberId==localId || repository.groupOrderingPeer(it.deviceId)
+    }
     /** Only the coordinator retires a fully acknowledged prior entry before the next mutation. */
     private fun retireCompletedGovernanceEntry(groupId:String,state:GroupState,localId:String) {
         if(localId!=state.coordinatorId) return
@@ -153,9 +156,14 @@ class GroupMembershipTransport(
                 !repository.governanceTextV2Peer(it.deviceId) ||
                 !repository.groupModerationPeer(it.deviceId) ||
                 !repository.groupMessageControlsPeer(it.deviceId) ||
-                !repository.groupProfilePeer(it.deviceId))})
+                !repository.groupProfilePeer(it.deviceId) ||
+                !repository.groupOrderingPeer(it.deviceId))})
             sendGovernanceOnce(state.groupId,
-                if(repository.governanceV1Peer(member.deviceId)) "text-v2-capability" else "capability",
+                when {
+                    !repository.governanceV1Peer(member.deviceId) -> "capability"
+                    !repository.groupOrderingPeer(member.deviceId) -> "ordering-capability"
+                    else -> "text-v2-capability"
+                },
                 member.deviceId,
                 GroupControl(kind=GroupControlKind.RESYNC_REQUEST,
                 groupId=state.groupId,fromRevision=state.revision,
@@ -2698,7 +2706,25 @@ class GroupMembershipTransport(
                     ?: throw ApiFailure(409,"group_governance_unavailable")
                 if(timer.seconds>0 && !allDisappearingPeers(current,localId))
                     throw ApiFailure(409,"group_timer_capability_pending")
-                val timed=if(timer.seconds==0) message else {
+                val timed=if(allOrderingPeers(current,localId)) {
+                    val senderSequence=chats.allocateSenderSequence(groupId,localId,
+                        head.activationDigest,head.sequence,head.headDigest)
+                    val wire=GroupTextV5(groupId=groupId,epoch=current.epoch,
+                        senderMemberId=localId,logicalId=logicalId,
+                        governanceActivationDigest=head.activationDigest,
+                        governanceSequence=head.sequence,governanceHeadDigest=head.headDigest,
+                        policyDigest=binding.policyDigest,
+                        disappearingPolicyDigest=GroupDisappearingRulesV1.digest(
+                            head.activationDigest,timer),disappearingSeconds=timer.seconds,
+                        senderSequence=senderSequence,text=text,replyToLogicalId=replyToLogicalId)
+                    val body=GroupTextV5Codec.encode(wire)
+                    try {message.copy(disappearingSeconds=timer.seconds,
+                        mediaBodyDigest=DeviceAuth.digest(body),
+                        orderingActivationDigest=head.activationDigest,
+                        orderingGovernanceSequence=head.sequence,
+                        orderingHeadDigest=head.headDigest,senderSequence=senderSequence)}
+                    finally {body.fill(0)}
+                } else if(timer.seconds==0) message else {
                     val wire=GroupTextV4(groupId=groupId,epoch=current.epoch,
                         senderMemberId=localId,logicalId=logicalId,
                         governanceActivationDigest=head.activationDigest,
@@ -2753,14 +2779,32 @@ class GroupMembershipTransport(
                 disappearingPolicyDigest=GroupDisappearingRulesV1.digest(head.activationDigest,timer),
                 disappearingSeconds=timer.seconds,descriptor=descriptor,kind=descriptor.kind,
                 caption=caption)
-            val body=if(timed==null) GroupMediaCodecV1.encode(value)
-                else GroupMediaCodecV2.encode(timed)
+            val ordered=if(allOrderingPeers(current,localId)) {
+                val senderSequence=chats.allocateSenderSequence(groupId,localId,
+                    head.activationDigest,head.sequence,head.headDigest)
+                GroupMediaV3(groupId=groupId,epoch=current.epoch,senderMemberId=localId,
+                    logicalId=logicalId,governanceActivationDigest=head.activationDigest,
+                    governanceSequence=head.sequence,governanceHeadDigest=head.headDigest,
+                    policyDigest=value.policyDigest,
+                    disappearingPolicyDigest=GroupDisappearingRulesV1.digest(head.activationDigest,timer),
+                    disappearingSeconds=timer.seconds,senderSequence=senderSequence,
+                    descriptor=descriptor,kind=descriptor.kind,caption=caption)
+            } else null
+            val body=when {
+                ordered!=null -> GroupMediaCodecV3.encode(ordered)
+                timed!=null -> GroupMediaCodecV2.encode(timed)
+                else -> GroupMediaCodecV1.encode(value)
+            }
             val bodyDigest=try {DeviceAuth.digest(body)} finally {body.fill(0)}
             chats.createMedia(GroupChatMessage(groupId,logicalId,current.epoch,localId,true,"",
                 chats.nextOrder(),current.members.filter {it.memberId!=localId}.map {GroupRecipient(it.deviceId)},
                 mediaKind=descriptor.kind,mediaCaption=caption,mediaFilename=descriptor.filename,
                 mediaBytes=descriptor.plaintextLength,mediaDurationMillis=descriptor.durationMillis,
-                mediaBodyDigest=bodyDigest,disappearingSeconds=timer.seconds),value,timed)
+                mediaBodyDigest=bodyDigest,disappearingSeconds=timer.seconds,
+                orderingActivationDigest=ordered?.governanceActivationDigest,
+                orderingGovernanceSequence=ordered?.governanceSequence,
+                orderingHeadDigest=ordered?.governanceHeadDigest,
+                senderSequence=ordered?.senderSequence),value,timed,ordered)
             logicalId
         }
     }
@@ -3354,6 +3398,15 @@ class GroupMembershipTransport(
                         repository.groupDisappearingPeer(pending.senderDeviceId,true,
                             groupScoped=!repository.isActiveContact(pending.senderDeviceId))
                 }
+                if(pending.orderingAdvertised) {
+                    val current=state(pending.control.groupId)
+                    val peer=current?.members?.singleOrNull {it.deviceId==pending.senderDeviceId}
+                    if(repository.isActiveContact(pending.senderDeviceId) ||
+                        (current!=null && peer!=null &&
+                            authority.matchesCurrentGroupMember(current.groupId,peer)))
+                        repository.groupOrderingPeer(pending.senderDeviceId,true,
+                            groupScoped=!repository.isActiveContact(pending.senderDeviceId))
+                }
                 when(pending.control.kind) {
                     GroupControlKind.INVITE -> receiveInvite(pending.senderDeviceId,pending.control)
                     GroupControlKind.ACCEPT -> receiveAcceptance(pending.senderDeviceId,pending.control)
@@ -3634,7 +3687,8 @@ class GroupMembershipTransport(
     private enum class TimedAcceptance { WAIT, DISCARD, ACCEPT }
     private suspend fun timedAcceptance(groupId:String,epoch:Long,senderMemberId:String,
         senderDeviceId:String,activation:ByteArray,sequence:Long,headDigest:ByteArray,
-        policyDigest:ByteArray,timerDigest:ByteArray,seconds:Int):TimedAcceptance {
+        policyDigest:ByteArray,timerDigest:ByteArray,seconds:Int,
+        allowOff:Boolean=false):TimedAcceptance {
         val localId=localMember(groupId) ?: return TimedAcceptance.DISCARD
         val ledger=GroupLedger(records,GroupTrustedPeer {false},localId)
         val state=ledger.state(groupId) ?: return TimedAcceptance.DISCARD
@@ -3653,7 +3707,7 @@ class GroupMembershipTransport(
         }
         if(governanceJournal.marker(groupId)!=null) return TimedAcceptance.WAIT
         if(sequence!=head.sequence || !MessageDigest.isEqual(headDigest,head.headDigest) ||
-            epoch!=state.epoch || timer.seconds!=seconds || seconds==0 ||
+            epoch!=state.epoch || timer.seconds!=seconds || (seconds==0 && !allowOff) ||
             !MessageDigest.isEqual(policyDigest,
                 GroupGovernancePolicyRulesV1.digest(head.activationDigest,policy)) ||
             !MessageDigest.isEqual(timerDigest,GroupDisappearingRulesV1.digest(
@@ -3666,6 +3720,76 @@ class GroupMembershipTransport(
         try {trusted(listOf(sender))} catch(e:CancellationException) {throw e}
         catch(_:ApiFailure) {return TimedAcceptance.WAIT}
         return TimedAcceptance.ACCEPT
+    }
+    private suspend fun processPendingOrderedTexts() {
+        for((envelopeId,pending) in chats.pendingV5()) {
+            val value=pending.text
+            when(timedAcceptance(value.groupId,value.epoch,value.senderMemberId,
+                pending.senderDeviceId,value.governanceActivationDigest,value.governanceSequence,
+                value.governanceHeadDigest,value.policyDigest,value.disappearingPolicyDigest,
+                value.disappearingSeconds,allowOff=true)) {
+                TimedAcceptance.WAIT -> continue
+                TimedAcceptance.DISCARD -> {chats.discardPendingV5(envelopeId);continue}
+                TimedAcceptance.ACCEPT -> Unit
+            }
+            records.transaction {
+                val local=localMember(value.groupId) ?: return@transaction
+                val ledger=GroupLedger(records,GroupTrustedPeer {false},local)
+                val state=ledger.state(value.groupId) ?: return@transaction
+                val head=ledger.governanceHead(value.groupId) ?: return@transaction
+                val policy=ledger.governancePolicy(value.groupId) ?: return@transaction
+                val timer=ledger.governanceTimer(value.groupId) ?: return@transaction
+                if(ledger.status(value.groupId)==GroupLocalStatus.ACTIVE &&
+                    governanceJournal.marker(value.groupId)==null &&
+                    value.governanceSequence==head.sequence && value.epoch==state.epoch &&
+                    MessageDigest.isEqual(value.governanceActivationDigest,head.activationDigest) &&
+                    MessageDigest.isEqual(value.governanceHeadDigest,head.headDigest) &&
+                    MessageDigest.isEqual(value.policyDigest,
+                        GroupGovernancePolicyRulesV1.digest(head.activationDigest,policy)) &&
+                    MessageDigest.isEqual(value.disappearingPolicyDigest,
+                        GroupDisappearingRulesV1.digest(head.activationDigest,timer)) &&
+                    value.disappearingSeconds==timer.seconds &&
+                    state.members.singleOrNull {it.memberId==value.senderMemberId}?.deviceId==
+                        pending.senderDeviceId && repository.isActiveContact(pending.senderDeviceId) &&
+                    GroupGovernancePolicyRulesV1.canSend(policy,state,value.senderMemberId))
+                    chats.acceptV5(envelopeId,pending)
+            }
+        }
+    }
+    private suspend fun processPendingOrderedMedia() {
+        for((envelopeId,pending) in chats.pendingMediaV3()) {
+            val value=pending.media
+            when(timedAcceptance(value.groupId,value.epoch,value.senderMemberId,
+                pending.senderDeviceId,value.governanceActivationDigest,value.governanceSequence,
+                value.governanceHeadDigest,value.policyDigest,value.disappearingPolicyDigest,
+                value.disappearingSeconds,allowOff=true)) {
+                TimedAcceptance.WAIT -> continue
+                TimedAcceptance.DISCARD -> {chats.discardPendingMediaV3(envelopeId);continue}
+                TimedAcceptance.ACCEPT -> Unit
+            }
+            records.transaction {
+                val local=localMember(value.groupId) ?: return@transaction
+                val ledger=GroupLedger(records,GroupTrustedPeer {false},local)
+                val state=ledger.state(value.groupId) ?: return@transaction
+                val head=ledger.governanceHead(value.groupId) ?: return@transaction
+                val policy=ledger.governancePolicy(value.groupId) ?: return@transaction
+                val timer=ledger.governanceTimer(value.groupId) ?: return@transaction
+                if(ledger.status(value.groupId)==GroupLocalStatus.ACTIVE &&
+                    governanceJournal.marker(value.groupId)==null &&
+                    value.governanceSequence==head.sequence && value.epoch==state.epoch &&
+                    MessageDigest.isEqual(value.governanceActivationDigest,head.activationDigest) &&
+                    MessageDigest.isEqual(value.governanceHeadDigest,head.headDigest) &&
+                    MessageDigest.isEqual(value.policyDigest,
+                        GroupGovernancePolicyRulesV1.digest(head.activationDigest,policy)) &&
+                    MessageDigest.isEqual(value.disappearingPolicyDigest,
+                        GroupDisappearingRulesV1.digest(head.activationDigest,timer)) &&
+                    value.disappearingSeconds==timer.seconds &&
+                    state.members.singleOrNull {it.memberId==value.senderMemberId}?.deviceId==
+                        pending.senderDeviceId && repository.isActiveContact(pending.senderDeviceId) &&
+                    GroupGovernancePolicyRulesV1.canSend(policy,state,value.senderMemberId))
+                    chats.acceptMediaV3(envelopeId,pending)
+            }
+        }
     }
     private suspend fun processPendingTimedTexts() {
         for((envelopeId,pending) in chats.pendingV4()) {
@@ -3736,6 +3860,7 @@ class GroupMembershipTransport(
         }
     }
     private suspend fun processPendingTexts() {
+        processPendingOrderedTexts()
         processPendingTimedTexts()
         val governedPending=chats.pendingV2().map {Triple(it.first,it.second,null as GroupTextV3?)} +
             chats.pendingV3().map {pair ->
@@ -3842,6 +3967,7 @@ class GroupMembershipTransport(
         }
     }
     private suspend fun processPendingMedia() {
+        processPendingOrderedMedia()
         processPendingTimedMedia()
         for((envelopeId,pending) in chats.pendingMedia()) {
             val value=pending.media
@@ -3993,7 +4119,8 @@ class GroupMembershipTransport(
                 if(message.replyToLogicalId!=null && (binding==null ||
                     !allMessageControlPeers(current,localId))) continue
                 val durableMedia=message.mediaKind!=null && message.mediaBodyDigest!=null
-                val durableText=message.mediaKind==null && message.disappearingSeconds>0 &&
+                val durableText=message.mediaKind==null &&
+                    (message.disappearingSeconds>0 || message.senderSequence!=null) &&
                     message.mediaBodyDigest!=null
                 if(durableMedia || durableText) {
                     val mediaBinding=checkNotNull(binding)
@@ -4038,14 +4165,34 @@ class GroupMembershipTransport(
                                         disappearingSeconds=timer.seconds,descriptor=media.descriptor,
                                         kind=media.kind,caption=media.caption)
                                 }
-                                val body=if(timed==null) GroupMediaCodecV1.encode(media)
-                                    else GroupMediaCodecV2.encode(timed)
+                                val ordered=message.senderSequence?.let {sequence ->
+                                    val timer=ledger.governanceTimer(groupId) ?: continue
+                                    if(timer.seconds!=message.disappearingSeconds) continue
+                                    GroupMediaV3(groupId=media.groupId,epoch=media.epoch,
+                                        senderMemberId=media.senderMemberId,logicalId=media.logicalId,
+                                        governanceActivationDigest=media.governanceActivationDigest,
+                                        governanceSequence=media.governanceSequence,
+                                        governanceHeadDigest=media.governanceHeadDigest,
+                                        policyDigest=media.policyDigest,
+                                        disappearingPolicyDigest=GroupDisappearingRulesV1.digest(
+                                            media.governanceActivationDigest,timer),
+                                        disappearingSeconds=timer.seconds,senderSequence=sequence,
+                                        descriptor=media.descriptor,kind=media.kind,caption=media.caption)
+                                }
+                                val body=when {
+                                    ordered!=null -> GroupMediaCodecV3.encode(ordered)
+                                    timed!=null -> GroupMediaCodecV2.encode(timed)
+                                    else -> GroupMediaCodecV1.encode(media)
+                                }
                                 try {
                                     if(!MessageDigest.isEqual(DeviceAuth.digest(body),message.mediaBodyDigest))
                                         throw ApiFailure(409,"group_media_payload_changed")
                                 } finally {body.fill(0)}
-                                if(timed==null) ConversationPayload.encodeGroupMedia(media)
-                                    else ConversationPayload.encodeGroupMediaV2(timed)
+                                when {
+                                    ordered!=null -> ConversationPayload.encodeGroupMediaV3(ordered)
+                                    timed!=null -> ConversationPayload.encodeGroupMediaV2(timed)
+                                    else -> ConversationPayload.encodeGroupMedia(media)
+                                }
                             } else {
                                 val timer=ledger.governanceTimer(groupId) ?: continue
                                 if(timer.seconds!=message.disappearingSeconds) continue
@@ -4059,12 +4206,25 @@ class GroupMembershipTransport(
                                         mediaBinding.activationDigest,timer),
                                     disappearingSeconds=timer.seconds,text=message.text,
                                     replyToLogicalId=message.replyToLogicalId)
-                                val body=GroupTextV4Codec.encode(value)
+                                val ordered=message.senderSequence?.let {sequence ->
+                                    GroupTextV5(groupId=groupId,epoch=message.epoch,
+                                        senderMemberId=localId,logicalId=message.logicalId,
+                                        governanceActivationDigest=mediaBinding.activationDigest,
+                                        governanceSequence=mediaBinding.sequence,
+                                        governanceHeadDigest=mediaBinding.headDigest,
+                                        policyDigest=mediaBinding.policyDigest,
+                                        disappearingPolicyDigest=value.disappearingPolicyDigest,
+                                        disappearingSeconds=timer.seconds,senderSequence=sequence,
+                                        text=message.text,replyToLogicalId=message.replyToLogicalId)
+                                }
+                                val body=if(ordered==null) GroupTextV4Codec.encode(value)
+                                    else GroupTextV5Codec.encode(ordered)
                                 try {
                                     if(!MessageDigest.isEqual(DeviceAuth.digest(body),message.mediaBodyDigest))
                                         throw ApiFailure(409,"group_text_payload_changed")
                                 } finally {body.fill(0)}
-                                ConversationPayload.encodeGroupTextV4(value)
+                                if(ordered==null) ConversationPayload.encodeGroupTextV4(value)
+                                    else ConversationPayload.encodeGroupTextV5(ordered)
                             }
                             try {
                                 val digest=DeviceAuth.digest(payload)

@@ -340,7 +340,7 @@ internal class GroupGovernanceStore(private val records:EndpointRecords) {
         records.write(path,outboxId.encodeToByteArray())
     }
     private fun sentKey(id:String,phase:String,recipient:String):String {
-        require(phase in setOf("capability","text-v2-capability","owner-request","owner-response","proposal","ack","commit",
+        require(phase in setOf("capability","text-v2-capability","ordering-capability","owner-request","owner-response","proposal","ack","commit",
             "installed","ready") ||
             (phase.startsWith("checkpoint-") && GroupIds.valid(phase.removePrefix("checkpoint-"))) ||
             (phase.startsWith("entry-") && phase.removePrefix("entry-").toLongOrNull()!=null) ||

@@ -425,11 +425,20 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
             records.write("app/group-disappearing-v1-peer/$id",byteArrayOf(1))
         else records.remove("app/group-disappearing-v1-peer/$id")
     }
+    fun groupOrderingPeer(id:String):Boolean=records.transaction {
+        records.read("app/group-ordering-v1-peer/$id")?.contentEquals(byteArrayOf(1))==true
+    }
+    fun groupOrderingPeer(id:String,supported:Boolean,groupScoped:Boolean=false)=records.transaction {
+        if(supported && (isActiveContact(id) || groupScoped))
+            records.write("app/group-ordering-v1-peer/$id",byteArrayOf(1))
+        else records.remove("app/group-ordering-v1-peer/$id")
+    }
     fun queueGroupControl(senderId:String,envelopeId:String,control:GroupControl,
         baselineV1Advertised:Boolean=false,governanceV1Advertised:Boolean=false,
         governanceTextV2Advertised:Boolean=false,moderationAdvertised:Boolean=false,
         messageControlsAdvertised:Boolean=false,mediaAdvertised:Boolean=false,
-        profileAdvertised:Boolean=false,disappearingAdvertised:Boolean=false)=records.transaction {
+        profileAdvertised:Boolean=false,disappearingAdvertised:Boolean=false,
+        orderingAdvertised:Boolean=false)=records.transaction {
         require(isActiveContact(senderId) && RandomIdentifiers.valid(envelopeId))
         val keys=records.keys("app/group-control/pending/")
         require(keys.size<128)
@@ -441,7 +450,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 moderationAdvertised=moderationAdvertised,
                 messageControlsAdvertised=messageControlsAdvertised,
                 mediaAdvertised=mediaAdvertised,profileAdvertised=profileAdvertised,
-                disappearingAdvertised=disappearingAdvertised)))
+                disappearingAdvertised=disappearingAdvertised,
+                orderingAdvertised=orderingAdvertised)))
     }
     /** Called only after Signal authentication, inside its decrypt-and-commit transaction. */
     fun queueGroupScopedSystem(senderId:String,envelopeId:String,control:GroupControl,
@@ -449,7 +459,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         governanceV1Advertised:Boolean=false,
         governanceTextV2Advertised:Boolean=false,moderationAdvertised:Boolean=false,
         messageControlsAdvertised:Boolean=false,mediaAdvertised:Boolean=false,
-        profileAdvertised:Boolean=false,disappearingAdvertised:Boolean=false)=records.transaction {
+        profileAdvertised:Boolean=false,disappearingAdvertised:Boolean=false,
+        orderingAdvertised:Boolean=false)=records.transaction {
         if(isActiveContact(senderId) || !RandomIdentifiers.valid(envelopeId) ||
             !control.kind.blockSafeMaintenance() ||
             GroupCurrentAuthority(records).current(control.groupId,senderId,signalDigest)==null)
@@ -464,7 +475,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 moderationAdvertised=moderationAdvertised,
                 messageControlsAdvertised=messageControlsAdvertised,
                 mediaAdvertised=mediaAdvertised,profileAdvertised=profileAdvertised,
-                disappearingAdvertised=disappearingAdvertised)))
+                disappearingAdvertised=disappearingAdvertised,
+                orderingAdvertised=orderingAdvertised)))
         true
     }
     fun pendingGroupControls():List<Pair<String,PendingGroupControl>> = records.transaction {
@@ -498,6 +510,10 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         require(isActiveContact(senderId))
         GroupChatStore(records,clock).queueV4(senderId,envelopeId,value)
     }
+    fun queueGroupTextV5(senderId:String,envelopeId:String,value:GroupTextV5)=records.transaction {
+        require(isActiveContact(senderId))
+        GroupChatStore(records,clock).queueV5(senderId,envelopeId,value)
+    }
     fun queueGroupMedia(senderId:String,envelopeId:String,value:GroupMediaV1)=records.transaction {
         require(isActiveContact(senderId))
         GroupChatStore(records).queueMedia(senderId,envelopeId,value)
@@ -505,6 +521,10 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun queueGroupMediaV2(senderId:String,envelopeId:String,value:GroupMediaV2)=records.transaction {
         require(isActiveContact(senderId))
         GroupChatStore(records,clock).queueMediaV2(senderId,envelopeId,value)
+    }
+    fun queueGroupMediaV3(senderId:String,envelopeId:String,value:GroupMediaV3)=records.transaction {
+        require(isActiveContact(senderId))
+        GroupChatStore(records,clock).queueMediaV3(senderId,envelopeId,value)
     }
     fun queueGroupMessageControl(senderId:String,envelopeId:String,value:GroupMessageControlV1)=records.transaction {
         require(isActiveContact(senderId))

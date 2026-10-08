@@ -12,6 +12,7 @@ import org.ghostcloak.attachments.AttachmentKind
 import org.ghostcloak.protocol.DeviceAuth
 import org.ghostcloak.protocol.EnvelopeCodec
 import java.security.MessageDigest
+import java.util.PriorityQueue
 
 /** This content is framed inside a pairwise authenticated Signal message, never sent as routing metadata. */
 @Serializable data class GroupText(val version:Int=1,val groupId:String,val epoch:Long,
@@ -63,6 +64,10 @@ data class GroupReactionBadge(val emoji:String,val count:Int,val mine:Boolean)
     @EncodeDefault(EncodeDefault.Mode.NEVER) val disappearingSeconds:Int=0,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val expiry:ExpiryDeadline?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val expiryState:GroupExpiryState=GroupExpiryState.ACTIVE,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val orderingActivationDigest:ByteArray?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val orderingGovernanceSequence:Long?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val orderingHeadDigest:ByteArray?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val senderSequence:Long?=null,
     @kotlinx.serialization.Transient val reactions:List<GroupReactionBadge> = emptyList()) {
     override fun toString()="GroupChatMessage(redacted)"
 }
@@ -70,8 +75,71 @@ data class GroupReactionBadge(val emoji:String,val count:Int,val mine:Boolean)
     override fun toString()="PendingGroupText(redacted)"
 }
 
+/** K-way merge: each ordered sender/head stream obeys its sequence, while the
+ * earliest locally accepted available stream head wins across unrelated streams.
+ * Legacy rows each form a one-item stream and keep their previous relative order. */
+internal fun mergePresentation(rows:List<GroupChatMessage>):List<GroupChatMessage> {
+    if(rows.size<2) return rows
+    val streams=rows.groupBy {row ->
+        val activation=row.orderingActivationDigest
+        val head=row.orderingHeadDigest
+        val sequence=row.senderSequence
+        if(activation==null || head==null || sequence==null)
+            "legacy:${row.logicalId}"
+        else "ordered:${activation.contentToString()}:${row.orderingGovernanceSequence}:"+
+            "${head.contentToString()}:${row.senderMemberId}"
+    }.values.map {stream ->
+        if(stream.first().senderSequence==null) stream else stream.sortedWith(
+            compareBy<GroupChatMessage> {it.senderSequence}.thenBy {it.logicalId})
+    }
+    data class Cursor(val stream:Int,val offset:Int)
+    val queue=PriorityQueue<Cursor>(compareBy<Cursor> {streams[it.stream][it.offset].localOrder}
+        .thenBy {streams[it.stream][it.offset].logicalId})
+    streams.indices.forEach {queue.add(Cursor(it,0))}
+    return buildList(rows.size) {
+        while(queue.isNotEmpty()) {
+            val cursor=queue.remove()
+            add(streams[cursor.stream][cursor.offset])
+            if(cursor.offset+1<streams[cursor.stream].size)
+                queue.add(Cursor(cursor.stream,cursor.offset+1))
+        }
+    }
+}
+
 /** All rows live in the existing SQLCipher endpoint store and are destroyed with it. */
 class GroupChatStore(private val records:EndpointRecords,private val clock:ExpiryClock=ExpiryClock()) {
+    private fun hex(bytes:ByteArray)=bytes.joinToString("") {"%02x".format(it)}
+    private fun counterKey(groupId:String,memberId:String)="app/group-text/sender-counter/$groupId/$memberId"
+    /** Called inside the same endpoint transaction that creates the logical message. */
+    internal fun allocateSenderSequence(groupId:String,memberId:String,activation:ByteArray,
+        headSequence:Long,headDigest:ByteArray):Long=records.transaction {
+        require(GroupIds.valid(groupId) && GroupIds.valid(memberId) &&
+            activation.size==32 && headDigest.size==32 && headSequence>=0)
+        val namespace="${hex(activation)}:$headSequence:${hex(headDigest)}"
+        val key=counterKey(groupId,memberId)
+        val old=records.read(key)?.decodeToString()?.split(':')
+        val previous=if(old?.size==4 && old.take(3).joinToString(":")==namespace)
+            old[3].toLongOrNull() ?: throw EndpointStorageFailure() else 0L
+        require(previous in 0..4095)
+        val next=previous+1
+        records.write(key,"$namespace:$next".encodeToByteArray())
+        next
+    }
+    private fun orderedIndexKey(groupId:String,activation:ByteArray,headDigest:ByteArray,
+        sender:String,sequence:Long):String {
+        require(GroupIds.valid(groupId) && GroupIds.valid(sender) &&
+            activation.size==32 && headDigest.size==32 && sequence in 1..4096)
+        return "app/group-text/ordered-index/$groupId/${hex(activation)}/${hex(headDigest)}/$sender/$sequence"
+    }
+    private fun claimSequence(groupId:String,activation:ByteArray,headDigest:ByteArray,
+        sender:String,sequence:Long,logicalId:String):Boolean {
+        val key=orderedIndexKey(groupId,activation,headDigest,sender,sequence)
+        val existing=records.read(key)?.decodeToString()
+        if(existing!=null) return false // replay or conflicting logical ID; neither is displayed twice
+        require(records.keys("app/group-text/ordered-index/").size<4096)
+        records.write(key,logicalId.encodeToByteArray())
+        return true
+    }
     /** Expiry retains the replay row and transport artifacts, but removes all active content. */
     fun expire(groupId:String?=null):Int=records.transaction {
         if(groupId!=null) require(GroupIds.valid(groupId))
@@ -342,12 +410,12 @@ class GroupChatStore(private val records:EndpointRecords,private val clock:Expir
     fun messages(groupId:String,localMemberId:String?=null):List<GroupChatMessage> = records.transaction {
         require(GroupIds.valid(groupId))
         expire(groupId)
-        records.keys("app/group-text/message/$groupId/").map(::decodeMessage).map {message ->
+        val rows=records.keys("app/group-text/message/$groupId/").map(::decodeMessage).map {message ->
             if(message.moderationState==GroupModerationState.NONE) message.copy(
                 reactions=reactionBadges(groupId,message.logicalId,localMemberId))
             else message
         }
-            .sortedWith(compareBy<GroupChatMessage> {it.localOrder}.thenBy {it.logicalId})
+        mergePresentation(rows)
     }
     fun message(groupId:String,id:String):GroupChatMessage?=records.transaction {
         expire(groupId)
@@ -370,16 +438,20 @@ class GroupChatStore(private val records:EndpointRecords,private val clock:Expir
         records.write(bindingKey(value.groupId,value.logicalId),NetworkCodec.encode(binding))
     }
     internal fun createMedia(value:GroupChatMessage,media:GroupMediaV1,
-        mediaV2:GroupMediaV2?=null)=records.transaction {
+        mediaV2:GroupMediaV2?=null,mediaV3:GroupMediaV3?=null)=records.transaction {
         GroupMediaCodecV1.validate(media)
         if(mediaV2!=null) GroupMediaCodecV2.validate(mediaV2)
+        if(mediaV3!=null) GroupMediaCodecV3.validate(mediaV3)
         require(value.outgoing && value.groupId==media.groupId && value.logicalId==media.logicalId &&
             value.senderMemberId==media.senderMemberId && value.mediaKind==media.kind &&
             value.recipients.size in 1..4 && value.recipients.map {it.deviceId}.distinct().size==value.recipients.size &&
             value.recipients.all {RandomIdentifiers.valid(it.deviceId) && it.state==GroupRecipientState.PENDING} &&
             value.mediaBodyDigest?.let {digest ->
-                val payload=if(mediaV2==null) GroupMediaCodecV1.encode(media)
-                    else GroupMediaCodecV2.encode(mediaV2)
+                val payload=when {
+                    mediaV3!=null -> GroupMediaCodecV3.encode(mediaV3)
+                    mediaV2!=null -> GroupMediaCodecV2.encode(mediaV2)
+                    else -> GroupMediaCodecV1.encode(media)
+                }
                 try {MessageDigest.isEqual(digest,DeviceAuth.digest(payload))} finally {payload.fill(0)}
             }!=false)
         require(records.keys("app/group-text/message/").size<4096 &&
@@ -416,6 +488,67 @@ class GroupChatStore(private val records:EndpointRecords,private val clock:Expir
             records.keys("app/group-text/pending-media-v1/").size+
             records.keys("app/group-text/pending-media-v2/").size<128)
         records.write(pendingMediaV2Key(envelopeId),NetworkCodec.encode(PendingGroupMediaV2(sender,value)))
+    }
+    private fun pendingMediaV3Key(envelopeId:String):String {
+        require(RandomIdentifiers.valid(envelopeId))
+        return "app/group-text/pending-media-v3/$envelopeId"
+    }
+    fun queueMediaV3(sender:String,envelopeId:String,value:GroupMediaV3)=records.transaction {
+        require(RandomIdentifiers.valid(sender));GroupMediaCodecV3.validate(value)
+        if(isModerated(value.groupId,value.logicalId) ||
+            isSenderDeleted(value.groupId,value.logicalId)) return@transaction
+        require(records.keys("app/group-text/pending-media-v3/").size<64 &&
+            records.keys("app/group-text/pending-media-v3/").size+
+            records.keys("app/group-text/pending-media-v2/").size+
+            records.keys("app/group-text/pending-media-v1/").size+
+            records.keys("app/group-text/pending-v5/").size+
+            records.keys("app/group-text/pending-v4/").size+
+            records.keys("app/group-text/pending-v3/").size+
+            records.keys("app/group-text/pending-v2/").size+
+            records.keys("app/group-text/pending/").size<128)
+        records.write(pendingMediaV3Key(envelopeId),NetworkCodec.encode(PendingGroupMediaV3(sender,value)))
+    }
+    internal fun pendingMediaV3():List<Pair<String,PendingGroupMediaV3>> = records.transaction {
+        records.keys("app/group-text/pending-media-v3/").sorted().take(16).map {key ->
+            key.substringAfterLast('/') to NetworkCodec.decode<PendingGroupMediaV3>(
+                records.read(key) ?: throw EndpointStorageFailure(),8192)
+        }
+    }
+    internal fun discardPendingMediaV3(envelopeId:String)=records.transaction {
+        records.remove(pendingMediaV3Key(envelopeId))
+    }
+    internal fun acceptMediaV3(envelopeId:String,pending:PendingGroupMediaV3):Boolean=records.transaction {
+        val value=pending.media
+        if(records.read(messageKey(value.groupId,value.logicalId))!=null ||
+            records.read(replayKey(value.groupId,value.senderMemberId,value.logicalId))!=null) {
+            records.remove(pendingMediaV3Key(envelopeId));return@transaction false
+        }
+        val index=orderedIndexKey(value.groupId,value.governanceActivationDigest,
+            value.governanceHeadDigest,value.senderMemberId,value.senderSequence)
+        val accepted=if(claimSequence(value.groupId,value.governanceActivationDigest,
+            value.governanceHeadDigest,value.senderMemberId,value.senderSequence,value.logicalId)) {
+            val v1=GroupMediaV1(groupId=value.groupId,epoch=value.epoch,
+                senderMemberId=value.senderMemberId,logicalId=value.logicalId,
+                governanceActivationDigest=value.governanceActivationDigest,
+                governanceSequence=value.governanceSequence,
+                governanceHeadDigest=value.governanceHeadDigest,policyDigest=value.policyDigest,
+                descriptor=value.descriptor,kind=value.kind,caption=value.caption)
+            acceptMedia(envelopeId,PendingGroupMediaV1(pending.senderDeviceId,v1)).also {ok ->
+                if(ok) {
+                    val key=messageKey(value.groupId,value.logicalId)
+                    records.write(key,NetworkCodec.encode(decodeMessage(key).copy(
+                        disappearingSeconds=value.disappearingSeconds,
+                        expiry=if(value.disappearingSeconds==0) null else
+                            ExpiryDeadline.start(value.disappearingSeconds,clock.now()),
+                        orderingActivationDigest=value.governanceActivationDigest,
+                        orderingGovernanceSequence=value.governanceSequence,
+                        orderingHeadDigest=value.governanceHeadDigest,
+                        senderSequence=value.senderSequence)))
+                } else records.remove(index)
+            }
+        } else false
+        records.remove(pendingMediaV3Key(envelopeId))
+        accepted
     }
     internal fun pendingMediaV2():List<Pair<String,PendingGroupMediaV2>> = records.transaction {
         records.keys("app/group-text/pending-media-v2/").sorted().take(16).map {key ->
@@ -574,6 +707,68 @@ class GroupChatStore(private val records:EndpointRecords,private val clock:Expir
             records.keys("app/group-text/pending-media-v1/").size+
             records.keys("app/group-text/pending-media-v2/").size<128)
         records.write(pendingV4Key(envelopeId),NetworkCodec.encode(PendingGroupTextV4(sender,value)))
+    }
+    private fun pendingV5Key(envelopeId:String):String {
+        require(RandomIdentifiers.valid(envelopeId))
+        return "app/group-text/pending-v5/$envelopeId"
+    }
+    fun queueV5(sender:String,envelopeId:String,value:GroupTextV5)=records.transaction {
+        require(RandomIdentifiers.valid(sender));GroupTextV5Codec.validate(value)
+        if(isModerated(value.groupId,value.logicalId) ||
+            isSenderDeleted(value.groupId,value.logicalId)) return@transaction
+        require(records.keys("app/group-text/pending-v5/").size<64 &&
+            records.keys("app/group-text/pending-media-v3/").size+
+            records.keys("app/group-text/pending-media-v2/").size+
+            records.keys("app/group-text/pending-media-v1/").size+
+            records.keys("app/group-text/pending-v5/").size+
+            records.keys("app/group-text/pending-v4/").size+
+            records.keys("app/group-text/pending-v3/").size+
+            records.keys("app/group-text/pending-v2/").size+
+            records.keys("app/group-text/pending/").size<128)
+        records.write(pendingV5Key(envelopeId),NetworkCodec.encode(PendingGroupTextV5(sender,value)))
+    }
+    internal fun pendingV5():List<Pair<String,PendingGroupTextV5>> = records.transaction {
+        records.keys("app/group-text/pending-v5/").sorted().take(16).map {key ->
+            key.substringAfterLast('/') to NetworkCodec.decode<PendingGroupTextV5>(
+                records.read(key) ?: throw EndpointStorageFailure(),8192)
+        }
+    }
+    internal fun discardPendingV5(envelopeId:String)=records.transaction {
+        records.remove(pendingV5Key(envelopeId))
+    }
+    internal fun acceptV5(envelopeId:String,pending:PendingGroupTextV5):Boolean=records.transaction {
+        val value=pending.text
+        if(records.read(messageKey(value.groupId,value.logicalId))!=null ||
+            records.read(replayKey(value.groupId,value.senderMemberId,value.logicalId))!=null) {
+            records.remove(pendingV5Key(envelopeId));return@transaction false
+        }
+        val index=orderedIndexKey(value.groupId,value.governanceActivationDigest,
+            value.governanceHeadDigest,value.senderMemberId,value.senderSequence)
+        val accepted=if(claimSequence(value.groupId,value.governanceActivationDigest,
+            value.governanceHeadDigest,value.senderMemberId,value.senderSequence,value.logicalId)) {
+            val v2=GroupTextV2(groupId=value.groupId,epoch=value.epoch,
+                senderMemberId=value.senderMemberId,logicalId=value.logicalId,
+                governanceActivationDigest=value.governanceActivationDigest,
+                governanceSequence=value.governanceSequence,
+                governanceHeadDigest=value.governanceHeadDigest,policyDigest=value.policyDigest,
+                text=value.text)
+            acceptV2(envelopeId,PendingGroupTextV2(pending.senderDeviceId,v2)).also {ok ->
+                if(ok) {
+                    val key=messageKey(value.groupId,value.logicalId)
+                    records.write(key,NetworkCodec.encode(decodeMessage(key).copy(
+                        replyToLogicalId=value.replyToLogicalId,
+                        disappearingSeconds=value.disappearingSeconds,
+                        expiry=if(value.disappearingSeconds==0) null else
+                            ExpiryDeadline.start(value.disappearingSeconds,clock.now()),
+                        orderingActivationDigest=value.governanceActivationDigest,
+                        orderingGovernanceSequence=value.governanceSequence,
+                        orderingHeadDigest=value.governanceHeadDigest,
+                        senderSequence=value.senderSequence)))
+                } else records.remove(index)
+            }
+        } else false
+        records.remove(pendingV5Key(envelopeId))
+        accepted
     }
     internal fun pendingV4():List<Pair<String,PendingGroupTextV4>> = records.transaction {
         records.keys("app/group-text/pending-v4/").sorted().take(16).map {key ->

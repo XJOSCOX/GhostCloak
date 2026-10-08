@@ -123,7 +123,8 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val messageControlsAdvertised:Boolean=false,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val mediaAdvertised:Boolean=false,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val profileAdvertised:Boolean=false,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) val disappearingAdvertised:Boolean=false) {
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val disappearingAdvertised:Boolean=false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val orderingAdvertised:Boolean=false) {
     override fun toString() = "PendingGroupControl(redacted)"
 }
 

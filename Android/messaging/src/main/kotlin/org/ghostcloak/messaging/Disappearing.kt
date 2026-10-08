@@ -38,6 +38,7 @@ object ConversationPayload {
     private val groupMediaSupport = "GC/group-media-v1!".toByteArray(Charsets.US_ASCII)
     private val groupProfileSupport = "GC/group-profile-v1!".toByteArray(Charsets.US_ASCII)
     private val groupDisappearingSupport = "GC/group-disappearing-v1!".toByteArray(Charsets.US_ASCII)
+    private val groupOrderingSupport = "GC/group-ordering-v1!".toByteArray(Charsets.US_ASCII)
     val reactionEmoji = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
     private val profileMarker = "GhostCloak/profile/v1!".toByteArray(Charsets.US_ASCII)
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
@@ -59,12 +60,15 @@ object ConversationPayload {
         val supportsGroupMedia:Boolean=false,
         val supportsGroupProfile:Boolean=false,
         val supportsGroupDisappearing:Boolean=false,
+        val supportsGroupOrdering:Boolean=false,
         val groupControl:GroupControl?=null,
         val groupText:GroupText?=null,val groupTextV2:GroupTextV2?=null,
         val groupTextV3:GroupTextV3?=null,
         val groupMedia:GroupMediaV1?=null,
         val groupTextV4:GroupTextV4?=null,
         val groupMediaV2:GroupMediaV2?=null,
+        val groupTextV5:GroupTextV5?=null,
+        val groupMediaV3:GroupMediaV3?=null,
         val groupMessageControl:GroupMessageControlV1?=null) {
         override fun toString() = "Content(redacted)"
     }
@@ -154,7 +158,7 @@ object ConversationPayload {
         val markers=baselineV1Support.size+governanceV1Support.size+
             governanceTextV2Support.size+groupModerationSupport.size+
             groupMessageControlsSupport.size+groupMediaSupport.size+groupProfileSupport.size+
-            groupDisappearingSupport.size
+            groupDisappearingSupport.size+groupOrderingSupport.size
         val size=if(control.kind==GroupControlKind.GOVERNANCE_CAPABILITY_ECHO &&
             basic-16-body.size<markers) basic+256 else basic
         require(size<=16384)
@@ -180,19 +184,21 @@ object ConversationPayload {
                 groupMessageControlsSupport.copyInto(bytes,16+body.size+
                     baselineV1Support.size+governanceV1Support.size+
                     governanceTextV2Support.size+groupModerationSupport.size)
-            if(padding>=markers-groupProfileSupport.size-groupDisappearingSupport.size)
+            if(padding>=markers-groupProfileSupport.size-groupDisappearingSupport.size-groupOrderingSupport.size)
                 groupMediaSupport.copyInto(bytes,16+body.size+baselineV1Support.size+
                     governanceV1Support.size+governanceTextV2Support.size+
                     groupModerationSupport.size+groupMessageControlsSupport.size)
-            if(padding>=markers-groupDisappearingSupport.size)
+            if(padding>=markers-groupDisappearingSupport.size-groupOrderingSupport.size)
                 groupProfileSupport.copyInto(bytes,16+body.size+baselineV1Support.size+
                     governanceV1Support.size+governanceTextV2Support.size+
                     groupModerationSupport.size+groupMessageControlsSupport.size+groupMediaSupport.size)
-            if(padding>=markers)
+            if(padding>=markers-groupOrderingSupport.size)
                 groupDisappearingSupport.copyInto(bytes,16+body.size+baselineV1Support.size+
                     governanceV1Support.size+governanceTextV2Support.size+
                     groupModerationSupport.size+groupMessageControlsSupport.size+groupMediaSupport.size+
                     groupProfileSupport.size)
+            if(padding>=markers)
+                groupOrderingSupport.copyInto(bytes,16+body.size+markers-groupOrderingSupport.size)
         }
     }
     /** Type 14 is a group text inside a recipient-specific Signal envelope. */
@@ -320,6 +326,8 @@ object ConversationPayload {
     fun encodeGroupMedia(value:GroupMediaV1):ByteArray=encodeGroupBody(18,GroupMediaCodecV1.encode(value),8192)
     fun encodeGroupTextV4(value:GroupTextV4):ByteArray=encodeGroupBody(19,GroupTextV4Codec.encode(value),8192)
     fun encodeGroupMediaV2(value:GroupMediaV2):ByteArray=encodeGroupBody(20,GroupMediaCodecV2.encode(value),8192)
+    fun encodeGroupTextV5(value:GroupTextV5):ByteArray=encodeGroupBody(21,GroupTextV5Codec.encode(value),8192)
+    fun encodeGroupMediaV3(value:GroupMediaV3):ByteArray=encodeGroupBody(22,GroupMediaCodecV3.encode(value),8192)
     private fun encodeGroupBody(type:Int,body:ByteArray,maxSize:Int=4096):ByteArray=try {
         val size=((16+body.size+255)/256)*256
         require(size<=maxSize)
@@ -347,7 +355,7 @@ object ConversationPayload {
         if (!ByteArray(4).also { input.get(it) }.contentEquals(magic) || input.get().toInt() != 1)
             throw AppFailure(AppError.INVALID_TEXT)
         val type = input.get().toInt()
-        if (type !in 1..20 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
+        if (type !in 1..22 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
         val seconds = input.int; DisappearingTimer.from(seconds)
         val length = input.int
         if (length !in 0..MAX_TEXT || length > input.remaining() || (type in setOf(2,4) && length != 0) ||
@@ -454,11 +462,17 @@ object ConversationPayload {
                 disappearingOffset+groupDisappearingSupport.size<=bytes.size &&
                 bytes.copyOfRange(disappearingOffset,disappearingOffset+groupDisappearingSupport.size)
                     .contentEquals(groupDisappearingSupport)
+            val orderingOffset=disappearingOffset+groupDisappearingSupport.size
+            val groupOrdering=groupDisappearing &&
+                orderingOffset+groupOrderingSupport.size<=bytes.size &&
+                bytes.copyOfRange(orderingOffset,orderingOffset+groupOrderingSupport.size)
+                    .contentEquals(groupOrderingSupport)
             return Content("",0,true,groupControl=control,supportsGroups=true,
                 supportsBaselineV1=marker,supportsGovernanceV1=governanceAfterBaseline || governanceStandalone,
                 supportsGovernanceTextV2=textV2,supportsGroupModeration=moderation,
                 supportsGroupMessageControls=groupControls,supportsGroupMedia=groupMedia,
-                supportsGroupProfile=groupProfile,supportsGroupDisappearing=groupDisappearing)
+                supportsGroupProfile=groupProfile,supportsGroupDisappearing=groupDisappearing,
+                supportsGroupOrdering=groupOrdering)
         }
         if(type==14) {
             if(seconds!=0 || length !in 1..GroupTextCodec.MAX_BYTES ||
@@ -528,6 +542,26 @@ object ConversationPayload {
                 catch (_:org.ghostcloak.protocol.ApiFailure) {throw AppFailure(AppError.INVALID_TEXT)}
                 finally {text.fill(0)}
             return Content("",0,true,groupMediaV2=value,supportsGroups=true)
+        }
+        if(type==21) {
+            if(seconds!=0 || length !in 1..GroupTextV5Codec.MAX_BYTES ||
+                ((16+length+255)/256)*256!=bytes.size || bytes.size>8192)
+                throw AppFailure(AppError.INVALID_TEXT)
+            val value=try {GroupTextV5Codec.decode(text)}
+                catch (_:IllegalArgumentException) {throw AppFailure(AppError.INVALID_TEXT)}
+                catch (_:org.ghostcloak.protocol.ApiFailure) {throw AppFailure(AppError.INVALID_TEXT)}
+                finally {text.fill(0)}
+            return Content("",0,true,groupTextV5=value,supportsGroups=true)
+        }
+        if(type==22) {
+            if(seconds!=0 || length !in 1..GroupMediaCodecV3.MAX_BYTES ||
+                ((16+length+255)/256)*256!=bytes.size || bytes.size>8192)
+                throw AppFailure(AppError.INVALID_TEXT)
+            val value=try {GroupMediaCodecV3.decode(text)}
+                catch (_:IllegalArgumentException) {throw AppFailure(AppError.INVALID_TEXT)}
+                catch (_:org.ghostcloak.protocol.ApiFailure) {throw AppFailure(AppError.INVALID_TEXT)}
+                finally {text.fill(0)}
+            return Content("",0,true,groupMediaV3=value,supportsGroups=true)
         }
         val reply = if(type==7) {
             if(input.remaining()<37) throw AppFailure(AppError.INVALID_TEXT)

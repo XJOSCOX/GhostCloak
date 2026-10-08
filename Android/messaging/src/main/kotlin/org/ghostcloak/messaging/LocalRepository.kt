@@ -582,7 +582,42 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
     fun card(id: String, text: String) = records.transaction { put("app/card/$id", text) }
     fun messages(id: String): List<Message> = records.transaction {
         expire(id)
-        records.keys("app/message/$id/").map { read<Message>(it) ?: throw EndpointStorageFailure() }.sortedBy { it.timestamp }
+        mergeDirectPresentation(records.keys("app/message/$id/").map {
+            read<Message>(it) ?: throw EndpointStorageFailure()
+        })
+    }
+    fun directOrderingPeer(id:String,identityDigest:ByteArray):Boolean=records.transaction {
+        identityDigest.size==32 && records.read("app/direct-order/peer/$id")
+            ?.contentEquals(identityDigest)==true
+    }
+    fun noteDirectOrderingPeer(id:String,identityDigest:ByteArray)=records.transaction {
+        if(identityDigest.size==32 && isActiveContact(id))
+            records.write("app/direct-order/peer/$id",identityDigest)
+    }
+    /** This method and the logical message save run in one outbox transaction. */
+    fun allocateDirectSequence(id:String,scope:ByteArray):Long=records.transaction {
+        require(RandomIdentifiers.valid(id) && scope.size==32)
+        // Preserve old scope counters. If a previously trusted identity returns,
+        // its sequence cannot restart and collide with an earlier logical row.
+        val key="app/direct-order/counter/$id/${DirectOrderingV1.hex(scope)}"
+        val existing=records.read(key)
+        if(existing==null) require(records.keys("app/direct-order/counter/").size<10000)
+        val previous=existing?.decodeToString()?.toLongOrNull()
+            ?: if(existing==null) 0L else throw EndpointStorageFailure()
+        require(previous in 0 until DirectOrderingV1.MAX_SEQUENCE)
+        val next=previous+1
+        records.write(key,next.toString().encodeToByteArray())
+        next
+    }
+    /** False drops a same-scope sequence conflict while normal Signal receipt/ACK proceeds. */
+    fun claimDirectSequence(id:String,scope:ByteArray,sequence:Long,logicalId:String):Boolean=records.transaction {
+        require(RandomIdentifiers.valid(id) && RandomIdentifiers.valid(logicalId) &&
+            DirectOrderingV1.valid(sequence,scope))
+        val key="app/direct-order/seen/$id/${DirectOrderingV1.hex(scope)}/$sequence"
+        if(records.read(key)!=null) return@transaction false
+        require(records.keys("app/direct-order/seen/").size<10000)
+        records.write(key,logicalId.encodeToByteArray())
+        true
     }
     /** Any interrupted presentation loses its key/body before normal startup can expose UI. */
     fun finalizeInterruptedViews() = records.transaction {

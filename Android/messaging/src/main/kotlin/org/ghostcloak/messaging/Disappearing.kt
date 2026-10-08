@@ -39,6 +39,8 @@ object ConversationPayload {
     private val groupProfileSupport = "GC/group-profile-v1!".toByteArray(Charsets.US_ASCII)
     private val groupDisappearingSupport = "GC/group-disappearing-v1!".toByteArray(Charsets.US_ASCII)
     private val groupOrderingSupport = "GC/group-ordering-v1!".toByteArray(Charsets.US_ASCII)
+    // Six authenticated padding bytes fit the existing 256-byte short-text frame.
+    private val directOrderingSupport = "GC/o1!".toByteArray(Charsets.US_ASCII)
     val reactionEmoji = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
     private val profileMarker = "GhostCloak/profile/v1!".toByteArray(Charsets.US_ASCII)
     const val MAX_TEXT = 16_368 // 16-byte header within the existing 16KiB encrypted-content limit.
@@ -61,6 +63,8 @@ object ConversationPayload {
         val supportsGroupProfile:Boolean=false,
         val supportsGroupDisappearing:Boolean=false,
         val supportsGroupOrdering:Boolean=false,
+        val supportsDirectOrdering:Boolean=false,
+        val directOrdered:DirectOrderedContent?=null,
         val groupControl:GroupControl?=null,
         val groupText:GroupText?=null,val groupTextV2:GroupTextV2?=null,
         val groupTextV3:GroupTextV3?=null,
@@ -282,6 +286,12 @@ object ConversationPayload {
             val groupOffset=editOffset+(if(extension.isNotEmpty() && editOffset+editSupport.size<=size) editSupport.size else 0)
             val groupSize=if(extension.isNotEmpty()) when {
                 groupOffset+groupSupport.size+admissionV2Support.size+
+                    governanceTextV2Support.size+directOrderingSupport.size<=size ->
+                    groupSupport.also {it.copyInto(bytes,groupOffset)}.size
+                groupOffset+compactGroupSupport.size+admissionV2Support.size+
+                    governanceTextV2Support.size+directOrderingSupport.size<=size ->
+                    compactGroupSupport.also {it.copyInto(bytes,groupOffset)}.size
+                groupOffset+groupSupport.size+admissionV2Support.size+
                     governanceTextV2Support.size<=size ->
                     groupSupport.also {it.copyInto(bytes,groupOffset)}.size
                 groupOffset+compactGroupSupport.size+admissionV2Support.size+
@@ -294,8 +304,12 @@ object ConversationPayload {
             if(groupSize>0 && groupOffset+groupSize+admissionV2Support.size<=size) {
                 admissionV2Support.copyInto(bytes,groupOffset+groupSize)
                 val textV2Offset=groupOffset+groupSize+admissionV2Support.size
-                if(textV2Offset+governanceTextV2Support.size<=size)
+                if(textV2Offset+governanceTextV2Support.size<=size) {
                     governanceTextV2Support.copyInto(bytes,textV2Offset)
+                    val orderingOffset=textV2Offset+governanceTextV2Support.size
+                    if(orderingOffset+directOrderingSupport.size<=size)
+                        directOrderingSupport.copyInto(bytes,orderingOffset)
+                }
             }
             return bytes
         } finally { text.fill(0) }
@@ -328,6 +342,24 @@ object ConversationPayload {
     fun encodeGroupMediaV2(value:GroupMediaV2):ByteArray=encodeGroupBody(20,GroupMediaCodecV2.encode(value),8192)
     fun encodeGroupTextV5(value:GroupTextV5):ByteArray=encodeGroupBody(21,GroupTextV5Codec.encode(value),8192)
     fun encodeGroupMediaV3(value:GroupMediaV3):ByteArray=encodeGroupBody(22,GroupMediaCodecV3.encode(value),8192)
+    fun encodeOrderedDirect(inner:ByteArray,scopeDigest:ByteArray,senderSequence:Long):ByteArray {
+        require(DirectOrderingV1.valid(senderSequence,scopeDigest))
+        val content=decode(inner)
+        require(!content.control && content.groupControl==null && content.groupText==null &&
+            content.groupTextV2==null && content.groupTextV3==null && content.groupTextV4==null &&
+            content.groupTextV5==null && content.groupMedia==null &&
+            content.groupMediaV2==null && content.groupMediaV3==null &&
+            content.directOrdered==null && !content.profileUpdate &&
+            (content.body.isNotEmpty() || content.attachment!=null))
+        val length=40+inner.size
+        val size=((16+length+255)/256)*256
+        if(size>16384) throw AppFailure(AppError.MESSAGE_TOO_LARGE)
+        return ByteArray(size).also {bytes ->
+            SecureRandom().nextBytes(bytes)
+            ByteBuffer.wrap(bytes).put(magic).put(1).put(23).putShort(0)
+                .putInt(0).putInt(length).putLong(senderSequence).put(scopeDigest).put(inner)
+        }
+    }
     private fun encodeGroupBody(type:Int,body:ByteArray,maxSize:Int=4096):ByteArray=try {
         val size=((16+body.size+255)/256)*256
         require(size<=maxSize)
@@ -355,12 +387,29 @@ object ConversationPayload {
         if (!ByteArray(4).also { input.get(it) }.contentEquals(magic) || input.get().toInt() != 1)
             throw AppFailure(AppError.INVALID_TEXT)
         val type = input.get().toInt()
-        if (type !in 1..22 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
+        if (type !in 1..23 || input.short.toInt() != 0) throw AppFailure(AppError.INVALID_TEXT)
         val seconds = input.int; DisappearingTimer.from(seconds)
         val length = input.int
         if (length !in 0..MAX_TEXT || length > input.remaining() || (type in setOf(2,4) && length != 0) ||
             (type == 4 && (seconds != 0 || bytes.size != 256))) throw AppFailure(AppError.INVALID_TEXT)
         val text = ByteArray(length).also { input.get(it) }
+        if(type==23) {
+            if(seconds!=0 || length<40+256 || ((16+length+255)/256)*256!=bytes.size)
+                throw AppFailure(AppError.INVALID_TEXT)
+            val value=ByteBuffer.wrap(text)
+            val sequence=value.long
+            val scope=ByteArray(32).also(value::get)
+            if(!DirectOrderingV1.valid(sequence,scope)) throw AppFailure(AppError.INVALID_TEXT)
+            val innerBytes=ByteArray(value.remaining()).also(value::get)
+            val inner=try {decodeChecked(innerBytes)} finally {innerBytes.fill(0);text.fill(0)}
+            if(inner.control || inner.directOrdered!=null || inner.profileUpdate ||
+                inner.groupControl!=null || inner.groupText!=null || inner.groupTextV2!=null ||
+                inner.groupTextV3!=null || inner.groupTextV4!=null || inner.groupTextV5!=null ||
+                inner.groupMedia!=null || inner.groupMediaV2!=null || inner.groupMediaV3!=null ||
+                (inner.body.isEmpty() && inner.attachment==null))
+                throw AppFailure(AppError.INVALID_TEXT)
+            return Content("",0,true,directOrdered=DirectOrderedContent(sequence,scope,inner))
+        }
         if(type==10) {
             try {
                 if(seconds!=0 || bytes.size>ProfileRules.MAX_PADDED_UPDATE || length<14 ||
@@ -622,6 +671,9 @@ object ConversationPayload {
             bytes.copyOfRange(offset,offset+governanceTextV2Support.size)
                 .contentEquals(governanceTextV2Support)
         if(governanceTextV2) offset+=governanceTextV2Support.size
+        val directOrdering=governanceTextV2 && bytes.size-offset>=directOrderingSupport.size &&
+            bytes.copyOfRange(offset,offset+directOrderingSupport.size).contentEquals(directOrderingSupport)
+        if(directOrdering) offset+=directOrderingSupport.size
         val minimum=offset
         if(((minimum+255)/256)*256!=bytes.size)
             throw AppFailure(AppError.INVALID_TEXT)
@@ -645,7 +697,8 @@ object ConversationPayload {
             viewOnceKind=if(type==5) ViewOnceKind.TEXT else null,replyTo=reply,supportsMedia=media,
             supportsReactions=reactions,supportsProfiles=profiles,supportsDelete=deletes,supportsEdit=edits,
             supportsGroups=fullGroups || compactGroups,supportsAdmissionV2=admissionV2,
-            supportsGovernanceTextV2=governanceTextV2)
+            supportsGovernanceTextV2=governanceTextV2,
+            supportsDirectOrdering=directOrdering)
     }
     fun policyText(seconds: Int) = if (seconds == 0) "Disappearing messages turned off"
         else "Disappearing messages set to ${DisappearingTimer.from(seconds).label}"

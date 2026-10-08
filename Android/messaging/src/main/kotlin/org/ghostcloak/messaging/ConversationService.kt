@@ -17,6 +17,13 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     private var identity: DeviceIdentity? = null
     private var exported: String? = null
     private var transport: EncryptedMessageTransport? = null
+    private suspend fun directSendScope(id:String):ByteArray? {
+        val me=identity ?: throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+        val remote=engine.trustedRemoteIdentityDigest(id) ?: return null
+        if(!repository.directOrderingPeer(id,remote)) return null
+        val own=DeviceAuth.digest(me.publicKey)
+        return DirectOrderingV1.scope(me.deviceId,id,own,remote)
+    }
     private suspend fun <T> action(block: suspend () -> T): T = withContext(Dispatchers.IO) { mutex.withLock { block() } }
     suspend fun open(): DeviceIdentity? = action {
         if (repository.hasIdentity()) engine.createIdentity("Local").also { identity = it } else null
@@ -218,16 +225,31 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         networkAllowed(id); repository.capacity(); descriptor.validate()
         val normalized=ConversationPayload.validateCaption(caption)
         val bytes=ConversationPayload.encodeAttachment(descriptor,identity?.displayName?.takeIf {repository.localProfile().sharing},viewOnce,normalized)
+        val scope=directSendScope(id)
         lateinit var message:Message
-        val submission=try { outbox.enqueue(id,bytes) { localId ->
-            message=Message(localId,id,Direction.OUTGOING,normalized,repository.clock.now().wall,MessageState.PENDING,
-                disappearingSeconds=descriptor.disappearingSeconds,
-                viewOnceKind=if(viewOnce) ViewOnceKind.PHOTO else null)
-            repository.save(message)
-            val encoded=org.ghostcloak.attachments.AttachmentFormat.encode(descriptor)
-            try { repository.attachment(id,localId,encoded) } finally { encoded.fill(0) }
-            onEnqueued(message)
-        } } finally { bytes.fill(0) }
+        val submission=try {
+            if(scope==null) outbox.enqueue(id,bytes) { localId ->
+                message=Message(localId,id,Direction.OUTGOING,normalized,repository.clock.now().wall,MessageState.PENDING,
+                    disappearingSeconds=descriptor.disappearingSeconds,
+                    viewOnceKind=if(viewOnce) ViewOnceKind.PHOTO else null)
+                repository.save(message)
+                val encoded=org.ghostcloak.attachments.AttachmentFormat.encode(descriptor)
+                try {repository.attachment(id,localId,encoded)} finally {encoded.fill(0)}
+                onEnqueued(message)
+            } else outbox.enqueueGenerated(id) {localId ->
+                val sequence=repository.allocateDirectSequence(id,scope)
+                val payload=ConversationPayload.encodeOrderedDirect(bytes,scope,sequence)
+                message=Message(localId,id,Direction.OUTGOING,normalized,repository.clock.now().wall,MessageState.PENDING,
+                    disappearingSeconds=descriptor.disappearingSeconds,
+                    viewOnceKind=if(viewOnce) ViewOnceKind.PHOTO else null,
+                    orderingScopeDigest=scope,senderSequence=sequence)
+                repository.save(message)
+                val encoded=org.ghostcloak.attachments.AttachmentFormat.encode(descriptor)
+                try {repository.attachment(id,localId,encoded)} finally {encoded.fill(0)}
+                onEnqueued(message)
+                payload
+            }
+        } finally { bytes.fill(0) }
         try { outbox.process(submission) { repository.acceptedOutgoing(id,it.submissionId,it.envelopeId,it.transportSubmissionId) } }
         catch (_:ApiFailure) { return@action message }
         val attachmentResult=outbox.get(submission)
@@ -266,15 +288,33 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             }
             require(kind==replyTo.kind)
         }
-        val bytes = ConversationPayload.encode(body, seconds, control,identity?.displayName?.takeIf {repository.localProfile().sharing},viewOnce,replyTo)
+        // The first message keeps its legacy inline display name. Once the peer
+        // supports encrypted profile sync, that redundant name can yield padding
+        // space to authenticated capability markers without changing frame size.
+        val inlineName=identity?.displayName?.takeIf {
+            repository.localProfile().sharing && !repository.profilePeer(id)
+        }
+        val bytes = ConversationPayload.encode(body, seconds, control,inlineName,viewOnce,replyTo)
+        val scope=if(!control) directSendScope(id) else null
         lateinit var message: Message
-        val submission = try { outbox.enqueue(id, bytes) { submission ->
-            message = Message(submission, id, Direction.OUTGOING, if (control) ConversationPayload.policyText(seconds) else body,
-                repository.clock.now().wall, MessageState.PENDING, disappearingSeconds = seconds, policyEvent = control,
-                viewOnceKind=if(viewOnce) ViewOnceKind.TEXT else null,replyTo=replyTo)
-            repository.save(message)
-            if (control) {repository.policy(id, seconds);repository.clearPendingDefaultTimer(id)}
-        } } finally { bytes.fill(0) }
+        val submission = try {
+            if(scope==null) outbox.enqueue(id, bytes) { submission ->
+                message = Message(submission, id, Direction.OUTGOING, if (control) ConversationPayload.policyText(seconds) else body,
+                    repository.clock.now().wall, MessageState.PENDING, disappearingSeconds = seconds, policyEvent = control,
+                    viewOnceKind=if(viewOnce) ViewOnceKind.TEXT else null,replyTo=replyTo)
+                repository.save(message)
+                if (control) {repository.policy(id, seconds);repository.clearPendingDefaultTimer(id)}
+            } else outbox.enqueueGenerated(id) {submission ->
+                val sequence=repository.allocateDirectSequence(id,scope)
+                val payload=ConversationPayload.encodeOrderedDirect(bytes,scope,sequence)
+                message=Message(submission,id,Direction.OUTGOING,body,repository.clock.now().wall,
+                    MessageState.PENDING,disappearingSeconds=seconds,
+                    viewOnceKind=if(viewOnce) ViewOnceKind.TEXT else null,replyTo=replyTo,
+                    orderingScopeDigest=scope,senderSequence=sequence)
+                repository.save(message)
+                payload
+            }
+        } finally { bytes.fill(0) }
         val result = try { outbox.process(submission) { repository.acceptedOutgoing(id, it.submissionId,it.envelopeId,it.transportSubmissionId) } }
             catch (_: org.ghostcloak.protocol.ApiFailure) { return message }
         if (result.state == OutboxState.FAILED) repository.save(message.copy(state = MessageState.FAILED))
@@ -396,8 +436,27 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
             return@action
         }
         val scopedDigest=if(contact.request) engine.trustedRemoteIdentityDigest(contact.remoteDeviceId) else null
+        // A relationship can move back to a hidden request locally after the
+        // sender already learned our capability. Keep authenticated user content
+        // hidden under request rules, but do not discard its ordered frame.
+        val directIdentityDigest=engine.trustedRemoteIdentityDigest(contact.remoteDeviceId)
+        val directReceiveScope=if(directIdentityDigest!=null && identity!=null)
+            DirectOrderingV1.scope(contact.remoteDeviceId,identity!!.deviceId,directIdentityDigest,
+                DeviceAuth.digest(identity!!.publicKey)) else null
+        var directCapabilityAdvertised=false
         engine.decryptAndCommit(envelope) { bytes ->
-            val content = ConversationPayload.decode(bytes)
+            val decoded=ConversationPayload.decode(bytes)
+            val directOrder=decoded.directOrdered
+            val content=directOrder?.inner ?: decoded
+            if(directOrder!=null) {
+                if(directReceiveScope==null || !java.security.MessageDigest.isEqual(
+                    directReceiveScope,directOrder.scopeDigest) ||
+                    !repository.claimDirectSequence(contact.remoteDeviceId,
+                        directOrder.scopeDigest,directOrder.senderSequence,envelope.envelopeId)) {
+                    repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
+                    return@decryptAndCommit
+                }
+            }
             if(content.groupText!=null) {
                 if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
                     repository.isActiveContact(contact.remoteDeviceId))
@@ -533,6 +592,8 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 repository.admissionV2Peer(contact.remoteDeviceId,content.supportsAdmissionV2)
                 repository.governanceTextV2Peer(contact.remoteDeviceId,
                     content.supportsGovernanceTextV2)
+                if(content.supportsDirectOrdering || directOrder!=null)
+                    directCapabilityAdvertised=true
                 val firstProfile=content.supportsProfiles && !repository.profilePeer(contact.remoteDeviceId)
                 repository.profilePeer(contact.remoteDeviceId,content.supportsProfiles)
                 if(firstProfile && !contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId})
@@ -545,7 +606,9 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 if (!content.control && content.seconds > 0) ExpiryDeadline.start(content.seconds, now) else null, content.control,
                 viewOnceKind=content.viewOnceKind,
                 viewOnceState=if(content.viewOnceKind!=null) ViewOnceState.AVAILABLE else null,
-                replyTo=content.replyTo),hash,hasAttachment=content.attachment!=null)
+                replyTo=content.replyTo,
+                orderingScopeDigest=directOrder?.scopeDigest,
+                senderSequence=directOrder?.senderSequence),hash,hasAttachment=content.attachment!=null)
             if (content.control) repository.policy(contact.remoteDeviceId, content.seconds)
             content.attachment?.let { encoded ->
                 try { if(!repository.isDeleted(contact.remoteDeviceId,envelope.envelopeId))
@@ -562,6 +625,13 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 }
             }
         }
+        // An initial prekey envelope can activate the Signal session only inside
+        // decryptAndCommit. Bind its authenticated advertisement to the pin after
+        // that transaction completes; a crash here merely delays the cutover.
+        if(directCapabilityAdvertised && repository.isActiveContact(contact.remoteDeviceId))
+            engine.trustedRemoteIdentityDigest(contact.remoteDeviceId)?.let {
+                repository.noteDirectOrderingPeer(contact.remoteDeviceId,it)
+            }
     }
     suspend fun acceptRequest(id: String, outbox: DurableOutbox? = null) = action {
         val contact = repository.contact(id)

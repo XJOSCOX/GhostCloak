@@ -21,6 +21,81 @@ import java.io.ByteArrayOutputStream
 import javax.imageio.ImageIO
 
 class NetworkTest {
+    @Test fun directOfflineTenMessagesUseAuthenticatedSenderOrder() = runBlocking {
+        Fixture().use {f ->
+            val a=f.person("alice"); val b=f.person("bob")
+            NetworkAccount(f.client(a),a.state).connect(b.state.ghostCloakId(),a.engine)
+            NetworkAccount(f.client(b),b.state).connect(a.state.ghostCloakId(),b.engine)
+            val ar=LocalRepository(a.records);val br=LocalRepository(b.records)
+            ar.save(Contact(RandomIdentifiers.create(),b.registration.accountId,"Bob",b.registration.deviceId))
+            br.save(Contact(RandomIdentifiers.create(),a.registration.accountId,"Alice",a.registration.deviceId))
+            val ao=DurableOutbox(a.records,a.engine,NetworkMailboxTransport(f.client(a),a.state))
+            val bo=DurableOutbox(b.records,b.engine,NetworkMailboxTransport(f.client(b),b.state))
+            val ac=ConversationService(a.engine,ar).also {it.open()}
+            val bc=ConversationService(b.engine,br).also {it.open()}
+            suspend fun receive(person:Person,conversation:ConversationService) {
+                val transport=NetworkMailboxTransport(f.client(person),person.state)
+                val deliveries=transport.fetch()
+                deliveries.forEach {conversation.acceptNetwork(EnvelopeCodec.decode(it.encryptedEnvelope))}
+                if(deliveries.isNotEmpty()) transport.acknowledgeAccepted(deliveries.map {it.serverMessageId})
+            }
+            // Ordinary encrypted text advertises the new format in authenticated padding.
+            ac.sendNetwork(b.registration.deviceId,"hello",ao)
+            bc.sendNetwork(a.registration.deviceId,"hello",bo)
+            receive(a,ac);receive(b,bc)
+            ac.sendNetwork(b.registration.deviceId,"ready",ao)
+            bc.sendNetwork(a.registration.deviceId,"ready",bo)
+            receive(a,ac);receive(b,bc)
+            assertNotNull(a.engine.trustedRemoteIdentityDigest(b.registration.deviceId))
+            assertNotNull(b.engine.trustedRemoteIdentityDigest(a.registration.deviceId))
+            assertTrue(ar.directOrderingPeer(b.registration.deviceId,
+                a.engine.trustedRemoteIdentityDigest(b.registration.deviceId)!!))
+            assertTrue(br.directOrderingPeer(a.registration.deviceId,
+                b.engine.trustedRemoteIdentityDigest(a.registration.deviceId)!!))
+            val labels=listOf("ONE","TWO","THREE","FOUR","FIVE","SIX","SEVEN","EIGHT","NINE","TEN")
+            labels.forEach {ac.sendNetwork(b.registration.deviceId,it,ao)}
+            val sent=ar.messages(b.registration.deviceId).filter {it.body in labels}
+            assertEquals((1L..10L).toList(),sent.map {it.senderSequence})
+            val transport=NetworkMailboxTransport(f.client(b),b.state)
+            var delivered=0
+            while(delivered<10) {
+                val batch=transport.fetch()
+                assertTrue(batch.isNotEmpty())
+                batch.reversed().forEach {bc.acceptNetwork(EnvelopeCodec.decode(it.encryptedEnvelope))}
+                transport.acknowledgeAccepted(batch.map {it.serverMessageId})
+                delivered+=batch.size
+            }
+            assertEquals(labels,br.messages(a.registration.deviceId).filter {it.body in labels}.map {it.body})
+            assertEquals((1L..10L).toList(),br.messages(a.registration.deviceId)
+                .filter {it.body in labels}.map {it.senderSequence})
+            fun media(kind:AttachmentKind)=AttachmentDescriptor(id=AttachmentFormat.newId(),
+                capability=ByteArray(32) {1},key=ByteArray(16) {2},digest=ByteArray(32) {3},
+                plaintextLength=1024,paddedLength=AttachmentFormat.padded(1024),
+                ciphertextLength=AttachmentFormat.encryptedLength(AttachmentFormat.padded(1024)),
+                kind=kind,filename=if(kind==AttachmentKind.DOCUMENT) "notes.pdf" else null,
+                durationMillis=if(kind==AttachmentKind.VOICE_NOTE) 2500 else null)
+            val text1=ac.sendNetwork(b.registration.deviceId,"text1",ao)
+            ac.sendAttachment(b.registration.deviceId,media(AttachmentKind.IMAGE),ao,true,caption="photo")
+            ac.sendNetwork(b.registration.deviceId,"text2",ao)
+            ac.sendAttachment(b.registration.deviceId,media(AttachmentKind.VOICE_NOTE),ao,true,caption="voice")
+            ac.sendAttachment(b.registration.deviceId,media(AttachmentKind.DOCUMENT),ao,true,caption="document")
+            ac.sendNetwork(b.registration.deviceId,"reply",ao,replyTo=ReplyReference(
+                text1.envelopeId!!,ReplyKind.TEXT))
+            ac.sendNetwork(b.registration.deviceId,"text3",ao)
+            delivered=0
+            while(delivered<7) {
+                val batch=transport.fetch()
+                assertTrue(batch.isNotEmpty())
+                batch.reversed().forEach {bc.acceptNetwork(EnvelopeCodec.decode(it.encryptedEnvelope))}
+                transport.acknowledgeAccepted(batch.map {it.serverMessageId})
+                delivered+=batch.size
+            }
+            val mixed=listOf("text1","photo","text2","voice","document","reply","text3")
+            assertEquals(mixed,br.messages(a.registration.deviceId).filter {it.body in mixed}.map {it.body})
+            assertEquals((11L..17L).toList(),br.messages(a.registration.deviceId)
+                .filter {it.body in mixed}.map {it.senderSequence})
+        }
+    }
     @Test fun governedDisappearingTimerRequiresCapabilityAndBindsNewMessages() = runBlocking {
         Fixture().use {f ->
             val people=listOf(f.person("alice",true),f.person("bob",true))

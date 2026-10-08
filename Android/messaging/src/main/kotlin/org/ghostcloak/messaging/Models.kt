@@ -41,6 +41,8 @@ data class Message(val localId: String, val conversationId: String, val directio
     val editRevision: Long = 0, val editStatus: EditRequestStatus? = null,
     val editSubmissionId: String? = null,
     val transportSubmissionId: String? = null,
+    val orderingScopeDigest:ByteArray?=null,
+    val senderSequence:Long?=null,
     @kotlinx.serialization.Transient val reactions: List<ReactionBadge> = emptyList()) {
     val activeExpiry: ExpiryDeadline? get() = if (direction == Direction.OUTGOING && state != MessageState.DELIVERED) null else expiry
     override fun toString() = "Message(redacted)"

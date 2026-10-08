@@ -72,6 +72,24 @@ class DurableOutbox(private val records: EndpointRecords, private val engine: Se
         crash(CrashPoint.AFTER_LOCAL)
         id
     } }
+    /** Builds an authenticated user payload and its logical message in the same
+     * protected transaction as the outbox row. Used when the payload contains a
+     * newly allocated direct sender sequence. The builder must not suspend. */
+    suspend fun enqueueGenerated(deviceId:String,build:(String)->ByteArray):String =
+        withContext(Dispatchers.IO) { mutex.withLock {
+            requireApi(RandomIdentifiers.valid(deviceId))
+            val id=RandomIdentifiers.create()
+            records.transaction {
+                requireApi(records.keys("outbox/").size<128,"outbox_full",429)
+                val plaintext=build(id)
+                try {
+                    requireApi(plaintext.size in 1..EnvelopeCodec.MAX_BODY)
+                    put(OutboxEntry(id,deviceId,OutboxState.LOCAL,plaintext.copyOf(),createdAt=time()))
+                } finally {plaintext.fill(0)}
+            }
+            crash(CrashPoint.AFTER_LOCAL)
+            id
+        } }
     /** Commit Signal's ratchet and its retryable ciphertext before any network submission. */
     suspend fun prepare(id:String):OutboxEntry=withContext(Dispatchers.IO) { mutex.withLock {
         prepareLocked(id)

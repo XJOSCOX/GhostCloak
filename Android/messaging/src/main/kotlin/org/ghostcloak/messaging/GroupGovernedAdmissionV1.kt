@@ -27,6 +27,8 @@ import java.security.MessageDigest
     val ownerId:String,val coordinatorId:String,
     val ownerSignature:ByteArray=byteArrayOf(),
     val coordinatorSignature:ByteArray=byteArrayOf(),
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val timerDigest:ByteArray?=null,
 ) { override fun toString()="GroupGovernanceInviteeCheckpointV1(redacted)" }
 
 @Serializable internal data class GovernedAdmissionPendingV1(
@@ -96,7 +98,8 @@ internal object GroupGovernedAdmissionV1 {
     fun coordinatorStatement(value:GroupGovernanceInviteeCheckpointV1)=GroupStatements.governanceStatement(
         "GhostCloak.GroupGovernanceInviteeCheckpointCoordinator.v1",body(value))
     fun unsignedCheckpoint(binding:GovernedAdmissionBindingV1,proof:GroupAdmission,
-        barrier:GovernanceBarrierV1,parent:GroupState,checkpointId:String)=
+        barrier:GovernanceBarrierV1,parent:GroupState,checkpointId:String,
+        timerDigest:ByteArray?=null)=
         GroupGovernanceInviteeCheckpointV1(checkpointId=checkpointId,groupId=parent.groupId,
             inviteId=binding.inviteId,candidateDigest=binding.candidateDigest,
             admissionDigest=DeviceAuth.digest(NetworkCodec.encode(proof)),
@@ -109,7 +112,8 @@ internal object GroupGovernedAdmissionV1 {
             parentRevision=parent.revision,parentStateDigest=GroupStatements.digest(parent),
             memberSetDigest=GroupAuthorityBaselineV1.memberSetDigest(
                 GroupAuthorityBaselineV1.memberSet(parent)),
-            ownerId=parent.ownerId,coordinatorId=parent.coordinatorId)
+            ownerId=parent.ownerId,coordinatorId=parent.coordinatorId,
+            timerDigest=timerDigest)
     fun verifyCheckpoint(value:GroupGovernanceInviteeCheckpointV1,parent:GroupState,
         proof:GroupAdmission,certificate:AdmissionCertificateV2,
         binding:GovernedAdmissionBindingV1,requireOwner:Boolean=true):Boolean=runCatching {
@@ -134,6 +138,7 @@ internal object GroupGovernedAdmissionV1 {
             same(value.memberSetDigest,GroupAuthorityBaselineV1.memberSetDigest(
                 GroupAuthorityBaselineV1.memberSet(parent))) &&
             value.ownerId==parent.ownerId && value.coordinatorId==parent.coordinatorId &&
+            (value.timerDigest==null || value.timerDigest.size==32) &&
             NetworkCodec.encode(value).size<=MAX_CHECKPOINT_BYTES)
         val owner=parent.members.single {it.memberId==parent.ownerId}
         val coordinator=parent.members.single {it.memberId==parent.coordinatorId}

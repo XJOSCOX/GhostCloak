@@ -42,6 +42,7 @@ enum class GroupRecipientState { PENDING, QUEUED, SENT, UNAVAILABLE }
 @Serializable data class GroupRecipient(val deviceId:String,val state:GroupRecipientState=GroupRecipientState.PENDING,
     val outboxId:String?=null)
 @Serializable enum class GroupModerationState { NONE, REMOVED_BY_ADMIN, DELETED_BY_SENDER }
+@Serializable enum class GroupExpiryState { ACTIVE, EXPIRED }
 data class GroupReactionBadge(val emoji:String,val count:Int,val mine:Boolean)
 @Serializable internal data class GroupReactionRecord(val sequence:Long,val emoji:String?)
 @OptIn(ExperimentalSerializationApi::class)
@@ -59,6 +60,9 @@ data class GroupReactionBadge(val emoji:String,val count:Int,val mine:Boolean)
     @EncodeDefault(EncodeDefault.Mode.NEVER) val mediaSenderDeviceId:String?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val mediaBodyDigest:ByteArray?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val mediaDeliveryPrepared:Boolean=false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val disappearingSeconds:Int=0,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val expiry:ExpiryDeadline?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val expiryState:GroupExpiryState=GroupExpiryState.ACTIVE,
     @kotlinx.serialization.Transient val reactions:List<GroupReactionBadge> = emptyList()) {
     override fun toString()="GroupChatMessage(redacted)"
 }
@@ -67,7 +71,26 @@ data class GroupReactionBadge(val emoji:String,val count:Int,val mine:Boolean)
 }
 
 /** All rows live in the existing SQLCipher endpoint store and are destroyed with it. */
-class GroupChatStore(private val records:EndpointRecords) {
+class GroupChatStore(private val records:EndpointRecords,private val clock:ExpiryClock=ExpiryClock()) {
+    /** Expiry retains the replay row and transport artifacts, but removes all active content. */
+    fun expire(groupId:String?=null):Int=records.transaction {
+        if(groupId!=null) require(GroupIds.valid(groupId))
+        val prefix=if(groupId==null) "app/group-text/message/" else "app/group-text/message/$groupId/"
+        val now=clock.now()
+        var count=0
+        for(key in records.keys(prefix)) {
+            val old=decodeMessage(key)
+            if(old.expiryState==GroupExpiryState.EXPIRED || old.expiry?.reached(now)!=true) continue
+            records.write(key,NetworkCodec.encode(old.copy(text="",mediaCaption=null,
+                mediaFilename=null,expiryState=GroupExpiryState.EXPIRED)))
+            records.remove("app/attachment/${old.groupId}/${old.logicalId}")
+            records.remove("app/auto-download/${old.groupId}/${old.logicalId}")
+            clearReactions(old.groupId,old.logicalId)
+            NotificationLedger.remove(records,old.groupId,old.logicalId)
+            count++
+        }
+        count
+    }
     private fun reactionPrefix(groupId:String,id:String):String {
         require(GroupIds.valid(groupId) && GroupIds.valid(id))
         return "app/group-text/reaction/$groupId/$id/"
@@ -110,6 +133,12 @@ class GroupChatStore(private val records:EndpointRecords) {
     private fun clearPendingMedia(groupId:String,id:String) {
         for(path in records.keys("app/group-text/pending-media-v1/")) {
             val pending=NetworkCodec.decode<PendingGroupMediaV1>(
+                records.read(path) ?: throw EndpointStorageFailure(),8192)
+            if(pending.media.groupId==groupId && pending.media.logicalId==id)
+                records.remove(path)
+        }
+        for(path in records.keys("app/group-text/pending-media-v2/")) {
+            val pending=NetworkCodec.decode<PendingGroupMediaV2>(
                 records.read(path) ?: throw EndpointStorageFailure(),8192)
             if(pending.media.groupId==groupId && pending.media.logicalId==id)
                 records.remove(path)
@@ -168,7 +197,8 @@ class GroupChatStore(private val records:EndpointRecords) {
         val key=messageKey(groupId,id)
         val old=records.read(key)?.let {NetworkCodec.decode<GroupChatMessage>(it,8192)}
             ?: return@transaction false
-        if(old.mediaKind!=null || old.senderMemberId!=senderMemberId || old.moderationState!=GroupModerationState.NONE ||
+        if(old.mediaKind!=null || old.expiryState==GroupExpiryState.EXPIRED ||
+            old.expiry?.reached(clock.now())==true || old.senderMemberId!=senderMemberId || old.moderationState!=GroupModerationState.NONE ||
             revision<=old.editRevision) return@transaction false
         records.write(key,NetworkCodec.encode(old.copy(text=replacement,editRevision=revision)))
         NotificationLedger.remove(records,groupId,id)
@@ -179,7 +209,8 @@ class GroupChatStore(private val records:EndpointRecords) {
         require(GroupIds.valid(actorMemberId) && sequence in 1..GroupMessageControlCodecV1.MAX_REVISION &&
             (emoji==null || emoji in ConversationPayload.reactionEmoji))
         val message=message(groupId,id) ?: return@transaction false
-        if(message.moderationState!=GroupModerationState.NONE) return@transaction false
+        if(message.moderationState!=GroupModerationState.NONE ||
+            message.expiryState==GroupExpiryState.EXPIRED) return@transaction false
         val key=reactionPrefix(groupId,id)+actorMemberId
         val old=records.read(key)?.let {NetworkCodec.decode<GroupReactionRecord>(it,128)}
         if(sequence<=(old?.sequence ?: 0L)) return@transaction false
@@ -254,6 +285,12 @@ class GroupChatStore(private val records:EndpointRecords) {
             if(pending.text.groupId==groupId && pending.text.logicalId==id)
                 records.remove(path)
         }
+        for(path in records.keys("app/group-text/pending-v4/")) {
+            val pending=NetworkCodec.decode<PendingGroupTextV4>(
+                records.read(path) ?: throw EndpointStorageFailure(),8192)
+            if(pending.text.groupId==groupId && pending.text.logicalId==id)
+                records.remove(path)
+        }
         for(path in records.keys("app/group-text/pending/")) {
             val pending=NetworkCodec.decode<PendingGroupText>(
                 records.read(path) ?: throw EndpointStorageFailure(),4096)
@@ -287,6 +324,12 @@ class GroupChatStore(private val records:EndpointRecords) {
     private fun pendingMediaKey(envelopeId:String):String {
         require(RandomIdentifiers.valid(envelopeId));return "app/group-text/pending-media-v1/$envelopeId"
     }
+    private fun pendingV4Key(envelopeId:String):String {
+        require(RandomIdentifiers.valid(envelopeId));return "app/group-text/pending-v4/$envelopeId"
+    }
+    private fun pendingMediaV2Key(envelopeId:String):String {
+        require(RandomIdentifiers.valid(envelopeId));return "app/group-text/pending-media-v2/$envelopeId"
+    }
     private fun bindingKey(groupId:String,id:String):String {
         require(GroupIds.valid(groupId) && GroupIds.valid(id))
         return "app/group-text/v2-binding/$groupId/$id"
@@ -298,6 +341,7 @@ class GroupChatStore(private val records:EndpointRecords) {
     }
     fun messages(groupId:String,localMemberId:String?=null):List<GroupChatMessage> = records.transaction {
         require(GroupIds.valid(groupId))
+        expire(groupId)
         records.keys("app/group-text/message/$groupId/").map(::decodeMessage).map {message ->
             if(message.moderationState==GroupModerationState.NONE) message.copy(
                 reactions=reactionBadges(groupId,message.logicalId,localMemberId))
@@ -306,6 +350,7 @@ class GroupChatStore(private val records:EndpointRecords) {
             .sortedWith(compareBy<GroupChatMessage> {it.localOrder}.thenBy {it.logicalId})
     }
     fun message(groupId:String,id:String):GroupChatMessage?=records.transaction {
+        expire(groupId)
         records.read(messageKey(groupId,id))?.let {NetworkCodec.decode<GroupChatMessage>(it,8192)}
     }
     fun create(value:GroupChatMessage)=records.transaction {
@@ -324,14 +369,17 @@ class GroupChatStore(private val records:EndpointRecords) {
         create(value)
         records.write(bindingKey(value.groupId,value.logicalId),NetworkCodec.encode(binding))
     }
-    internal fun createMedia(value:GroupChatMessage,media:GroupMediaV1)=records.transaction {
+    internal fun createMedia(value:GroupChatMessage,media:GroupMediaV1,
+        mediaV2:GroupMediaV2?=null)=records.transaction {
         GroupMediaCodecV1.validate(media)
+        if(mediaV2!=null) GroupMediaCodecV2.validate(mediaV2)
         require(value.outgoing && value.groupId==media.groupId && value.logicalId==media.logicalId &&
             value.senderMemberId==media.senderMemberId && value.mediaKind==media.kind &&
             value.recipients.size in 1..4 && value.recipients.map {it.deviceId}.distinct().size==value.recipients.size &&
             value.recipients.all {RandomIdentifiers.valid(it.deviceId) && it.state==GroupRecipientState.PENDING} &&
             value.mediaBodyDigest?.let {digest ->
-                val payload=GroupMediaCodecV1.encode(media)
+                val payload=if(mediaV2==null) GroupMediaCodecV1.encode(media)
+                    else GroupMediaCodecV2.encode(mediaV2)
                 try {MessageDigest.isEqual(digest,DeviceAuth.digest(payload))} finally {payload.fill(0)}
             }!=false)
         require(records.keys("app/group-text/message/").size<4096 &&
@@ -356,6 +404,47 @@ class GroupChatStore(private val records:EndpointRecords) {
             records.keys("app/group-text/pending-media-v1/").size<128)
         records.write(pendingMediaKey(envelopeId),NetworkCodec.encode(PendingGroupMediaV1(sender,value)))
     }
+    fun queueMediaV2(sender:String,envelopeId:String,value:GroupMediaV2)=records.transaction {
+        require(RandomIdentifiers.valid(sender));GroupMediaCodecV2.validate(value)
+        if(isModerated(value.groupId,value.logicalId) ||
+            isSenderDeleted(value.groupId,value.logicalId)) return@transaction
+        require(records.keys("app/group-text/pending-media-v2/").size<64 &&
+            records.keys("app/group-text/pending/").size+
+            records.keys("app/group-text/pending-v2/").size+
+            records.keys("app/group-text/pending-v3/").size+
+            records.keys("app/group-text/pending-v4/").size+
+            records.keys("app/group-text/pending-media-v1/").size+
+            records.keys("app/group-text/pending-media-v2/").size<128)
+        records.write(pendingMediaV2Key(envelopeId),NetworkCodec.encode(PendingGroupMediaV2(sender,value)))
+    }
+    internal fun pendingMediaV2():List<Pair<String,PendingGroupMediaV2>> = records.transaction {
+        records.keys("app/group-text/pending-media-v2/").sorted().take(16).map {key ->
+            key.substringAfterLast('/') to NetworkCodec.decode<PendingGroupMediaV2>(
+                records.read(key) ?: throw EndpointStorageFailure(),8192)
+        }
+    }
+    internal fun discardPendingMediaV2(envelopeId:String)=records.transaction {
+        records.remove(pendingMediaV2Key(envelopeId))
+    }
+    internal fun acceptMediaV2(envelopeId:String,pending:PendingGroupMediaV2):Boolean=records.transaction {
+        val value=pending.media
+        val v1=GroupMediaV1(groupId=value.groupId,epoch=value.epoch,
+            senderMemberId=value.senderMemberId,logicalId=value.logicalId,
+            governanceActivationDigest=value.governanceActivationDigest,
+            governanceSequence=value.governanceSequence,
+            governanceHeadDigest=value.governanceHeadDigest,policyDigest=value.policyDigest,
+            descriptor=value.descriptor,kind=value.kind,caption=value.caption)
+        val accepted=acceptMedia(envelopeId,PendingGroupMediaV1(pending.senderDeviceId,v1))
+        if(accepted) {
+            val key=messageKey(value.groupId,value.logicalId)
+            val old=decodeMessage(key)
+            records.write(key,NetworkCodec.encode(old.copy(
+                disappearingSeconds=value.disappearingSeconds,
+                expiry=ExpiryDeadline.start(value.disappearingSeconds,clock.now()))))
+        }
+        records.remove(pendingMediaV2Key(envelopeId))
+        accepted
+    }
     internal fun pendingMedia():List<Pair<String,PendingGroupMediaV1>> = records.transaction {
         records.keys("app/group-text/pending-media-v1/").sorted().take(16).map {key ->
             key.substringAfterLast('/') to NetworkCodec.decode<PendingGroupMediaV1>(
@@ -370,7 +459,8 @@ class GroupChatStore(private val records:EndpointRecords) {
         if(records.read(replay)!=null || existing!=null) {
             if(existing!=null && existing.senderMemberId!=value.senderMemberId)
                 throw EndpointStorageFailure()
-            if(existing?.moderationState==GroupModerationState.NONE) {
+            if(existing?.moderationState==GroupModerationState.NONE &&
+                existing.expiryState!=GroupExpiryState.EXPIRED) {
                 val prior=records.read("app/attachment/${value.groupId}/${value.logicalId}")
                     ?: throw EndpointStorageFailure()
                 val presented=AttachmentFormat.encode(value.descriptor)
@@ -471,6 +561,45 @@ class GroupChatStore(private val records:EndpointRecords) {
         }
         require(groupPending<32)
         records.write(pendingV3Key(envelopeId),NetworkCodec.encode(PendingGroupTextV3(sender,value)))
+    }
+    fun queueV4(sender:String,envelopeId:String,value:GroupTextV4)=records.transaction {
+        require(RandomIdentifiers.valid(sender));GroupTextV4Codec.validate(value)
+        if(isModerated(value.groupId,value.logicalId) ||
+            isSenderDeleted(value.groupId,value.logicalId)) return@transaction
+        require(records.keys("app/group-text/pending-v4/").size<64 &&
+            records.keys("app/group-text/pending/").size+
+            records.keys("app/group-text/pending-v2/").size+
+            records.keys("app/group-text/pending-v3/").size+
+            records.keys("app/group-text/pending-v4/").size+
+            records.keys("app/group-text/pending-media-v1/").size+
+            records.keys("app/group-text/pending-media-v2/").size<128)
+        records.write(pendingV4Key(envelopeId),NetworkCodec.encode(PendingGroupTextV4(sender,value)))
+    }
+    internal fun pendingV4():List<Pair<String,PendingGroupTextV4>> = records.transaction {
+        records.keys("app/group-text/pending-v4/").sorted().take(16).map {key ->
+            key.substringAfterLast('/') to NetworkCodec.decode<PendingGroupTextV4>(
+                records.read(key) ?: throw EndpointStorageFailure(),8192)
+        }
+    }
+    internal fun discardPendingV4(envelopeId:String)=records.transaction {records.remove(pendingV4Key(envelopeId))}
+    internal fun acceptV4(envelopeId:String,pending:PendingGroupTextV4):Boolean=records.transaction {
+        val value=pending.text
+        val v2=GroupTextV2(groupId=value.groupId,epoch=value.epoch,
+            senderMemberId=value.senderMemberId,logicalId=value.logicalId,
+            governanceActivationDigest=value.governanceActivationDigest,
+            governanceSequence=value.governanceSequence,
+            governanceHeadDigest=value.governanceHeadDigest,policyDigest=value.policyDigest,
+            text=value.text)
+        val accepted=acceptV2(envelopeId,PendingGroupTextV2(pending.senderDeviceId,v2))
+        if(accepted) {
+            val key=messageKey(value.groupId,value.logicalId)
+            val old=decodeMessage(key)
+            records.write(key,NetworkCodec.encode(old.copy(replyToLogicalId=value.replyToLogicalId,
+                disappearingSeconds=value.disappearingSeconds,
+                expiry=ExpiryDeadline.start(value.disappearingSeconds,clock.now()))))
+        }
+        records.remove(pendingV4Key(envelopeId))
+        accepted
     }
     internal fun pendingV3():List<Pair<String,PendingGroupTextV3>> = records.transaction {
         records.keys("app/group-text/pending-v3/").sorted().take(16).map {key ->
@@ -588,7 +717,8 @@ class GroupChatStore(private val records:EndpointRecords) {
     fun markMediaDeliveryPreparedIfReady(groupId:String,id:String):Boolean=records.transaction {
         val key=messageKey(groupId,id)
         val old=decodeMessage(key)
-        if(!old.outgoing || old.mediaKind==null || old.mediaBodyDigest?.size!=32)
+        if(!old.outgoing || old.mediaBodyDigest?.size!=32 ||
+            (old.mediaKind==null && old.disappearingSeconds==0))
             return@transaction false
         val binding=binding(groupId,id) ?: return@transaction false
         val ready=old.recipients.isNotEmpty() && old.recipients.all {recipient ->
@@ -609,7 +739,9 @@ class GroupChatStore(private val records:EndpointRecords) {
             }==true
         }
         if(ready && !old.mediaDeliveryPrepared)
-            records.write(key,NetworkCodec.encode(old.copy(mediaDeliveryPrepared=true)))
+            records.write(key,NetworkCodec.encode(old.copy(mediaDeliveryPrepared=true,
+                expiry=if(old.disappearingSeconds>0)
+                    ExpiryDeadline.start(old.disappearingSeconds,clock.now()) else old.expiry)))
         ready
     }
     fun markResult(outboxId:String,success:Boolean) = records.transaction {

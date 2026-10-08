@@ -21,6 +21,112 @@ import java.io.ByteArrayOutputStream
 import javax.imageio.ImageIO
 
 class NetworkTest {
+    @Test fun governedDisappearingTimerRequiresCapabilityAndBindsNewMessages() = runBlocking {
+        Fixture().use {f ->
+            val people=listOf(f.person("alice",true),f.person("bob",true))
+            val (a,b)=people
+            val repos=people.associateWith {LocalRepository(it.records)}
+            val outboxes=people.associateWith {p ->DurableOutbox(p.records,p.engine,
+                NetworkMailboxTransport(f.client(p),p.state))}
+            fun group(p:Person)=GroupMembershipTransport(p.records,repos.getValue(p),p.engine,p.state,
+                GroupAuthorityResolver(repos.getValue(p),p.engine,f.client(p),p.records),outboxes.getValue(p))
+            val conversations=people.associateWith {p ->ConversationService(p.engine,
+                repos.getValue(p)).also {it.open()}}
+            for(p in people) for(q in people) if(p!=q) {
+                p.engine.establishSession(q.engine.publicBundle())
+                p.state.remember(SenderProfile(q.registration.accountId,q.registration.deviceId,
+                    q.registration.routingId,q.state.ghostCloakId()))
+                repos.getValue(p).save(Contact(RandomIdentifiers.create(),q.registration.accountId,
+                    q.name,q.registration.deviceId))
+                repos.getValue(p).groupPeer(q.registration.deviceId,true)
+                repos.getValue(p).admissionV2Peer(q.registration.deviceId,true)
+                repos.getValue(p).baselineV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceV1Peer(q.registration.deviceId,true)
+                repos.getValue(p).governanceTextV2Peer(q.registration.deviceId,true)
+            }
+            suspend fun settle(rounds:Int) {repeat(rounds) {
+                for(p in people) outboxes.getValue(p).pendingIds().forEach {outboxId ->
+                    val outbox=outboxes.getValue(p)
+                    if(outbox.get(outboxId).state!=OutboxState.SERVER_ACCEPTED) outbox.process(outboxId)
+                }
+                for(p in people) {
+                    val mailbox=NetworkMailboxTransport(f.client(p),p.state)
+                    val deliveries=mailbox.fetch()
+                    deliveries.forEach {conversations.getValue(p).acceptNetwork(
+                        EnvelopeCodec.decode(it.encryptedEnvelope))}
+                    if(deliveries.isNotEmpty()) mailbox.acknowledgeAccepted(
+                        deliveries.map {it.serverMessageId})
+                    group(p).processPending()
+                }
+            }}
+            val id=group(a).createAndInvite(b.registration.deviceId)
+            settle(2);group(b).accept(group(b).invitations().single().id);settle(4)
+            group(a).beginGroupManagementSetup(id);settle(10)
+            group(a).beginGroupManagementSetup(id);settle(12)
+            val old=group(a).sendText(id,"persistent");settle(4)
+            repos.getValue(a).groupDisappearingPeer(b.registration.deviceId,false)
+            rejectAsync {group(a).setGroupDisappearingGoverned(id,30)}
+            repos.getValue(a).groupDisappearingPeer(b.registration.deviceId,true)
+            repos.getValue(b).groupDisappearingPeer(a.registration.deviceId,true)
+            group(a).setGroupDisappearingGoverned(id,30);settle(8)
+            assertEquals(30,group(a).groupInfo(id)!!.disappearingTimer.seconds)
+            assertEquals(30,group(b).groupInfo(id)!!.disappearingTimer.seconds)
+            val timed=group(a).sendText(id,"timed");settle(5)
+            for(p in people) {
+                val rows=group(p).conversation(id)!!.messages
+                assertEquals(0,rows.single {it.logicalId==old}.disappearingSeconds)
+                assertEquals(30,rows.single {it.logicalId==timed}.disappearingSeconds)
+                assertNotNull(rows.single {it.logicalId==timed}.expiry)
+            }
+            val offlineTransport=object:IdempotentMessageTransport by NetworkMailboxTransport(
+                f.client(a),a.state) {
+                override suspend fun submit(submissionId:String,routingDestination:String,
+                    envelope:EncryptedEnvelope):String = throw ApiFailure(503,"offline")
+            }
+            val heldOutbox=DurableOutbox(a.records,a.engine,offlineTransport)
+            val heldGroup=GroupMembershipTransport(a.records,repos.getValue(a),a.engine,a.state,
+                GroupAuthorityResolver(repos.getValue(a),a.engine,f.client(a),a.records),heldOutbox)
+            val held=heldGroup.sendText(id,"offline timed text")
+            heldGroup.processPending()
+            val senderCopy=heldGroup.conversation(id)!!.messages.single {it.logicalId==held}
+            assertTrue(senderCopy.mediaDeliveryPrepared)
+            val heldSubmission=senderCopy.recipients.single().outboxId!!
+            assertEquals(OutboxState.UPLOAD_PENDING,heldOutbox.get(heldSubmission).state)
+            a.records.transaction {
+                val key="app/group-text/message/$id/$held"
+                val row=NetworkCodec.decode<GroupChatMessage>(a.records.read(key)!!,8192)
+                a.records.write(key,NetworkCodec.encode(row.copy(expiry=ExpiryDeadline(0,0,0))))
+            }
+            assertEquals("",group(a).conversation(id)!!.messages.single {it.logicalId==held}.text)
+            assertEquals(OutboxState.SERVER_ACCEPTED,DurableOutbox(a.records,
+                SignalProtocolEngine(a.records),NetworkMailboxTransport(f.client(a),a.state))
+                .process(heldSubmission).state)
+            val mailbox=NetworkMailboxTransport(f.client(b),b.state)
+            val delivery=mailbox.fetch().single()
+            conversations.getValue(b).acceptNetwork(EnvelopeCodec.decode(delivery.encryptedEnvelope))
+            mailbox.acknowledgeAccepted(listOf(delivery.serverMessageId))
+            group(b).processPending()
+            assertEquals("offline timed text",group(b).conversation(id)!!.messages.single {
+                it.logicalId==held}.text)
+            assertEquals("",group(a).conversation(id)!!.messages.single {it.logicalId==held}.text)
+            val stale=heldGroup.sendText(id,"old-head timed text")
+            heldGroup.processPending()
+            val staleOutboxId=heldGroup.conversation(id)!!.messages.single {
+                it.logicalId==stale}.recipients.single().outboxId!!
+            val staleEnvelope=EnvelopeCodec.decode(heldOutbox.get(staleOutboxId).ciphertext)
+            group(a).setGroupDisappearingGoverned(id,300);settle(8)
+            assertEquals(300,group(b).groupInfo(id)!!.disappearingTimer.seconds)
+            conversations.getValue(b).acceptNetwork(staleEnvelope)
+            group(b).processPending()
+            assertTrue(group(b).conversation(id)!!.messages.none {it.logicalId==stale})
+            group(a).setGroupDisappearingGoverned(id,0);settle(8)
+            val later=group(b).sendText(id,"persistent again");settle(5)
+            assertEquals(0,group(a).conversation(id)!!.messages.single {
+                it.logicalId==later}.disappearingSeconds)
+            assertEquals(30,group(a).conversation(id)!!.messages.single {
+                it.logicalId==timed}.disappearingSeconds)
+        }
+    }
     @Test fun governedNewMemberGetsPhotoAfterOriginalEditorIsRemoved() = runBlocking {
         Fixture().use {f ->
             val people=listOf(f.person("alice",true),f.person("bob",true),f.person("charlie",true))
@@ -79,6 +185,9 @@ class NetworkTest {
             settle(8)
             assertEquals(1,group(a).state(id)!!.members.size)
             assertArrayEquals(photo,group(a).groupInfo(id)!!.verifiedPhoto)
+            group(a).setGroupDisappearingGoverned(id,30);settle(4)
+            repos.getValue(a).groupDisappearingPeer(c.registration.deviceId,true)
+            repos.getValue(c).groupDisappearingPeer(a.registration.deviceId,true)
             group(a).invite(id,c.registration.deviceId)
             settle(8)
             assertEquals(1,group(c).invitations().size)
@@ -88,7 +197,27 @@ class NetworkTest {
             assertEquals(2,joined.members.size)
             assertEquals("Family",joined.profile.name)
             assertEquals("Private chat",joined.profile.about)
+            assertEquals(30,joined.disappearingTimer.seconds)
             assertArrayEquals(photo,joined.verifiedPhoto)
+            val checkpoint=NetworkCodec.decode<GroupGovernanceInviteeCheckpointV1>(
+                a.records.read("app/group/governed-admission-v1/checkpoint/$id")!!,1536)
+            val policyProof=NetworkCodec.decode<GroupGovernancePolicyCheckpointV1>(
+                a.records.read("app/group/governance-policy-checkpoint-v1/committed/$id")!!,8192)
+            val profileProof=NetworkCodec.decode<GroupProfileCheckpointV1>(
+                a.records.read("app/group/profile-checkpoint-v1/committed/$id")!!,1200)
+            val timerProof=NetworkCodec.decode<GroupTimerCheckpointV1>(
+                a.records.read("app/group/timer-checkpoint-v1/committed/$id")!!,900)
+            val entry=NetworkCodec.decode<GroupGovernanceEntryV1>(a.records.read(
+                "app/group/governance-journal-v1/$id/entry/${joined.governanceSequence}")!!,8192)
+            val bootstrap=GroupControl(kind=GroupControlKind.GOVERNANCE_BOOTSTRAP_V1,
+                groupId=id,governanceEntryV1=entry,governanceCheckpointV1=checkpoint,
+                governancePolicyCheckpointV1=policyProof,groupProfileCheckpointV1=profileProof,
+                groupTimerCheckpointV1=timerProof)
+            val bootstrapBytes=NetworkCodec.encode(bootstrap).size
+            val bootstrapFrame=ConversationPayload.encodeGroup(bootstrap)
+            assertTrue(bootstrapBytes<=12_000)
+            assertTrue(bootstrapFrame.size<=EnvelopeCodec.MAX_BODY)
+            println("P138_BOOTSTRAP_BYTES=$bootstrapBytes FRAME_BYTES=${bootstrapFrame.size}")
             assertTrue(c.records.keys("app/group/governance-journal-v1/$id/profile/").isEmpty())
             assertNotNull(c.records.read("app/group/profile-checkpoint-v1/join/$id"))
         }
@@ -328,6 +457,34 @@ class NetworkTest {
                 .mediaDeliveryPrepared)
             assertEquals("Crash before preparation",group(b).conversation(id)!!.messages
                 .single {it.logicalId==crashId}.mediaCaption)
+            repos.getValue(a).groupDisappearingPeer(b.registration.deviceId,true)
+            repos.getValue(b).groupDisappearingPeer(a.registration.deviceId,true)
+            group(a).setGroupDisappearingGoverned(id,30);settle(8)
+            val expiringId=heldGroup.sendMedia(id,descriptor,"Expires before retry")
+            heldGroup.processPending()
+            val expiring=heldGroup.conversation(id)!!.messages.single {it.logicalId==expiringId}
+            assertTrue(expiring.mediaDeliveryPrepared)
+            assertNotNull(expiring.expiry)
+            val expiringSubmission=expiring.recipients.single().outboxId!!
+            assertEquals(OutboxState.UPLOAD_PENDING,heldOutbox.get(expiringSubmission).state)
+            a.records.transaction {
+                val key="app/group-text/message/$id/$expiringId"
+                val row=NetworkCodec.decode<GroupChatMessage>(a.records.read(key)!!,8192)
+                a.records.write(key,NetworkCodec.encode(row.copy(expiry=ExpiryDeadline(0,0,0))))
+            }
+            assertEquals(GroupExpiryState.EXPIRED,GroupChatStore(a.records).message(id,expiringId)?.expiryState)
+            assertNull(repos.getValue(a).attachment(id,expiringId))
+            assertEquals(OutboxState.SERVER_ACCEPTED,DurableOutbox(a.records,
+                SignalProtocolEngine(a.records),NetworkMailboxTransport(f.client(a),a.state))
+                .process(expiringSubmission).state)
+            val expiringDelivery=mailbox.fetch().single()
+            conversations.getValue(b).acceptNetwork(EnvelopeCodec.decode(expiringDelivery.encryptedEnvelope))
+            mailbox.acknowledgeAccepted(listOf(expiringDelivery.serverMessageId))
+            group(b).processPending()
+            assertEquals("Expires before retry",group(b).conversation(id)!!.messages.single {
+                it.logicalId==expiringId}.mediaCaption)
+            assertEquals(GroupExpiryState.EXPIRED,group(a).conversation(id)!!.messages.single {
+                it.logicalId==expiringId}.expiryState)
             group(a).deleteOwnText(id,logical);settle(4)
             assertNull(repos.getValue(a).attachment(id,logical))
             assertNull(repos.getValue(b).attachment(id,logical))

@@ -417,11 +417,19 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
             records.write("app/group-profile-v1-peer/$id",byteArrayOf(1))
         else records.remove("app/group-profile-v1-peer/$id")
     }
+    fun groupDisappearingPeer(id:String):Boolean=records.transaction {
+        records.read("app/group-disappearing-v1-peer/$id")?.contentEquals(byteArrayOf(1))==true
+    }
+    fun groupDisappearingPeer(id:String,supported:Boolean,groupScoped:Boolean=false)=records.transaction {
+        if(supported && (isActiveContact(id) || groupScoped))
+            records.write("app/group-disappearing-v1-peer/$id",byteArrayOf(1))
+        else records.remove("app/group-disappearing-v1-peer/$id")
+    }
     fun queueGroupControl(senderId:String,envelopeId:String,control:GroupControl,
         baselineV1Advertised:Boolean=false,governanceV1Advertised:Boolean=false,
         governanceTextV2Advertised:Boolean=false,moderationAdvertised:Boolean=false,
         messageControlsAdvertised:Boolean=false,mediaAdvertised:Boolean=false,
-        profileAdvertised:Boolean=false)=records.transaction {
+        profileAdvertised:Boolean=false,disappearingAdvertised:Boolean=false)=records.transaction {
         require(isActiveContact(senderId) && RandomIdentifiers.valid(envelopeId))
         val keys=records.keys("app/group-control/pending/")
         require(keys.size<128)
@@ -432,7 +440,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 governanceTextV2Advertised=governanceTextV2Advertised,
                 moderationAdvertised=moderationAdvertised,
                 messageControlsAdvertised=messageControlsAdvertised,
-                mediaAdvertised=mediaAdvertised,profileAdvertised=profileAdvertised)))
+                mediaAdvertised=mediaAdvertised,profileAdvertised=profileAdvertised,
+                disappearingAdvertised=disappearingAdvertised)))
     }
     /** Called only after Signal authentication, inside its decrypt-and-commit transaction. */
     fun queueGroupScopedSystem(senderId:String,envelopeId:String,control:GroupControl,
@@ -440,7 +449,7 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         governanceV1Advertised:Boolean=false,
         governanceTextV2Advertised:Boolean=false,moderationAdvertised:Boolean=false,
         messageControlsAdvertised:Boolean=false,mediaAdvertised:Boolean=false,
-        profileAdvertised:Boolean=false)=records.transaction {
+        profileAdvertised:Boolean=false,disappearingAdvertised:Boolean=false)=records.transaction {
         if(isActiveContact(senderId) || !RandomIdentifiers.valid(envelopeId) ||
             !control.kind.blockSafeMaintenance() ||
             GroupCurrentAuthority(records).current(control.groupId,senderId,signalDigest)==null)
@@ -454,7 +463,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 governanceTextV2Advertised=governanceTextV2Advertised,
                 moderationAdvertised=moderationAdvertised,
                 messageControlsAdvertised=messageControlsAdvertised,
-                mediaAdvertised=mediaAdvertised,profileAdvertised=profileAdvertised)))
+                mediaAdvertised=mediaAdvertised,profileAdvertised=profileAdvertised,
+                disappearingAdvertised=disappearingAdvertised)))
         true
     }
     fun pendingGroupControls():List<Pair<String,PendingGroupControl>> = records.transaction {
@@ -484,9 +494,17 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         require(isActiveContact(senderId))
         GroupChatStore(records).queueV3(senderId,envelopeId,value)
     }
+    fun queueGroupTextV4(senderId:String,envelopeId:String,value:GroupTextV4)=records.transaction {
+        require(isActiveContact(senderId))
+        GroupChatStore(records,clock).queueV4(senderId,envelopeId,value)
+    }
     fun queueGroupMedia(senderId:String,envelopeId:String,value:GroupMediaV1)=records.transaction {
         require(isActiveContact(senderId))
         GroupChatStore(records).queueMedia(senderId,envelopeId,value)
+    }
+    fun queueGroupMediaV2(senderId:String,envelopeId:String,value:GroupMediaV2)=records.transaction {
+        require(isActiveContact(senderId))
+        GroupChatStore(records,clock).queueMediaV2(senderId,envelopeId,value)
     }
     fun queueGroupMessageControl(senderId:String,envelopeId:String,value:GroupMessageControlV1)=records.transaction {
         require(isActiveContact(senderId))
@@ -600,7 +618,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                     message.copy(expiry = null).also(::save) else message
             }.filter { it.activeExpiry?.reached(now) == true }
         expired.forEach { delete(it.conversationId, it.localId) }
-        expired.size + expireRequests()
+        expired.size + expireRequests() + GroupChatStore(records,clock).expire(
+            conversationId?.takeIf(GroupIds::valid))
     }
     fun acceptedOutgoing(id: String, localId: String, envelopeId: String? = null,
         transportSubmissionId: String? = null) = records.transaction {
@@ -808,6 +827,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         val group=records.keys("app/group-text/message/").mapNotNull {key ->
             val message=NetworkCodec.decode<GroupChatMessage>(records.read(key) ?: throw EndpointStorageFailure(),8192)
             if(message.mediaKind==null || message.moderationState!=GroupModerationState.NONE ||
+                message.expiryState==GroupExpiryState.EXPIRED ||
+                message.expiry?.reached(clock.now())==true ||
                 !hasAttachment(message.groupId,message.logicalId)) null
             else "${message.groupId}/${message.logicalId}"
         }.toSet()
@@ -826,7 +847,8 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
                 val reference=key.removePrefix("app/attachment/")
                 val id=reference.substringBefore('/'); val localId=reference.substringAfter('/')
                 if(GroupIds.valid(id)) {
-                    if(groupAttachmentAvailable(id,localId)) put(id to localId,null)
+                    if(groupAttachmentAvailable(id,localId))
+                        put(id to localId,GroupChatStore(records,clock).message(id,localId)?.expiry)
                 } else if(id in allowedContacts) {
                     val message=read<Message>("app/message/$id/$localId")
                     if(message!=null && message.activeExpiry?.reached(clock.now())!=true &&
@@ -837,8 +859,10 @@ class LocalRepository(private val records: EndpointRecords, val clock: ExpiryClo
         }
     }
     private fun groupAttachmentAvailable(id:String,localId:String):Boolean {
-        val message=GroupChatStore(records).message(id,localId) ?: return false
+        val message=GroupChatStore(records,clock).message(id,localId) ?: return false
         return message.mediaKind!=null && message.moderationState==GroupModerationState.NONE &&
+            message.expiryState==GroupExpiryState.ACTIVE &&
+            message.expiry?.reached(clock.now())!=true &&
             hasAttachment(id,localId) && (message.outgoing ||
                 message.mediaSenderDeviceId?.let(::isActiveContact)==true)
     }

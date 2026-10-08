@@ -25,7 +25,9 @@ enum class GroupControlKind { INVITE, ACCEPT, INVITE_EXPIRED, STATE_UPDATE, RESY
     GOVERNANCE_TRANSFER_DECISION_V1, GOVERNANCE_INVITE_DELEGATION_V1,
     GOVERNANCE_PROFILE_PROPOSAL_V1, GOVERNANCE_PROFILE_ENTRY_V1,
     GOVERNANCE_PROFILE_ENTRY_ACK_V1, GOVERNANCE_PROFILE_RESYNC_RESPONSE_V1,
-    GOVERNANCE_PROFILE_PHOTO_V1, GOVERNANCE_PROFILE_PHOTO_REQUEST_V1 }
+    GOVERNANCE_PROFILE_PHOTO_V1, GOVERNANCE_PROFILE_PHOTO_REQUEST_V1,
+    GOVERNANCE_TIMER_PROPOSAL_V1, GOVERNANCE_TIMER_ENTRY_V1,
+    GOVERNANCE_TIMER_ENTRY_ACK_V1, GOVERNANCE_TIMER_RESYNC_RESPONSE_V1 }
 
 /** Only internal maintenance is permitted through a blocked canonical group relationship. */
 internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
@@ -53,7 +55,9 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     GroupControlKind.GOVERNANCE_PROFILE_ENTRY_ACK_V1,
     GroupControlKind.GOVERNANCE_PROFILE_RESYNC_RESPONSE_V1,
     GroupControlKind.GOVERNANCE_PROFILE_PHOTO_V1,
-    GroupControlKind.GOVERNANCE_PROFILE_PHOTO_REQUEST_V1)
+    GroupControlKind.GOVERNANCE_PROFILE_PHOTO_REQUEST_V1,
+    GroupControlKind.GOVERNANCE_TIMER_PROPOSAL_V1,GroupControlKind.GOVERNANCE_TIMER_ENTRY_V1,
+    GroupControlKind.GOVERNANCE_TIMER_ENTRY_ACK_V1,GroupControlKind.GOVERNANCE_TIMER_RESYNC_RESPONSE_V1)
 
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable data class GroupControl(
@@ -101,6 +105,10 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceProfileResyncV1:GroupGovernanceProfileResyncResponseV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val groupProfilePhotoV1:GroupProfilePhotoCompanionV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val groupProfilePhotoRequestV1:GroupProfilePhotoRequestV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceTimerEntryV1:GroupGovernanceTimerEntryV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceTimerResyncV1:GroupGovernanceTimerResyncResponseV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val groupTimerCheckpointV1:GroupTimerCheckpointV1?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val groupTimerCheckpointCoordinatorSignatureV1:ByteArray?=null,
 ) {
     override fun toString() = "GroupControl(redacted)"
 }
@@ -114,7 +122,8 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val moderationAdvertised:Boolean=false,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val messageControlsAdvertised:Boolean=false,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val mediaAdvertised:Boolean=false,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) val profileAdvertised:Boolean=false) {
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val profileAdvertised:Boolean=false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val disappearingAdvertised:Boolean=false) {
     override fun toString() = "PendingGroupControl(redacted)"
 }
 
@@ -240,6 +249,18 @@ object GroupControlCodec {
             GroupProfileRulesV1.validCompanion(it))}
         control.groupProfilePhotoRequestV1?.let {require(it.groupId==control.groupId &&
             GroupProfileRulesV1.validPhotoRequest(it))}
+        control.governanceTimerEntryV1?.let {require(it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupDisappearingRulesV1.MAX_ENTRY_BYTES)}
+        control.governanceTimerResyncV1?.let {require(it.groupId==control.groupId &&
+            GroupDisappearingRulesV1.validResync(it))}
+        control.groupTimerCheckpointV1?.let {require(it.groupId==control.groupId &&
+            NetworkCodec.encode(it).size<=GroupTimerCheckpointRulesV1.MAX_BYTES &&
+            control.kind in setOf(GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1,
+                GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_RESPONSE_V1,
+                GroupControlKind.GOVERNANCE_BOOTSTRAP_V1))}
+        control.groupTimerCheckpointCoordinatorSignatureV1?.let {require(
+            control.kind==GroupControlKind.GOVERNANCE_CHECKPOINT_SIGN_REQUEST_V1 &&
+                control.groupTimerCheckpointV1==null && it.size in 8..80)}
         val governanceCount=listOf(control.governanceProposalV1,control.governanceAckV1,
             control.governanceCommitV1,control.governanceInstalledV1,control.governanceReadyV1,
             control.governanceEntryV1,control.governanceEntryAckV1,
@@ -249,7 +270,8 @@ object GroupControlCodec {
             control.ownershipRequestV1,control.ownershipDecisionV1,
             control.inviteDelegationV1,control.governanceProfileEntryV1,
             control.governanceProfileResyncV1,control.groupProfilePhotoV1,
-            control.groupProfilePhotoRequestV1).count {it!=null}
+            control.groupProfilePhotoRequestV1,control.governanceTimerEntryV1,
+            control.governanceTimerResyncV1).count {it!=null}
         val governanceKind=control.kind.name.startsWith("GOVERNANCE_")
         if(control.kind==GroupControlKind.GOVERNANCE_CAPABILITY_ECHO) require(governanceCount==0)
         else if(control.kind==GroupControlKind.GOVERNANCE_BOOTSTRAP_V1) require(governanceCount==2)
@@ -408,6 +430,10 @@ object GroupControlCodec {
             GroupControlKind.GOVERNANCE_PROFILE_RESYNC_RESPONSE_V1,
             GroupControlKind.GOVERNANCE_PROFILE_PHOTO_V1,
             GroupControlKind.GOVERNANCE_PROFILE_PHOTO_REQUEST_V1,
+            GroupControlKind.GOVERNANCE_TIMER_PROPOSAL_V1,
+            GroupControlKind.GOVERNANCE_TIMER_ENTRY_V1,
+            GroupControlKind.GOVERNANCE_TIMER_ENTRY_ACK_V1,
+            GroupControlKind.GOVERNANCE_TIMER_RESYNC_RESPONSE_V1,
             GroupControlKind.GOVERNANCE_CAPABILITY_ECHO -> {
                 require(v2Absent && baselineAbsent && control.inviteId==null && control.state==null &&
                     control.genesis==null && control.admission==null && control.invite==null &&
@@ -443,6 +469,11 @@ object GroupControlCodec {
                     GroupControlKind.GOVERNANCE_PROFILE_PHOTO_V1 -> control.groupProfilePhotoV1!=null
                     GroupControlKind.GOVERNANCE_PROFILE_PHOTO_REQUEST_V1 ->
                         control.groupProfilePhotoRequestV1!=null
+                    GroupControlKind.GOVERNANCE_TIMER_PROPOSAL_V1,
+                    GroupControlKind.GOVERNANCE_TIMER_ENTRY_V1 -> control.governanceTimerEntryV1!=null
+                    GroupControlKind.GOVERNANCE_TIMER_ENTRY_ACK_V1 -> control.governanceEntryAckV1!=null
+                    GroupControlKind.GOVERNANCE_TIMER_RESYNC_RESPONSE_V1 ->
+                        control.governanceTimerResyncV1!=null
                     GroupControlKind.GOVERNANCE_CAPABILITY_ECHO -> governanceCount==0
                     else -> false
                 })

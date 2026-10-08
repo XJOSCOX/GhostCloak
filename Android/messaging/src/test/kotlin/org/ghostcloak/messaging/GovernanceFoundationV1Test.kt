@@ -3,6 +3,7 @@ package org.ghostcloak.messaging
 import org.ghostcloak.crypto.EndpointRecords
 import org.ghostcloak.identity.RandomIdentifiers
 import org.ghostcloak.protocol.DeviceAuth
+import org.ghostcloak.protocol.EnvelopeCodec
 import org.ghostcloak.protocol.NetworkCodec
 import org.junit.Assert.*
 import org.junit.Test
@@ -570,6 +571,38 @@ class GovernanceFoundationV1Test {
         println("P13_7_BOOTSTRAP old=$bootstrapSize profileProof=${NetworkCodec.encode(profileProof).size} new=$profileBootstrapSize frame=$profileFrame headroom=${GroupControlCodec.MAX_BYTES-profileBootstrapSize}")
         assertTrue(profileBootstrapSize<=GroupControlCodec.MAX_BYTES)
         assertTrue(profileFrame<=16_384)
+        val timer=GroupDisappearingPolicyV1(seconds=604800)
+        val timedCheckpointUnsigned=checkpointUnsigned.copy(timerDigest=
+            GroupDisappearingRulesV1.digest(head.activationDigest,timer))
+        val timedCheckpoint=timedCheckpointUnsigned.copy(ownerSignature=sign(f.owner.key,
+            GroupGovernedAdmissionV1.ownerStatement(timedCheckpointUnsigned)),
+            coordinatorSignature=sign(f.owner.key,
+                GroupGovernedAdmissionV1.coordinatorStatement(timedCheckpointUnsigned)))
+        val timedPolicyUnsigned=GroupGovernancePolicyCheckpointRulesV1.unsigned(timedCheckpoint,
+            GroupGovernancePolicyRulesV1.initial(),filter)
+        val timedPolicy=timedPolicyUnsigned.copy(ownerSignature=sign(f.owner.key,
+            GroupGovernancePolicyCheckpointRulesV1.ownerStatement(timedPolicyUnsigned)),
+            coordinatorSignature=sign(f.owner.key,
+                GroupGovernancePolicyCheckpointRulesV1.coordinatorStatement(timedPolicyUnsigned)))
+        val timedProfileUnsigned=GroupProfileCheckpointRulesV1.unsigned(timedCheckpoint,profile)
+        val timedProfile=timedProfileUnsigned.copy(ownerSignature=sign(f.owner.key,
+            GroupProfileCheckpointRulesV1.ownerStatement(timedProfileUnsigned)),
+            coordinatorSignature=sign(f.owner.key,
+                GroupProfileCheckpointRulesV1.coordinatorStatement(timedProfileUnsigned)))
+        val timedTimerUnsigned=GroupTimerCheckpointRulesV1.unsigned(timedCheckpoint,timer)
+        val timedTimer=timedTimerUnsigned.copy(ownerSignature=sign(f.owner.key,
+            GroupTimerCheckpointRulesV1.ownerStatement(timedTimerUnsigned)),
+            coordinatorSignature=sign(f.owner.key,
+                GroupTimerCheckpointRulesV1.coordinatorStatement(timedTimerUnsigned)))
+        assertTrue(GroupTimerCheckpointRulesV1.verify(timedTimer,timedCheckpoint,f.state))
+        val timedBootstrap=bootstrapWithPolicy.copy(governanceCheckpointV1=timedCheckpoint,
+            governancePolicyCheckpointV1=timedPolicy,
+            groupProfileCheckpointV1=timedProfile,groupTimerCheckpointV1=timedTimer)
+        val timedBootstrapSize=GroupControlCodec.encode(timedBootstrap).size
+        val timedFrame=ConversationPayload.encodeGroup(timedBootstrap).size
+        println("P13_8_FIVE_MEMBER_BOOTSTRAP=$timedBootstrapSize frame=$timedFrame headroom=${GroupControlCodec.MAX_BYTES-timedBootstrapSize}")
+        assertTrue(timedBootstrapSize<=GroupControlCodec.MAX_BYTES)
+        assertTrue(timedFrame<=EnvelopeCodec.MAX_BODY)
     }
 
     @Test fun groupTextV2BindsExactHeadAndFitsEncryptedContentLimit() {

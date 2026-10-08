@@ -389,7 +389,7 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                         maintenance.supportsGovernanceTextV2,
                         maintenance.supportsGroupModeration,
                         maintenance.supportsGroupMessageControls,maintenance.supportsGroupMedia,
-                        maintenance.supportsGroupProfile)
+                        maintenance.supportsGroupProfile,maintenance.supportsGroupDisappearing)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
             }
             return@action
@@ -418,10 +418,22 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
+            if(content.groupTextV4!=null) {
+                if(!contact.request && repository.isActiveContact(contact.remoteDeviceId))
+                    repository.queueGroupTextV4(contact.remoteDeviceId,envelope.envelopeId,content.groupTextV4)
+                repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
+                return@decryptAndCommit
+            }
             if(content.groupMedia!=null) {
                 if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
                     repository.isActiveContact(contact.remoteDeviceId))
                     repository.queueGroupMedia(contact.remoteDeviceId,envelope.envelopeId,content.groupMedia)
+                repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
+                return@decryptAndCommit
+            }
+            if(content.groupMediaV2!=null) {
+                if(!contact.request && repository.isActiveContact(contact.remoteDeviceId))
+                    repository.queueGroupMediaV2(contact.remoteDeviceId,envelope.envelopeId,content.groupMediaV2)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
@@ -443,13 +455,14 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                         content.groupControl,content.supportsBaselineV1,content.supportsGovernanceV1,
                         content.supportsGovernanceTextV2,content.supportsGroupModeration,
                         content.supportsGroupMessageControls,content.supportsGroupMedia,
-                        content.supportsGroupProfile)
+                        content.supportsGroupProfile,content.supportsGroupDisappearing)
                 } else if(content.groupControl.kind.blockSafeMaintenance() && scopedDigest!=null) {
                     repository.queueGroupScopedSystem(contact.remoteDeviceId,envelope.envelopeId,
                         content.groupControl,scopedDigest,content.supportsBaselineV1,
                         content.supportsGovernanceV1,content.supportsGovernanceTextV2,
                         content.supportsGroupModeration,content.supportsGroupMessageControls,
-                        content.supportsGroupMedia,content.supportsGroupProfile)
+                        content.supportsGroupMedia,content.supportsGroupProfile,
+                        content.supportsGroupDisappearing)
                 }
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit

@@ -21,6 +21,8 @@ data class GroupInfo(
     val profile:GroupProfileV1=GroupProfileV1(),val verifiedPhoto:ByteArray?=null,
     val photoPending:Boolean=false,val profileCapable:Boolean=false,
     val governanceSequence:Long=0,val governanceHeadDigest:ByteArray?=null,
+    val disappearingTimer:GroupDisappearingPolicyV1=GroupDisappearingPolicyV1(),
+    val disappearingCapable:Boolean=false,
 ) {
     val active get()=status==GroupLocalStatus.ACTIVE
     val ready get()=active && managementStatus==GroupManagementStatus.READY
@@ -30,6 +32,7 @@ data class GroupInfo(
         managementStatus in setOf(GroupManagementStatus.NOT_CONFIGURED,GroupManagementStatus.READY) &&
         localRole in setOf(GroupRole.OWNER,GroupRole.ADMIN)
     val canChangePosting get()=canManage && localRole in setOf(GroupRole.OWNER,GroupRole.ADMIN)
+    val canChangeDisappearing get()=canManage && localRole in setOf(GroupRole.OWNER,GroupRole.ADMIN)
     val canModerate get()=canManage && moderationCapable &&
         localRole in setOf(GroupRole.OWNER,GroupRole.ADMIN)
     val canUseMessageControls get()=ready && messageControlsCapable && !pending

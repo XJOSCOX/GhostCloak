@@ -24,6 +24,7 @@ import org.ghostcloak.messaging.GroupLocalStatus
 import org.ghostcloak.messaging.GroupRecipientState
 import org.ghostcloak.messaging.GroupTextCodec
 import org.ghostcloak.messaging.GroupModerationState
+import org.ghostcloak.messaging.GroupExpiryState
 import org.ghostcloak.identity.IdentityTrustState
 import org.ghostcloak.identity.SessionLifecycle
 import org.ghostcloak.attachments.AttachmentKind
@@ -56,7 +57,8 @@ import org.ghostcloak.messaging.DownloadPreference
     if(confirmingSenderDelete!=null && !canUseControls) confirmingSenderDelete=null
     if(selectedMessage!=null) ModalBottomSheet(onDismissRequest={selectedMessage=null}) {
         val target=group.messages.firstOrNull {it.logicalId==selectedMessage}
-        if(target!=null && target.moderationState==GroupModerationState.NONE) {
+        if(target!=null && target.moderationState==GroupModerationState.NONE &&
+            target.expiryState==GroupExpiryState.ACTIVE) {
             if(canUseControls && canSend) TextButton(onClick={
                 replyingTo=target.logicalId;editing=null;selectedMessage=null
             },modifier=Modifier.fillMaxWidth().testTag("group-reply-action")) {Text("Reply")}
@@ -222,7 +224,8 @@ import org.ghostcloak.messaging.DownloadPreference
                 Column(Modifier.fillMaxWidth(),horizontalAlignment=if(message.outgoing) Alignment.End else Alignment.Start) {
                     Surface(modifier=Modifier.combinedClickable(onClick={},onLongClick={
                         if((canModerate || canUseControls) &&
-                            message.moderationState==GroupModerationState.NONE)
+                            message.moderationState==GroupModerationState.NONE &&
+                            message.expiryState==GroupExpiryState.ACTIVE)
                             selectedMessage=message.logicalId
                     }),color=if(message.outgoing) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.surface,shape=MaterialTheme.shapes.large) {
@@ -242,9 +245,11 @@ import org.ghostcloak.messaging.DownloadPreference
                                     GroupModerationState.REMOVED_BY_ADMIN -> "Message removed by an admin"
                                     GroupModerationState.DELETED_BY_SENDER -> "Original message deleted"
                                     GroupModerationState.NONE -> if(original.mediaKind!=null)
-                                        groupMediaLabel(original) + original.mediaCaption?.takeIf {it.isNotBlank()}
+                                        if(original.expiryState==GroupExpiryState.EXPIRED)
+                                            "Original message expired" else groupMediaLabel(original) + original.mediaCaption?.takeIf {it.isNotBlank()}
                                             ?.let {": ${it.take(60)}"}.orEmpty()
-                                        else original.text.take(80)
+                                        else if(original.expiryState==GroupExpiryState.EXPIRED)
+                                            "Original message expired" else original.text.take(80)
                                     null -> "Original message unavailable"
                                 }
                                 val label=if(original?.outgoing==true) "You" else
@@ -258,20 +263,24 @@ import org.ghostcloak.messaging.DownloadPreference
                                     color=if(message.outgoing) MaterialTheme.colorScheme.onPrimary
                                     else MaterialTheme.colorScheme.onSurfaceVariant)
                             }
-                            if(message.moderationState==GroupModerationState.NONE && message.mediaKind!=null)
+                            if(message.moderationState==GroupModerationState.NONE &&
+                                message.expiryState==GroupExpiryState.ACTIVE && message.mediaKind!=null)
                                 GroupMediaContent(group.groupId,message,active)
                             else Text(if(message.moderationState==GroupModerationState.REMOVED_BY_ADMIN)
                                 "Message removed by an admin" else if(message.moderationState==
-                                GroupModerationState.DELETED_BY_SENDER) "This message was deleted" else message.text,
+                                GroupModerationState.DELETED_BY_SENDER) "This message was deleted" else if(
+                                message.expiryState==GroupExpiryState.EXPIRED) "Message expired" else message.text,
                                 color=if(message.outgoing) MaterialTheme.colorScheme.onPrimary
                                 else MaterialTheme.colorScheme.onSurface)
-                            if(message.moderationState==GroupModerationState.NONE && message.editRevision>0)
+                            if(message.moderationState==GroupModerationState.NONE &&
+                                message.expiryState==GroupExpiryState.ACTIVE && message.editRevision>0)
                                 Text("Edited",style=MaterialTheme.typography.labelSmall,
                                     color=if(message.outgoing) MaterialTheme.colorScheme.onPrimary
                                     else MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-                    if(message.moderationState==GroupModerationState.NONE && message.reactions.isNotEmpty())
+                    if(message.moderationState==GroupModerationState.NONE &&
+                        message.expiryState==GroupExpiryState.ACTIVE && message.reactions.isNotEmpty())
                         Row(horizontalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
                             message.reactions.forEach {badge ->
                                 Text("${badge.emoji} ${badge.count}",style=MaterialTheme.typography.labelSmall,
@@ -306,6 +315,13 @@ import org.ghostcloak.messaging.DownloadPreference
         if(active && sendRestriction==null) Surface(color=MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxWidth().padding(horizontal=GhostLayout.pageInset,
                 vertical=GhostDimensions.controlGap),verticalArrangement=Arrangement.spacedBy(GhostDimensions.compact)) {
+                val timer=group.info?.disappearingTimer?.seconds ?: 0
+                if(timer>0) Text("Disappearing messages · "+when(timer) {
+                    30 -> "30 seconds";300 -> "5 minutes";3600 -> "1 hour"
+                    86400 -> "1 day";604800 -> "1 week";else -> "On"
+                },style=MaterialTheme.typography.labelSmall,
+                    color=MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier=Modifier.testTag("group-disappearing-indicator"))
                 if(replyingTo!=null || editing!=null) Row(Modifier.fillMaxWidth(),
                     verticalAlignment=Alignment.CenterVertically) {
                     val target=group.messages.firstOrNull {it.logicalId==(editing ?: replyingTo)}

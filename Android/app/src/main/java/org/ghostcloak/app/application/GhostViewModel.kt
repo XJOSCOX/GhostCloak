@@ -206,6 +206,9 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun setGroupPostingMode(id:String,mode:GroupPostingModeV1)=groupManagementAction {
         runtime.setGroupPostingMode(id,mode)
     }
+    fun setGroupDisappearing(id:String,seconds:Int)=groupManagementAction {
+        runtime.setGroupDisappearing(id,seconds)
+    }
     fun setGroupProfile(id:String,head:ByteArray,name:String,about:String,
         photo:org.ghostcloak.messaging.GroupProfilePhotoRefV1?,bytes:ByteArray?)=
         groupManagementAction {

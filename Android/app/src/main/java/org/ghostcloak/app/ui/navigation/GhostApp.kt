@@ -176,6 +176,7 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             leave={model.leaveGroup(id)},dissolve={model.dissolveGroup(id)},
                             invite={model.inviteToGroup(id,it)},
                             openChat={nav.navigate("conversation/$it")},
+                            disappearing={model.setGroupDisappearing(id,it)},
                             saveProfile={head,name,about,photo,bytes ->
                                 model.setGroupProfile(id,head,name,about,photo,bytes)
                             }

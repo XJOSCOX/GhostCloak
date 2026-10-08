@@ -1,5 +1,6 @@
 package org.ghostcloak.app.application
 
+import org.ghostcloak.attachments.AttachmentKind
 import org.ghostcloak.messaging.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -23,5 +24,22 @@ class ExpiredContentTest {
             val visible = state.withoutExpired(now)
             assertTrue(visible.messages.isEmpty()); assertTrue(visible.previews.isEmpty()); assertEquals(1, visible.unreadCount)
         }
+    }
+    @Test fun staleGroupSnapshotScrubsExpiredTextAndMediaBeforeDisplay() {
+        val deadline = ExpiryDeadline(1000, 2000, 1)
+        val message = GroupChatMessage("group", "message", 1, "sender", false, "private text", 1,
+            mediaKind = AttachmentKind.IMAGE, mediaCaption = "private caption",
+            mediaFilename = "private.jpg", expiry = deadline, disappearingSeconds = 30,
+            reactions = listOf(GroupReactionBadge("👍", 1, false)))
+        val group = GroupMembershipTransport.Conversation("group", GroupLocalStatus.ACTIVE, 2,
+            emptyMap(), listOf(message))
+        val state = AppState(groups = listOf(group))
+        assertEquals(1, state.nextExpiryUiDelay(ExpiryMoment(999, 1999, 1)))
+        val visible = state.withoutExpired(ExpiryMoment(1000, 100, 1)).groups.single().messages.single()
+        assertEquals(GroupExpiryState.EXPIRED, visible.expiryState)
+        assertEquals("", visible.text)
+        assertNull(visible.mediaCaption)
+        assertNull(visible.mediaFilename)
+        assertTrue(visible.reactions.isEmpty())
     }
 }

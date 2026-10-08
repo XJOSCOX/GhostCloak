@@ -316,6 +316,8 @@ class NetworkController(
     }
     suspend fun setGroupPostingMode(id:String,mode:org.ghostcloak.messaging.GroupPostingModeV1)=
         operation(NetworkOperation.SEND) {groups.setPostingModeGoverned(id,mode)}
+    suspend fun setGroupDisappearing(id:String,seconds:Int)=
+        operation(NetworkOperation.SEND) {groups.setGroupDisappearingGoverned(id,seconds)}
     suspend fun setGroupProfile(id:String,head:ByteArray,name:String,about:String,
         photo:org.ghostcloak.messaging.GroupProfilePhotoRefV1?,bytes:ByteArray?)=
         operation(NetworkOperation.SEND) {groups.setGroupProfileGoverned(id,head,name,about,photo,bytes)}

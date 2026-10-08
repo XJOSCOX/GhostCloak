@@ -37,11 +37,21 @@ class GroupInfoActions(
     val transfer:(String)->Unit, val transferDecision:(Boolean)->Unit,
     val leave:()->Unit, val dissolve:()->Unit, val invite:(String)->Unit,
     val openChat:(String)->Unit,
+    val disappearing:(Int)->Unit={},
     val saveProfile:(ByteArray,String,String,GroupProfilePhotoRefV1?,ByteArray?)->Unit={_,_,_,_,_->},
 )
 
 private enum class MemberAction { RESTRICT, UNRESTRICT, REMOVE, PROMOTE, DEMOTE, TRANSFER }
-private enum class GroupInfoPage { OVERVIEW, MEMBER, CONFIRM_MEMBER, POSTING, INVITE, CONFIRM_LEAVE, CONFIRM_END, EDIT_PROFILE }
+private enum class GroupInfoPage { OVERVIEW, MEMBER, CONFIRM_MEMBER, POSTING, DISAPPEARING, CONFIRM_DISAPPEARING, INVITE, CONFIRM_LEAVE, CONFIRM_END, EDIT_PROFILE }
+private fun timerLabel(seconds:Int)=when(seconds) {
+    0 -> "Off"
+    30 -> "30 seconds"
+    300 -> "5 minutes"
+    3600 -> "1 hour"
+    86400 -> "1 day"
+    604800 -> "1 week"
+    else -> "Unavailable"
+}
 private fun GroupInfoMember.label(state:AppState):String = if(isLocal) "You" else
     state.contacts.firstOrNull {it.contact.remoteDeviceId==deviceId &&
         !it.contact.request}?.contact?.visibleName ?: "Group member"
@@ -67,6 +77,7 @@ private fun GroupManagementStatus.description()=when(this) {
     var page by remember(info.groupId) {mutableStateOf(GroupInfoPage.OVERVIEW)}
     var selectedMemberId by remember(info.groupId) {mutableStateOf<String?>(null)}
     var selectedAction by remember(info.groupId) {mutableStateOf<MemberAction?>(null)}
+    var selectedTimerSeconds by remember(info.groupId) {mutableStateOf<Int?>(null)}
     var draftName by remember(info.groupId) {mutableStateOf("")}
     var draftAbout by remember(info.groupId) {mutableStateOf("")}
     var draftHead by remember(info.groupId) {mutableStateOf<ByteArray?>(null)}
@@ -105,6 +116,7 @@ private fun GroupManagementStatus.description()=when(this) {
         page=when(page) {
             GroupInfoPage.OVERVIEW -> {back();GroupInfoPage.OVERVIEW}
             GroupInfoPage.CONFIRM_MEMBER -> GroupInfoPage.MEMBER
+            GroupInfoPage.CONFIRM_DISAPPEARING -> GroupInfoPage.DISAPPEARING
             else -> GroupInfoPage.OVERVIEW
         }
     }
@@ -165,8 +177,9 @@ private fun GroupManagementStatus.description()=when(this) {
     }
     val transferRequest=state.groupOwnershipRequests.firstOrNull {it.groupId==info.groupId}
     if(page!=GroupInfoPage.OVERVIEW) {
-        GroupInfoDetailPage(state,info,page,selected,selectedAction,busy,goBack,
+        GroupInfoDetailPage(state,info,page,selected,selectedAction,selectedTimerSeconds,busy,goBack,
             onPage={page=it},onAction={selectedAction=it;page=GroupInfoPage.CONFIRM_MEMBER},
+            onTimerSelect={selectedTimerSeconds=it;page=GroupInfoPage.CONFIRM_DISAPPEARING},
             actions=actions)
         return
     }
@@ -256,6 +269,21 @@ private fun GroupManagementStatus.description()=when(this) {
                     }
                 }
             }
+            if(info.ready) item {
+                Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surface) {
+                    Row(Modifier.fillMaxWidth().clickable(enabled=info.canChangeDisappearing && !busy) {
+                        page=GroupInfoPage.DISAPPEARING
+                    }.padding(16.dp).testTag("group-disappearing-timer"),
+                        verticalAlignment=Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Disappearing messages",style=MaterialTheme.typography.titleMedium)
+                            Text(timerLabel(info.disappearingTimer.seconds),
+                                color=MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if(info.canChangeDisappearing) Text("Change",color=MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
             item {Text("Members",style=MaterialTheme.typography.titleMedium)}
             items(info.members,key={it.memberId}) {member ->
                 Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surface) {
@@ -298,12 +326,15 @@ private fun GroupManagementStatus.description()=when(this) {
 }
 
 @Composable private fun GroupInfoDetailPage(state:AppState,info:GroupInfo,page:GroupInfoPage,
-    member:GroupInfoMember?,action:MemberAction?,busy:Boolean,back:()->Unit,
-    onPage:(GroupInfoPage)->Unit,onAction:(MemberAction)->Unit,actions:GroupInfoActions) {
+    member:GroupInfoMember?,action:MemberAction?,selectedTimerSeconds:Int?,busy:Boolean,back:()->Unit,
+    onPage:(GroupInfoPage)->Unit,onAction:(MemberAction)->Unit,onTimerSelect:(Int)->Unit,
+    actions:GroupInfoActions) {
     val title=when(page) {
         GroupInfoPage.MEMBER -> member?.label(state) ?: "Group member"
         GroupInfoPage.CONFIRM_MEMBER -> "Confirm change"
         GroupInfoPage.POSTING -> "Who can send messages"
+        GroupInfoPage.DISAPPEARING -> "Disappearing messages"
+        GroupInfoPage.CONFIRM_DISAPPEARING -> "Change disappearing messages?"
         GroupInfoPage.INVITE -> "Add member"
         GroupInfoPage.CONFIRM_LEAVE -> "Leave group"
         GroupInfoPage.CONFIRM_END -> "End group"
@@ -392,6 +423,35 @@ private fun GroupManagementStatus.description()=when(this) {
                             if(mode!=info.postingMode) actions.posting(mode)
                         }
                     }
+                }
+                GroupInfoPage.DISAPPEARING -> {
+                    item {Text("Messages disappear from each member's device after its local timer. Changing this setting does not change older messages.",
+                        color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                    if(!info.disappearingCapable) item {Text(
+                        "Disappearing messages become available after everyone updates Ghost Cloak.",
+                        color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                    items(listOf(0,30,300,3600,86400,604800)) {seconds ->
+                        GroupInfoOption(timerLabel(seconds)+if(seconds==info.disappearingTimer.seconds)
+                            " · Current" else "",!busy && (seconds==0 || info.disappearingCapable)) {
+                            if(seconds!=info.disappearingTimer.seconds) onTimerSelect(seconds)
+                        }
+                    }
+                }
+                GroupInfoPage.CONFIRM_DISAPPEARING -> if(selectedTimerSeconds!=null) {
+                    item {GroupInfoExplanation("Change disappearing messages?",
+                        if(selectedTimerSeconds==0)
+                            "New messages will no longer disappear automatically. Existing disappearing messages keep their current expiry."
+                        else "New messages will use this timer. Existing messages keep the timer they already have.")}
+                    item {Button(onClick={
+                        onPage(GroupInfoPage.OVERVIEW)
+                        actions.disappearing(selectedTimerSeconds)
+                    },enabled=!busy && info.canChangeDisappearing &&
+                        (selectedTimerSeconds==0 || info.disappearingCapable) &&
+                        selectedTimerSeconds!=info.disappearingTimer.seconds,
+                        modifier=Modifier.fillMaxWidth().testTag("group-confirm-timer")) {
+                        Text("Set ${timerLabel(selectedTimerSeconds)}")
+                    }}
+                    item {OutlinedButton(onClick=back,modifier=Modifier.fillMaxWidth()) {Text("Cancel")}}
                 }
                 GroupInfoPage.EDIT_PROFILE -> Unit
                 GroupInfoPage.INVITE -> {

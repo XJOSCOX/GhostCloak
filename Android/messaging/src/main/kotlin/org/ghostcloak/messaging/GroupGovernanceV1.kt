@@ -222,6 +222,21 @@ internal object GroupGovernanceV1 {
         require(GroupStatements.verify(member.authPublicKey,appliedStatement(value),value.signature))
         true
     }.getOrDefault(false)
+    fun unsignedTimerApplied(entry:GroupGovernanceTimerEntryV1,memberId:String)=
+        GroupGovernanceEntryAppliedAckV1(groupId=entry.groupId,
+            activationDigest=entry.activationDigest,sequence=entry.sequence,
+            entryDigest=GroupDisappearingRulesV1.entryDigest(entry),
+            memberId=memberId,signature=byteArrayOf())
+    fun verifyTimerApplied(value:GroupGovernanceEntryAppliedAckV1,
+        entry:GroupGovernanceTimerEntryV1,state:GroupState):Boolean=runCatching {
+        require(value.version==1 && value.groupId==entry.groupId &&
+            same(value.activationDigest,entry.activationDigest) && value.sequence==entry.sequence &&
+            same(value.entryDigest,GroupDisappearingRulesV1.entryDigest(entry)) &&
+            NetworkCodec.encode(value).size<=MAX_ACK_BYTES)
+        val member=state.members.single {it.memberId==value.memberId}
+        require(GroupStatements.verify(member.authPublicKey,appliedStatement(value),value.signature))
+        true
+    }.getOrDefault(false)
 }
 
 @Serializable internal data class PendingGovernanceActivationV1(
@@ -239,6 +254,10 @@ internal object GroupGovernanceV1 {
 )
 @Serializable internal data class PendingGovernanceProfileEntryV1(
     val entry:GroupGovernanceProfileEntryV1,
+    val applied:List<GroupGovernanceEntryAppliedAckV1> = emptyList(),
+)
+@Serializable internal data class PendingGovernanceTimerEntryV1(
+    val entry:GroupGovernanceTimerEntryV1,
     val applied:List<GroupGovernanceEntryAppliedAckV1> = emptyList(),
 )
 
@@ -295,6 +314,16 @@ internal class GroupGovernanceStore(private val records:EndpointRecords) {
     fun profileOutstandingGroups()=records.transaction {
         records.keys("app/group/governance-v1/profile-entry/").take(64)
             .map {it.removePrefix("app/group/governance-v1/profile-entry/")}.filter(GroupIds::valid)
+    }
+    fun timerOutstanding(id:String)=read<PendingGovernanceTimerEntryV1>(id,"timer-entry",MAX_PENDING)
+    fun saveTimerOutstanding(value:PendingGovernanceTimerEntryV1) {
+        require(value.applied.size<=GroupStatements.MAX_MEMBERS)
+        write(value.entry.groupId,"timer-entry",value,MAX_PENDING)
+    }
+    fun clearTimerOutstanding(id:String)=records.transaction {records.remove(key(id,"timer-entry"))}
+    fun timerOutstandingGroups()=records.transaction {
+        records.keys("app/group/governance-v1/timer-entry/").take(64)
+            .map {it.removePrefix("app/group/governance-v1/timer-entry/")}.filter(GroupIds::valid)
     }
     fun clearSent(id:String,phase:String)=records.transaction {
         require((phase.startsWith("checkpoint-") && GroupIds.valid(phase.removePrefix("checkpoint-"))) ||

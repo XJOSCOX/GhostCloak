@@ -1,10 +1,10 @@
 # P13 final acceptance record
 
-Status: **NO-GO for P13 release completion** until the five-member and
-restart/offline checks below are recorded on the final reviewed build. Group
-unread indication is implemented and locally verified, but it does not close
-those acceptance gaps. This is
-an assurance status, not a request to reset any existing account or group.
+Status: **P13 COMPLETE — GO** for the agreed acceptance scope as of 2026-10-09.
+The final clean-build replay and the user's physical-development-build checks
+are recorded under "Final P13 signoff" below. Earlier NO-GO statements in this
+record describe the state at those dated checkpoints; they are not the final
+release decision. This signoff does not declare R1 or the V1 release candidate GO.
 
 ## Current implementation
 
@@ -730,3 +730,46 @@ restart/offline matrix and clean-build physical/emulated replay have passing
 records. Never repair a fork by choosing a winner, accept stale-head content,
 reconstruct an incomplete journal, clear A/C data, or add server group state
 as a polish workaround.
+
+## Final P13 signoff (2026-10-09)
+
+The P13 implementation commit is `7a337ec5d575bd11ac484c36a9eba6aae9bf2be2`,
+pushed to `origin/main`. A separate, clean checkout at that exact commit passed
+strict dependency verification with `:app:assembleSecurityReviewed` (debug and
+release assembly and JVM gates), `:app:assembleDebugAndroidTest`, and
+`:app:lintDebug`. The clean run reported 311 test-support JVM tests, 125 app
+debug JVM tests, and 118 app release JVM tests, with zero failures or skips.
+The focused `GroupInvitationScreenTest`, `GroupInfoScreenTest`, and
+`MessengerDesignTest` Android instrumentation run passed 37 tests on a
+disposable emulator. The generated build provenance was
+`GIT_SHA=7a337ec5d575bd11ac484c36a9eba6aae9bf2be2` and
+`GIT_DIRTY=false`. The reviewed debug APK SHA-256 was
+`C99CCD1FF99A6B9239DBF8BE2240D7BE1ACDA81B52EE9036AF6E096DB55E65DA`.
+
+That clean APK was installed in place on one connected Samsung SM-S938U1 phone
+and five disposable emulators, without uninstalling or clearing app data.
+Settings → Build information on the phone showed source `7a337ec5d575` and
+`Clean source build`. The phone-owned group showed five active members and
+`Group management is ready`; its four emulator members retained the same
+group. A marked group message sent from emulator `5554` reached the physical
+phone, and a marked reply sent from the phone reached emulator `5554`; the
+sender reported `Sent to 4` for each. The clean-build replay therefore passed
+five-member state persistence and bidirectional group delivery on the agreed
+one-phone-plus-four-emulator setup.
+
+The user separately reported that photo/document/voice media, member controls,
+offline/restart behavior, Block, and Safe Exit passed on two physical phones
+running the same modified development source. The exact SHA for those earlier
+phone checks and a test-by-test device log were not provided, so they remain
+user-reported development-build evidence. The extensive five-emulator and
+focused interruption checks above provide additional recorded evidence. The
+second physical phone was not available for a clean-build replay. The user
+explicitly accepted the one-phone-plus-four-emulator clean replay, together
+with the earlier physical checks, as sufficient for the **P13 GO** gate.
+
+This decision closes P13, not the broader security/reliability or production
+release gates. R1 must evaluate its own blockers independently; any newly
+found HIGH/CRITICAL issue reopens the relevant release decision. The Android
+Studio checkout remains the normal development/test workspace and retains its
+unrelated local edits, so its debug builds continue to be labeled modified
+development builds.

@@ -45,6 +45,26 @@ Source anchors: `Android/storage/src/main/kotlin/org/ghostcloak/storage/Encrypte
 ## Initial release-surface checks (R1.3–R1.5, incomplete)
 
 A source search across Android `main`/`release`, transport, messaging, crypto, storage and backend production Kotlin found only the fixed-enum Safe Exit recovery `Log.i` calls in the Android production source sets; `PhotoDiagnostics` and `DocumentDiagnostics` are no-op in the release source set. This is not yet a complete sensitive-data-flow audit of exception strings, libraries, generated code or runtime logs. The clean release merged manifest was inspected, not merely the source manifest. Its non-app exported WorkManager/ProfileInstaller components have signature/system-level binding permissions as noted above. The release merge retains `allowBackup=false`, `usesCleartextTraffic=false` and the explicit extraction/backup exclusions. No immediate exported-component or explicit production-logging blocker was found in this preliminary pass; URI-grant and actual-device attempts remain open.
+
+## HIGH finding R1-STORAGE-01: existing database reinitialization
+
+**Historical severity: HIGH. Status: FIXED in the focused R1 storage change; R1 overall remains in progress.** An existing endpoint could retain its Android Keystore alias and wrapped SQLCipher secret while its database file was truncated to zero or one byte. Before the fix, Room/SQLCipher accepted those tiny files and initialized a fresh schema, so higher layers could see an absent identity and treat a damaged existing account as new. The protected-store initialization contract is:
+
+| Keystore alias | Wrapped secret | Database path | Outcome |
+| --- | --- | --- | --- |
+| absent | absent | absent | New endpoint initialization permitted |
+| present | present | present | Existing endpoint; validate and open |
+| present | present | absent | Fail closed; no implicit recovery |
+| present | absent | present | Fail closed; no implicit recovery |
+| present | absent | absent | Fail closed; no implicit recovery |
+| absent | present | present | Fail closed; no implicit recovery |
+| absent | present | absent | Fail closed; no implicit recovery |
+| absent | absent | present | Fail closed; no implicit recovery |
+
+Before opening an existing database, `EncryptedEndpointStore` now requires the database path to be a regular file of at least 512 bytes. SQLite's minimum page size is 512 bytes; the correctly initialized, logically empty SQLCipher fixture measured 16,384 bytes on the test emulator. The conservative threshold rejects tiny files before Room may create schema without assuming every supported database has the emulator's observed size. SQLite corruption exceptions from record reads, writes, deletes and key scans are mapped to `EndpointStorageFailure`, as transaction/open failures already were. Detection does not delete or rewrite the corrupt database, wrapped secret or Keystore alias.
+
+The disposable-emulator storage regression covers lengths 0, 1, 16, 128, 511, 512, 1,024, half the original file and original minus one byte; same-size random bytes; first-byte and later-byte flips; repeated opens; valid logically empty database reopen; a directory at the database path; and existing identity/ratchet and wrapped-secret cases. The later-byte flip was not rejected at initial open, but its first authenticated identity read failed and mapped to `EndpointStorageFailure`; an arbitrary byte flip in unused encrypted file space may remain undetected while all protected records are intact. A separate app-runtime fixture proves an existing identity with an emptied database cannot reach the normal `ConversationService.open()` path; another creates and reopens a fresh identity. Strict dependency verification passed throughout. Full `EndpointStorageTest`: 14/14; focused app-runtime tests: 2/2; attachment instrumentation: 18/18. JVM: messaging 83/83, test-support 311/311, app debug 125/125, app release 118/118. Debug and release assembly and `lintDebug` passed from the development checkout. A separate clean-source reviewed-build check is still required for formal release provenance.
+
 ## Remaining R1 work
 
 R1.3–R1.66 in the approved brief remain open, including logging/privacy, exported/URI tests, corruption and crash injection, direct/group adversarial cases, backend authorization, isolated PostgreSQL, release build, dependency review, accessibility, and full test accounting. Classify any finding before fixing it; a HIGH/CRITICAL issue or other stated R1 stop condition blocks R1 GO and the V1 release candidate.

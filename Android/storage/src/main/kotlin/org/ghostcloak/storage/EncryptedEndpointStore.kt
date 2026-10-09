@@ -41,16 +41,17 @@ enum class KeyProtection { HARDWARE, SOFTWARE }
 /** Construct off-main. One open store/engine per endpoint; caller closes when done. */
 class EncryptedEndpointStore private constructor(private val db: EndpointDatabase,
     val protection: KeyProtection, private val databaseSecret: ByteArray, private val access: LocalStateAccess?) : EndpointRecords, AutoCloseable {
-    override fun <T> transaction(block: () -> T): T = try { guarded { db.runInTransaction(Callable { block() }) } }
-        catch (e: android.database.sqlite.SQLiteException) { throw EndpointStorageFailure() }
+    override fun <T> transaction(block: () -> T): T = storageOperation { db.runInTransaction(Callable { block() }) }
     private fun <T> guarded(block: () -> T): T = if (access != null) access.access(block) else block()
-    override fun read(key: String) = guarded { db.records().read(key) }
-    override fun write(key: String, value: ByteArray) = guarded {
+    private fun <T> storageOperation(block: () -> T): T = try { guarded(block) }
+        catch (e: android.database.sqlite.SQLiteException) { throw EndpointStorageFailure() }
+    override fun read(key: String) = storageOperation { db.records().read(key) }
+    override fun write(key: String, value: ByteArray) = storageOperation {
         val copy = value.copyOf()
         try { db.records().put(SecretRecord(key, copy)) } finally { copy.fill(0) }
     }
-    override fun remove(key: String) = guarded { db.records().remove(key) }
-    override fun keys(prefix: String) = guarded {
+    override fun remove(key: String) = storageOperation { db.records().remove(key) }
+    override fun keys(prefix: String) = storageOperation {
         // Record namespaces use ASCII. A bounded primary-key range avoids reading
         // every encrypted record name for each conversation or group lookup.
         // Retain the exact prefix semantics for empty/non-ASCII callers.
@@ -81,12 +82,19 @@ class EncryptedEndpointStore private constructor(private val db: EndpointDatabas
             val file = File(context.noBackupFilesDir, "$endpoint.wrapped")
             val databaseFile = File(context.noBackupFilesDir, "$endpoint.db")
             val keystore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            if (keystore.containsAlias(alias) && (!file.exists() || !databaseFile.exists())) {
+            val existing = keystore.containsAlias(alias)
+            if (existing && (!file.exists() || !databaseFile.exists())) {
                 // Includes interrupted initialization; recovery must be explicit, never identity replacement.
                 throw EndpointStorageFailure()
             }
+            if (existing && (!databaseFile.isFile || databaseFile.length() < 512L)) {
+                // SQLiteOpenHelper can initialize a tiny existing file as a new database.
+                // 512 bytes is SQLite's minimum page size; an initialized SQLCipher
+                // database cannot be smaller. Reject before Room can recreate schema.
+                throw EndpointStorageFailure()
+            }
             // Never silently regenerate a missing key for existing state.
-            if (!keystore.containsAlias(alias)) {
+            if (!existing) {
                 if (file.exists() || databaseFile.exists()) throw EndpointStorageFailure()
                 KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
                     init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)

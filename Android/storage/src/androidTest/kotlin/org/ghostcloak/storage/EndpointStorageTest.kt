@@ -118,6 +118,70 @@ class EndpointStorageTest {
         catch (expected: EndpointStorageFailure) { }
     }
 
+    @Test fun corruptedDatabaseDoesNotSilentlyReplaceIdentity() {
+        val cases = listOf("empty", "one-byte", "sixteen-byte", "128-byte", "511-byte", "512-byte",
+            "1024-byte", "half", "minus-one", "random", "first-byte", "later-byte")
+        val accepted = mutableListOf<String>()
+        for (corruption in cases) {
+            val endpoint = name()
+            val marker = "existing identity".encodeToByteArray()
+            EncryptedEndpointStore.open(context, endpoint).use { store ->
+                store.write("local/identity", marker)
+            }
+            val database = File(context.noBackupFilesDir, "$endpoint.db")
+            val original = database.readBytes()
+            assertTrue("Valid encrypted database unexpectedly small", original.size > 2048)
+            val wrapped = File(context.noBackupFilesDir, "$endpoint.wrapped")
+            val originalWrapped = wrapped.readBytes()
+            when (corruption) {
+                "empty" -> database.writeBytes(byteArrayOf())
+                "one-byte" -> database.writeBytes(original.copyOf(1))
+                "sixteen-byte" -> database.writeBytes(original.copyOf(16))
+                "128-byte" -> database.writeBytes(original.copyOf(128))
+                "511-byte" -> database.writeBytes(original.copyOf(511))
+                "512-byte" -> database.writeBytes(original.copyOf(512))
+                "1024-byte" -> database.writeBytes(original.copyOf(1024))
+                "half" -> database.writeBytes(original.copyOf(original.size / 2))
+                "minus-one" -> database.writeBytes(original.copyOf(original.size - 1))
+                "random" -> database.writeBytes(ByteArray(original.size).also { java.security.SecureRandom().nextBytes(it) })
+                "first-byte" -> database.writeBytes(original.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() })
+                else -> database.writeBytes(original.copyOf().also { it[original.size / 2] = (it[original.size / 2].toInt() xor 1).toByte() })
+            }
+            val corrupted = database.readBytes()
+            repeat(2) {
+                val identityIntact = try {
+                    EncryptedEndpointStore.open(context, endpoint).use { it.read("local/identity")?.contentEquals(marker) == true }
+                } catch (expected: EndpointStorageFailure) { null }
+                if (identityIntact == false || (identityIntact == true && corruption != "later-byte"))
+                    accepted += "$corruption attempt ${it + 1}: identityIntact=$identityIntact"
+                if (identityIntact == null)
+                    assertArrayEquals("Database changed after failed open: $corruption", corrupted, database.readBytes())
+            }
+            assertArrayEquals(originalWrapped, wrapped.readBytes())
+            assertTrue(KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.containsAlias("ghost-cloak.db.$endpoint"))
+        }
+        assertTrue("Corrupt database accepted: $accepted", accepted.isEmpty())
+    }
+
+    @Test fun validLogicallyEmptyEncryptedDatabaseReopens() {
+        val endpoint = name()
+        EncryptedEndpointStore.open(context, endpoint).close()
+        val database = File(context.noBackupFilesDir, "$endpoint.db")
+        assertTrue(database.isFile && database.length() > 0)
+        EncryptedEndpointStore.open(context, endpoint).use { assertTrue(it.keys("").isEmpty()) }
+    }
+
+    @Test fun databasePathIsDirectoryFailsBeforeOpen() {
+        val endpoint = name()
+        EncryptedEndpointStore.open(context, endpoint).close()
+        val database = File(context.noBackupFilesDir, "$endpoint.db")
+        assertTrue(database.delete())
+        assertTrue(database.mkdir())
+        try { EncryptedEndpointStore.open(context, endpoint).close(); fail("Database directory accepted") }
+        catch (expected: EndpointStorageFailure) { }
+        assertTrue(database.isDirectory)
+    }
+
     @Test fun missingWrappedSecretFailsWithoutChangingDatabaseOrKey() {
         val endpoint = name()
         EncryptedEndpointStore.open(context, endpoint).close()

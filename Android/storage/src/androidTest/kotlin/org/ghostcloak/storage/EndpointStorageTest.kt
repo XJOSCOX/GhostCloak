@@ -8,6 +8,9 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
 import java.security.KeyStore
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import javax.crypto.KeyGenerator
 import java.util.UUID
 
 class EndpointStorageTest {
@@ -99,6 +102,46 @@ class EndpointStorageTest {
         KeyStore.getInstance("AndroidKeyStore").apply { load(null); deleteEntry("ghost-cloak.db.$endpoint") }
         try { EncryptedEndpointStore.open(context, endpoint).close(); fail("Missing key accepted") }
         catch (expected: EndpointStorageFailure) { }
+    }
+
+    @Test fun interruptedInitializationStatesNeverAutoRepair() {
+        val aliasOnly = name()
+        val alias = "ghost-cloak.db.$aliasOnly"
+        val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        try {
+            KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
+                init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                    .setKeySize(256).setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
+                generateKey()
+            }
+            repeat(2) {
+                try { EncryptedEndpointStore.open(context, aliasOnly).close(); fail("Alias-only state repaired") }
+                catch (expected: EndpointStorageFailure) { }
+            }
+            assertFalse(File(context.noBackupFilesDir, "$aliasOnly.wrapped").exists())
+            assertFalse(File(context.noBackupFilesDir, "$aliasOnly.db").exists())
+        } finally { keys.deleteEntry(alias) }
+
+        val wrappedOnly = name()
+        EncryptedEndpointStore.open(context, wrappedOnly).close()
+        val wrapped = File(context.noBackupFilesDir, "$wrappedOnly.wrapped")
+        val wrappedBefore = wrapped.readBytes()
+        assertTrue(File(context.noBackupFilesDir, "$wrappedOnly.db").delete())
+        keys.deleteEntry("ghost-cloak.db.$wrappedOnly")
+        try { EncryptedEndpointStore.open(context, wrappedOnly).close(); fail("Wrapped-only state repaired") }
+        catch (expected: EndpointStorageFailure) { }
+        assertArrayEquals(wrappedBefore, wrapped.readBytes())
+
+        val databaseOnly = name()
+        EncryptedEndpointStore.open(context, databaseOnly).close()
+        val database = File(context.noBackupFilesDir, "$databaseOnly.db")
+        val databaseBefore = database.readBytes()
+        assertTrue(File(context.noBackupFilesDir, "$databaseOnly.wrapped").delete())
+        keys.deleteEntry("ghost-cloak.db.$databaseOnly")
+        try { EncryptedEndpointStore.open(context, databaseOnly).close(); fail("Database-only state repaired") }
+        catch (expected: EndpointStorageFailure) { }
+        assertArrayEquals(databaseBefore, database.readBytes())
     }
 
     @Test fun tamperedWrappedDatabaseSecretFailsClosed() {

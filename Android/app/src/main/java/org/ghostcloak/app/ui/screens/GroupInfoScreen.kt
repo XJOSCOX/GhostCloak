@@ -37,6 +37,8 @@ class GroupInfoActions(
     val transfer:(String)->Unit, val transferDecision:(Boolean)->Unit,
     val leave:()->Unit, val dissolve:()->Unit, val invite:(String)->Unit,
     val openChat:(String)->Unit,
+    val cancelQueued:()->Unit={},
+    val resendInvitation:()->Unit={},
     val disappearing:(Int)->Unit={},
     val saveProfile:(ByteArray,String,String,GroupProfilePhotoRefV1?,ByteArray?)->Unit={_,_,_,_,_->},
 )
@@ -184,14 +186,21 @@ private fun GroupManagementStatus.description()=when(this) {
         return
     }
     Column(Modifier.fillMaxSize().imePadding().testTag("group-info")) {
-        PageHeader(info.profile.name,"${info.members.size} members",back,
+        PageHeader(info.profile.name,memberCountLabel(info.members.size),back,
             avatarName=info.profile.name,avatarPhoto=info.verifiedPhoto)
         LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(
             horizontal=GhostLayout.pageInset,vertical=16.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
             if(state.error!=null) item {ErrorNotice(state.error,important=state.errorImportant)}
             if(info.profile.about.isNotBlank()) item {
-                Text(info.profile.about,style=MaterialTheme.typography.bodyMedium,
-                    color=MaterialTheme.colorScheme.onSurfaceVariant)
+                Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surface,
+                    modifier=Modifier.testTag("group-about-card")) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp),
+                        verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                        Text("About",style=MaterialTheme.typography.titleMedium)
+                        Text(info.profile.about,style=MaterialTheme.typography.bodyMedium,
+                            color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
             if(info.photoPending) item {Text("Updating group photo…",
                 color=MaterialTheme.colorScheme.onSurfaceVariant)}
@@ -228,6 +237,23 @@ private fun GroupManagementStatus.description()=when(this) {
                                 GroupManagementStatus.NOT_CONFIGURED,GroupManagementStatus.BASELINE_READY))
                             Text("Finish the pending invitation before setting up group management.",
                                 color=MaterialTheme.colorScheme.onSurfaceVariant)
+                        if(info.waitingForAdmissionApproval)
+                            Text(if(info.ownerIntroduced)
+                                "Waiting for every current member to verify and sign the next admission. Their direct contacts with the invitee are not required. Keep their updated apps connected, then retry if needed."
+                            else "Waiting for a current member to confirm the next invitee. Every current member must have an accepted, updated direct chat with that person. After they connect, retry the member approval.",
+                                color=MaterialTheme.colorScheme.onSurfaceVariant)
+                        if(info.canResendInvitation) {
+                            Text(if(info.waitingForAdmissionApproval)
+                                "Retry the same signed approval request after members connect. This does not create a new invitation."
+                            else "Still waiting? Resend the same signed invitation. This does not create a second request or remove one already delivered.",
+                                style=MaterialTheme.typography.bodySmall,
+                                color=MaterialTheme.colorScheme.onSurfaceVariant)
+                            OutlinedButton(onClick=actions.resendInvitation,enabled=!busy,
+                                modifier=Modifier.testTag("group-resend-invitation")) {
+                                Text(if(info.waitingForAdmissionApproval) "Retry member approval"
+                                    else "Resend invitation")
+                            }
+                        }
                         if(info.managementStatus in setOf(GroupManagementStatus.NOT_CONFIGURED,
                                 GroupManagementStatus.BASELINE_READY) && !info.invitationPending &&
                             info.localRole in setOf(GroupRole.OWNER,GroupRole.ADMIN) &&
@@ -281,6 +307,21 @@ private fun GroupManagementStatus.description()=when(this) {
                                 color=MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         if(info.canChangeDisappearing) Text("Change",color=MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+            if(info.queuedInviteCount>0) item {
+                Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surface,
+                    modifier=Modifier.testTag("group-creation-queue")) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp),
+                        verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                        Text("Adding selected contacts",style=MaterialTheme.typography.titleMedium)
+                        Text("${info.queuedInviteCount} invited. People can accept in any order; each membership still needs signed confirmation.",
+                            color=MaterialTheme.colorScheme.onSurfaceVariant)
+                        info.queuedInviteStatus?.let {Text(it,color=MaterialTheme.colorScheme.error)}
+                        TextButton(onClick=actions.cancelQueued,enabled=!state.loading) {
+                            Text("Stop remaining invitations")
+                        }
                     }
                 }
             }

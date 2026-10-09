@@ -81,9 +81,11 @@ class GroupDisappearingV1Test {
         store.queueV4(senderDevice,envelope,value)
         assertTrue(store.acceptV4(envelope,PendingGroupTextV4(senderDevice,value)))
         assertEquals("secret",store.message(group,id)?.text)
+        assertEquals(1,store.unreadCount(group))
         wall+=30_001;elapsed+=30_001
         val restarted=GroupChatStore(records,clock)
         assertEquals(GroupExpiryState.EXPIRED,restarted.message(group,id)?.expiryState)
+        assertEquals(0,restarted.unreadCount(group))
         assertEquals("",restarted.message(group,id)?.text)
         assertFalse(restarted.acceptV4(RandomIdentifiers.create(),PendingGroupTextV4(senderDevice,value)))
         assertEquals("",restarted.message(group,id)?.text)

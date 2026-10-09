@@ -120,4 +120,18 @@ class ChatOrganizationScreenTest {
         compose.onNodeWithContentDescription("Muted conversation").assertIsDisplayed()
         compose.onNodeWithContentDescription("1 unread message").assertIsDisplayed()
     }
+
+    @Test fun groupRowUsesDirectChatUnreadIndicatorAndClearsWithState() {
+        val groupId=GroupIds.create()
+        val group=GroupMembershipTransport.Conversation(groupId,GroupLocalStatus.ACTIVE,2,
+            emptyMap(),listOf(GroupChatMessage(groupId,GroupIds.create(),1,GroupIds.create(),false,"Hello",1)))
+        val unread=mutableStateOf(2)
+        compose.setContent {GhostCloakTheme {
+            ContactsScreen(AppState(loading=false,groups=listOf(group),unreadCount=unread.value,
+                groupUnreadByConversation=mapOf(groupId to unread.value)),{},{})
+        }}
+        compose.onNodeWithContentDescription("2 unread messages").assertIsDisplayed()
+        compose.runOnIdle {unread.value=0}
+        compose.onNodeWithContentDescription("2 unread messages").assertDoesNotExist()
+    }
 }

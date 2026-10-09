@@ -12,6 +12,7 @@ import kotlinx.serialization.Serializable
     val photos: DownloadPreference = DownloadPreference.MANUAL,
     val voiceNotes: DownloadPreference = DownloadPreference.MANUAL,
     val documents: DownloadPreference = DownloadPreference.MANUAL,
+    val allowGroupInvitations: Boolean = true,
 ) {
     fun validated(): PrivacyDefaults = also { DisappearingTimer.from(disappearingSeconds) }
 }

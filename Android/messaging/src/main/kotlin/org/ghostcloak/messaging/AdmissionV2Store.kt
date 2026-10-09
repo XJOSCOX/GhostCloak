@@ -3,9 +3,19 @@ package org.ghostcloak.messaging
 import kotlinx.serialization.Serializable
 import org.ghostcloak.crypto.EndpointRecords
 import org.ghostcloak.protocol.NetworkCodec
+import org.ghostcloak.protocol.ApiFailure
 import java.security.MessageDigest
 
 @Serializable internal data class PendingAdmissionV2(
+    val offer:GroupControl,
+    val proposal:AdmissionProposalV2,
+    val approvals:List<AdmissionApprovalV2>,
+    val invitationQueued:Boolean=false,
+    val setupQueued:Boolean=false,
+)
+
+/** Exact on-disk shape written before setupQueued was added. Network decoding stays strict. */
+@Serializable private data class LegacyPendingAdmissionV2(
     val offer:GroupControl,
     val proposal:AdmissionProposalV2,
     val approvals:List<AdmissionApprovalV2>,
@@ -29,8 +39,20 @@ internal class AdmissionV2Store(private val records:EndpointRecords) {
         require(GroupIds.valid(groupId) && GroupIds.valid(inviteId))
         return "app/group/admission-v2/sent/$groupId/$inviteId/$recipient"
     }
+    private fun capabilityRetryKey(groupId:String,inviteId:String,recipient:String):String {
+        require(GroupIds.valid(groupId) && GroupIds.valid(inviteId))
+        return "app/group/admission-v2/capability-retry-v1/$groupId/$inviteId/$recipient"
+    }
     fun pending(groupId:String):PendingAdmissionV2?=records.transaction {
-        records.read(pendingKey(groupId))?.let {NetworkCodec.decode(it,12_000)}
+        records.read(pendingKey(groupId))?.let {bytes ->
+            try {NetworkCodec.decode<PendingAdmissionV2>(bytes,12_000)}
+            catch(e:ApiFailure) {
+                if(e.code!="noncanonical_body" && e.code!="invalid_schema") throw e
+                val old=NetworkCodec.decode<LegacyPendingAdmissionV2>(bytes,12_000)
+                PendingAdmissionV2(old.offer,old.proposal,old.approvals,
+                    old.invitationQueued,setupQueued=false)
+            }
+        }
     }
     fun pendingGroups():List<String> = records.transaction {
         records.keys("app/group/admission-v2/pending/").take(64).mapNotNull {key ->
@@ -102,14 +124,31 @@ internal class AdmissionV2Store(private val records:EndpointRecords) {
     fun queued(groupId:String,inviteId:String,recipient:String):Boolean=records.transaction {
         records.read(sentKey(groupId,inviteId,recipient))!=null
     }
+    /** Permit another delivery of the same signed proposal after an unapproved attempt. */
+    fun clearQueuedRecipient(groupId:String,inviteId:String,recipient:String)=records.transaction {
+        records.remove(sentKey(groupId,inviteId,recipient))
+    }
     fun markQueued(groupId:String,inviteId:String,recipient:String,outboxId:String)=records.transaction {
         val key=sentKey(groupId,inviteId,recipient)
         require(records.read(key)!=null ||
             records.keys("app/group/admission-v2/sent/$groupId/$inviteId/").size<=GroupStatements.MAX_MEMBERS)
         records.write(key,outboxId.toByteArray())
+        // New proposals need no compatibility replay. Older sent markers lack
+        // this record and can be replayed once after the capability fix.
+        records.write(capabilityRetryKey(groupId,inviteId,recipient),byteArrayOf(1))
+    }
+    fun retryLegacyProposalOnce(groupId:String,inviteId:String,recipient:String):Boolean=records.transaction {
+        val sent=sentKey(groupId,inviteId,recipient)
+        val retry=capabilityRetryKey(groupId,inviteId,recipient)
+        if(records.read(sent)==null || records.read(retry)!=null) return@transaction false
+        records.write(retry,byteArrayOf(1))
+        records.remove(sent)
+        true
     }
     fun clearQueued(groupId:String,inviteId:String)=records.transaction {
         require(GroupIds.valid(groupId) && GroupIds.valid(inviteId))
         records.keys("app/group/admission-v2/sent/$groupId/$inviteId/").forEach(records::remove)
+        records.keys("app/group/admission-v2/capability-retry-v1/$groupId/$inviteId/")
+            .forEach(records::remove)
     }
 }

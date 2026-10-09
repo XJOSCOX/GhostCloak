@@ -35,6 +35,8 @@ class PrivacyScreenTest {
         compose.onNodeWithTag("privacy-choice-Photos").performClick()
         compose.onNodeWithText("Auto-download").performClick()
         assertEquals(DownloadPreference.AUTOMATIC,state.value.privacyDefaults.photos)
+        compose.onNodeWithTag("allow-group-invitations").performScrollTo().performClick()
+        assertFalse(state.value.privacyDefaults.allowGroupInvitations)
         compose.onNodeWithText("Check downloaded cache size").performScrollTo().performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Downloaded cache: 1 KiB").assertExists()

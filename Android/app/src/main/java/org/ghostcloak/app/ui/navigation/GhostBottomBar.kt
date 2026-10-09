@@ -19,7 +19,7 @@ import org.ghostcloak.app.ui.theme.GhostDimensions
 import org.ghostcloak.app.ui.theme.GhostLayout
 
 /** Compact navigation with a labeled active pill and accessible icon-only destinations. */
-@Composable fun GhostBottomBar(route: String?, onNavigate: (String) -> Unit) {
+@Composable fun GhostBottomBar(route: String?, unreadCount: Int, onNavigate: (String) -> Unit) {
     Box(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.navigationBars)
         .padding(horizontal = GhostLayout.pageInset, vertical = GhostDimensions.compact),
         contentAlignment = Alignment.Center) {
@@ -36,13 +36,19 @@ import org.ghostcloak.app.ui.theme.GhostLayout
                         .heightIn(min = GhostLayout.touchTarget).clip(MaterialTheme.shapes.large)
                         .selectable(selected = selected, interactionSource = null, indication = null,
                             role = Role.Tab, onClick = { onNavigate(destination) })
-                        .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+                        .semantics { contentDescription = if(destination=="contacts" && unreadCount>0)
+                            "$label, $unreadCount unread ${if(unreadCount==1) "message" else "messages"}"
+                            else label }, contentAlignment = Alignment.Center) {
                         Row(Modifier.then(if (selected) Modifier.background(MaterialTheme.colorScheme.primaryContainer,
                                 MaterialTheme.shapes.large) else Modifier)
                             .padding(horizontal = GhostDimensions.medium, vertical = GhostDimensions.controlGap),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(GhostDimensions.small)) {
-                            AppIcon(glyph, modifier = Modifier.size(GhostLayout.navigationIcon), tint = color)
+                            if(destination=="contacts" && unreadCount>0) {
+                                BadgedBox(badge = { Badge { Text(if(unreadCount>99) "99+" else unreadCount.toString()) } }) {
+                                    AppIcon(glyph, modifier = Modifier.size(GhostLayout.navigationIcon), tint = color)
+                                }
+                            } else AppIcon(glyph, modifier = Modifier.size(GhostLayout.navigationIcon), tint = color)
                             if (selected) Text(label, color = color, style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }

@@ -6,10 +6,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import org.ghostcloak.app.ui.theme.GhostDimensions
@@ -18,6 +21,31 @@ import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
 import org.ghostcloak.app.ui.privacy.noSensitiveCopyCut
 import org.ghostcloak.messaging.ChatOrganization
+import org.ghostcloak.messaging.GroupChatMessage
+import org.ghostcloak.messaging.GroupModerationState
+import org.ghostcloak.messaging.GroupExpiryState
+import org.ghostcloak.messaging.GroupLocalStatus
+import org.ghostcloak.attachments.AttachmentKind
+
+internal fun groupListPreview(message:GroupChatMessage):String=when {
+    message.moderationState==GroupModerationState.REMOVED_BY_ADMIN -> "Message removed by an admin"
+    message.moderationState==GroupModerationState.DELETED_BY_SENDER -> "This message was deleted"
+    message.expiryState==GroupExpiryState.EXPIRED -> "Message expired"
+    message.mediaKind==AttachmentKind.IMAGE -> "Photo"
+    message.mediaKind==AttachmentKind.DOCUMENT -> "Document"
+    message.mediaKind==AttachmentKind.VOICE_NOTE -> "Voice note"
+    else -> message.text
+}
+
+internal fun groupListStatus(status:GroupLocalStatus):String=when(status) {
+    GroupLocalStatus.INVITED -> "Invitation"
+    GroupLocalStatus.ACTIVE -> "Active"
+    GroupLocalStatus.FORKED -> "Group state conflict"
+    GroupLocalStatus.REMOVED,GroupLocalStatus.LEFT -> "Read-only"
+    GroupLocalStatus.DISSOLVED -> "Ended"
+}
+
+internal fun memberCountLabel(count:Int)="$count ${if(count==1) "member" else "members"}"
 
 @Composable fun ContactsScreen(state: AppState, add: () -> Unit, open: (String) -> Unit, connect: () -> Unit = {}, sync: () -> Unit = {}, directory: Boolean = false,
     archived:Boolean=false,showArchived:()->Unit={},unarchive:(String)->Unit={},back:()->Unit={},
@@ -83,16 +111,23 @@ import org.ghostcloak.messaging.ChatOrganization
                             Row(Modifier.padding(GhostDimensions.regular),verticalAlignment=Alignment.CenterVertically,
                                 horizontalArrangement=Arrangement.spacedBy(GhostDimensions.regular)) {
                                 Avatar(group.info?.profile?.name ?: "Group",photo=group.info?.verifiedPhoto)
-                                Column {
+                                Column(Modifier.weight(1f)) {
                                     Text(when {
-                                        group.status==org.ghostcloak.messaging.GroupLocalStatus.INVITED -> "Group invitation"
-                                        group.invitationPending && group.memberCount==1 -> "Group invitation sent"
-                                        else -> group.info?.profile?.name ?: "Group"
+                                        group.status==org.ghostcloak.messaging.GroupLocalStatus.INVITED -> "${group.name ?: "Group"} invitation"
+                                        group.invitationPending && group.memberCount==1 -> "${group.name ?: "Group"} invitation sent"
+                                        else -> group.info?.profile?.name ?: group.name ?: "Group"
                                     },style=MaterialTheme.typography.titleMedium)
-                                    Text("${group.memberCount} members · ${group.status.name.lowercase().replaceFirstChar(Char::uppercase)}",
+                                    Text("${memberCountLabel(group.memberCount)} · ${groupListStatus(group.status)}",
                                         style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                                    group.messages.lastOrNull()?.let {Text(it.text,maxLines=1,
-                                        style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                                    Row(verticalAlignment=Alignment.CenterVertically,
+                                        horizontalArrangement=Arrangement.spacedBy(GhostDimensions.medium)) {
+                                        group.messages.lastOrNull()?.let {Text(groupListPreview(it),Modifier.weight(1f),maxLines=1,
+                                            style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                                        val unread=state.groupUnreadByConversation[group.groupId] ?: 0
+                                        if(unread>0) Box(Modifier.size(GhostLayout.unreadDot)
+                                            .background(MaterialTheme.colorScheme.primary,CircleShape)
+                                            .semantics {contentDescription="$unread unread ${if(unread==1) "message" else "messages"}"})
+                                    }
                                 }
                             }
                         }

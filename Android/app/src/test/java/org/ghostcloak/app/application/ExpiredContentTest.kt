@@ -33,9 +33,14 @@ class ExpiredContentTest {
             reactions = listOf(GroupReactionBadge("👍", 1, false)))
         val group = GroupMembershipTransport.Conversation("group", GroupLocalStatus.ACTIVE, 2,
             emptyMap(), listOf(message))
-        val state = AppState(groups = listOf(group))
+        val state = AppState(groups = listOf(group),unreadCount=1,
+            groupUnreadByConversation=mapOf("group" to 1),
+            groupUnreadExpiries=mapOf("group" to listOf(deadline)))
         assertEquals(1, state.nextExpiryUiDelay(ExpiryMoment(999, 1999, 1)))
-        val visible = state.withoutExpired(ExpiryMoment(1000, 100, 1)).groups.single().messages.single()
+        val expiredState=state.withoutExpired(ExpiryMoment(1000, 100, 1))
+        val visible = expiredState.groups.single().messages.single()
+        assertEquals(0,expiredState.unreadCount)
+        assertEquals(0,expiredState.groupUnreadByConversation["group"])
         assertEquals(GroupExpiryState.EXPIRED, visible.expiryState)
         assertEquals("", visible.text)
         assertNull(visible.mediaCaption)

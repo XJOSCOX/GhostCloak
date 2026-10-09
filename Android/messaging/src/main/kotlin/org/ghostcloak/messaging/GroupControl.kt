@@ -27,7 +27,8 @@ enum class GroupControlKind { INVITE, ACCEPT, INVITE_EXPIRED, STATE_UPDATE, RESY
     GOVERNANCE_PROFILE_ENTRY_ACK_V1, GOVERNANCE_PROFILE_RESYNC_RESPONSE_V1,
     GOVERNANCE_PROFILE_PHOTO_V1, GOVERNANCE_PROFILE_PHOTO_REQUEST_V1,
     GOVERNANCE_TIMER_PROPOSAL_V1, GOVERNANCE_TIMER_ENTRY_V1,
-    GOVERNANCE_TIMER_ENTRY_ACK_V1, GOVERNANCE_TIMER_RESYNC_RESPONSE_V1 }
+    GOVERNANCE_TIMER_ENTRY_ACK_V1, GOVERNANCE_TIMER_RESYNC_RESPONSE_V1,
+    INVITE_PREVIEW, OWNER_INTRO_SETUP_V1, OWNER_INTRO_HELLO_V1, OWNER_INTRO_ACK_V1 }
 
 /** Only internal maintenance is permitted through a blocked canonical group relationship. */
 internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
@@ -109,6 +110,7 @@ internal fun GroupControlKind.blockSafeMaintenance(): Boolean = this in setOf(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val governanceTimerResyncV1:GroupGovernanceTimerResyncResponseV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val groupTimerCheckpointV1:GroupTimerCheckpointV1?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val groupTimerCheckpointCoordinatorSignatureV1:ByteArray?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val ownerIntroductionV1:GroupOwnerIntroductionV1?=null,
 ) {
     override fun toString() = "GroupControl(redacted)"
 }
@@ -142,7 +144,19 @@ object GroupControlCodec {
         return NetworkCodec.decode<GroupControl>(bytes, MAX_BYTES).also(::validate)
     }
     private fun validate(control: GroupControl) {
-        require(control.version == 1 && GroupIds.valid(control.groupId))
+        require(control.version in 1..2 && GroupIds.valid(control.groupId))
+        require((control.version==2)==(control.ownerIntroductionV1!=null))
+        if(control.kind in setOf(GroupControlKind.OWNER_INTRO_SETUP_V1,
+                GroupControlKind.OWNER_INTRO_HELLO_V1,
+                GroupControlKind.OWNER_INTRO_ACK_V1)) require(control.version==2)
+        if(control.version==2) require(control.kind in setOf(GroupControlKind.INVITE,
+            GroupControlKind.INVITE_PREVIEW,GroupControlKind.ADMISSION_V2_PROPOSAL,
+            GroupControlKind.OWNER_INTRO_SETUP_V1,GroupControlKind.OWNER_INTRO_HELLO_V1,
+            GroupControlKind.OWNER_INTRO_ACK_V1))
+        control.ownerIntroductionV1?.let {
+            require(it.groupId==control.groupId && it.version==1 &&
+                NetworkCodec.encode(it).size<=GroupOwnerIntroductionRulesV1.MAX_BYTES)
+        }
         control.inviteId?.let { require(GroupIds.valid(it)) }
         control.fromDigest?.let { require(it.size == 32) }
         control.state?.let { GroupStatements.validate(it); require(it.groupId == control.groupId) }
@@ -286,6 +300,25 @@ object GroupControlCodec {
         val v2Absent=control.proposalV2==null && control.approvalV2==null &&
             control.certificateV2==null && control.evidenceEventId==null
         when (control.kind) {
+            GroupControlKind.OWNER_INTRO_SETUP_V1 -> require(v2Absent &&
+                control.state!=null && control.inviteId==control.ownerIntroductionV1?.inviteId &&
+                control.ownerIntroductionV1?.let {
+                    GroupOwnerIntroductionRulesV1.verify(it,control.state)
+                }==true && control.genesis==null && control.admission==null &&
+                control.invite==null && control.transition==null && control.chain.isEmpty() &&
+                control.fromRevision==null && control.fromDigest==null && control.headRevision==null)
+            GroupControlKind.OWNER_INTRO_HELLO_V1 ->
+                require(v2Absent && control.inviteId==control.ownerIntroductionV1?.inviteId &&
+                    control.state!=null && control.ownerIntroductionV1?.let {
+                        GroupOwnerIntroductionRulesV1.verify(it,control.state)
+                    }==true && control.genesis==null && control.admission==null &&
+                    control.invite==null && control.transition==null && control.chain.isEmpty() &&
+                    control.fromRevision==null && control.fromDigest==null && control.headRevision==null)
+            GroupControlKind.OWNER_INTRO_ACK_V1 ->
+                require(v2Absent && control.inviteId==control.ownerIntroductionV1?.inviteId &&
+                    control.state==null && control.genesis==null && control.admission==null &&
+                    control.invite==null && control.transition==null && control.chain.isEmpty() &&
+                    control.fromRevision==null && control.fromDigest==null && control.headRevision==null)
             GroupControlKind.INVITE_EXPIRED -> require(v2Absent && control.inviteId!=null && control.state==null &&
                 control.genesis==null && control.admission==null && control.invite==null &&
                 control.transition==null && control.chain.isEmpty() && control.fromRevision==null &&
@@ -300,7 +333,7 @@ object GroupControlCodec {
                 GroupStatements.digestMember(control.admission.target).contentEquals(
                     GroupStatements.digestMember(control.invite.target)) &&
                 runCatching {GroupStatements.validateOfferShape(control.invite)}.isSuccess)
-            GroupControlKind.INVITE -> require(control.approvalV2==null && control.proposalV2==null &&
+            GroupControlKind.INVITE,GroupControlKind.INVITE_PREVIEW -> require(control.approvalV2==null && control.proposalV2==null &&
                 control.evidenceEventId==null && control.invite != null && control.admission != null &&
                 control.state != null && control.genesis == null && control.inviteId == control.invite.inviteId &&
                 control.admission.inviteId == control.inviteId &&
@@ -310,6 +343,7 @@ object GroupControlCodec {
                 control.invite.parentDigest.contentEquals(GroupStatements.digest(control.state)) &&
                 control.transition == null && control.fromRevision == null && control.fromDigest == null &&
                 control.headRevision == null && control.chain.isEmpty() &&
+                (control.kind!=GroupControlKind.INVITE_PREVIEW || control.certificateV2==null) &&
                 (control.certificateV2==null ||
                     (AdmissionV2.verifyCertificate(control.certificateV2,control.state) &&
                         control.certificateV2.proposal.inviteId==control.inviteId &&

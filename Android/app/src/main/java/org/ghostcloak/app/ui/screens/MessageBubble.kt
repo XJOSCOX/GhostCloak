@@ -14,6 +14,7 @@ import org.ghostcloak.app.ui.theme.GhostEffects
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 @Composable fun MessageBubble(message: Message, onDelete: () -> Unit, onReply: (() -> Unit)? = null,
     onCopy: (() -> Unit)? = null, replyPreview: String? = null,
@@ -25,7 +26,7 @@ import java.time.format.DateTimeFormatter
     var menu by remember { mutableStateOf(false) }
     var reactionPicker by remember(message.localId) {mutableStateOf(false)}
     var details by remember(message.localId) {mutableStateOf(false)}
-    val time = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(message.timestamp))
+    val time = DateTimeFormatter.ofPattern("h:mm a",Locale.US).withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(message.timestamp))
     Column(Modifier.fillMaxWidth(),horizontalAlignment=if(outgoing) Alignment.End else Alignment.Start) {
         Box {
             Surface(shape=RoundedCornerShape(GhostDimensions.sectionGap,GhostDimensions.sectionGap,if(outgoing) GhostDimensions.tiny else GhostDimensions.sectionGap,if(outgoing) GhostDimensions.sectionGap else GhostDimensions.tiny),

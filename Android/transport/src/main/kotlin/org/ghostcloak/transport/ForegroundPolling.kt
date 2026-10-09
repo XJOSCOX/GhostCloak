@@ -1,11 +1,10 @@
 package org.ghostcloak.transport
 
-/** One request per completed cycle: at most ~30/minute while active, ~12/minute when idle. */
+/** A constant foreground cadence avoids multiplying multi-party handshake latency.
+ *  It also keeps the fetch timing independent of whether encrypted messages arrived.
+ *  One request per completed cycle remains below the 60/minute fetch limit.
+ */
 class ForegroundPolling {
-    private var emptyCycles = 0
-    @Synchronized fun reset() { emptyCycles = 0 }
-    @Synchronized fun completed(active: Boolean): Long {
-        if (active) emptyCycles = 0 else emptyCycles++
-        return when { emptyCycles < 4 -> 2000L; emptyCycles < 8 -> 3000L; else -> 5000L }
-    }
+    @Synchronized fun reset() = Unit
+    @Synchronized fun completed(@Suppress("UNUSED_PARAMETER") active: Boolean): Long = 2000L
 }

@@ -1,5 +1,24 @@
 # Group governance and management
 
+## Current boundary
+
+The signed governance journal is the source of current membership, roles,
+posting policy, group profile, timer and moderation decisions. A change uses
+the exact current state and head, one ordered entry, and application ACKs from
+every resulting member before the next change. A newly admitted member uses
+the exact admission-only checkpoint; an existing member must verify contiguous
+entries. The journal is capped at 511 entries. At capacity, or when a legacy
+activated group lacks its complete signed chain, new management changes stop;
+local history remains readable. Forked groups are locked and recovered by
+creating a new group. Group user content uses the exact current head and does
+not backdate to recover stale deliveries.
+
+Owner/Admin controls in Group Info reflect the current local role and pending
+state; the signed protocol independently rechecks authority. Group restriction,
+direct Block and local notification mute are separate concepts. Earlier phase
+sections below document implementation history and should not be read as the
+current feature-availability matrix.
+
 ## P13.5 message-control boundary
 
 Group replies (`GroupTextV3`) and reaction/edit/sender-delete controls do not

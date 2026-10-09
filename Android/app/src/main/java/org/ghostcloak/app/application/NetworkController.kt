@@ -299,6 +299,7 @@ class NetworkController(
         }
         exchange()
         groups.processPending()
+        groups.processQueuedCreationInvites()
         service.retryNetwork(outbox)
         status = NetworkStatus.CONNECTED
         prekeyRefill.maintain()
@@ -306,6 +307,13 @@ class NetworkController(
     }
     fun groupInvitations()=groups.invitations()
     fun groupConversations()=groups.conversations()
+    fun groupConversationsForUi(selectedGroup:String?)=groups.conversationsForUi(selectedGroup)
+    fun initializeGroupUnreadBaseline()=groups.initializeUnreadBaseline()
+    fun groupUnreadCounts()=groups.unreadCounts()
+    fun groupUnreadMessageIds(id:String)=groups.unreadMessageIds(id)
+    fun groupUnreadExpiries()=groups.unreadExpiries()
+    fun markGroupRead(id:String)=groups.markRead(id)
+    fun markVisibleGroupRead(id:String,visibleIds:Set<String>)=groups.markVisibleRead(id,visibleIds)
     fun groupInfo(id:String)=groups.groupInfo(id)
     fun pendingGroupOwnershipRequests()=groups.pendingOwnershipRequests()
     suspend fun beginGroupManagementSetup(id:String)=operation(NetworkOperation.SEND) {
@@ -313,6 +321,9 @@ class NetworkController(
     }
     suspend fun retryGroupManagementSetup(id:String)=operation(NetworkOperation.SEND) {
         groups.retryGroupManagementSetup(id)
+    }
+    suspend fun resendGroupInvitation(id:String)=operation(NetworkOperation.SEND) {
+        groups.resendPendingInvitation(id)
     }
     suspend fun setGroupPostingMode(id:String,mode:org.ghostcloak.messaging.GroupPostingModeV1)=
         operation(NetworkOperation.SEND) {groups.setPostingModeGoverned(id,mode)}
@@ -369,6 +380,10 @@ class NetworkController(
     fun pendingGroupInvitationNotices()=groups.pendingInvitationNotices()
     fun markGroupInvitationNotice(id:String,complete:Boolean)=groups.markInvitationNotice(id,complete)
     suspend fun createGroupAndInvite(id:String)=operation(NetworkOperation.SEND) {groups.createAndInvite(id)}
+    suspend fun createGroupAndInviteSelected(ids:List<String>,name:String)=operation(NetworkOperation.SEND) {
+        groups.createAndInviteSelected(ids,name)
+    }
+    suspend fun cancelQueuedCreationInvites(id:String)=groups.cancelQueuedCreationInvites(id)
     suspend fun inviteToGroup(groupId:String,id:String)=operation(NetworkOperation.SEND) {groups.invite(groupId,id)}
     suspend fun acceptGroupInvite(inviteId:String)=operation(NetworkOperation.SEND) {groups.accept(inviteId)}
     fun declineGroupInvite(inviteId:String)=groups.decline(inviteId)

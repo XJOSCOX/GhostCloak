@@ -69,6 +69,25 @@ class GroupStateTest {
         assertTrue(frame.size<=org.ghostcloak.protocol.EnvelopeCodec.MAX_BODY)
         assertTrue(org.ghostcloak.protocol.EnvelopeCodec.MAX_BODY-frame.size>=2048)
     }
+    @Test fun creationNameIsSignedAndSurvivesMembershipChanges() {
+        val owner=person(GroupRole.OWNER)
+        val named=genesis(owner).state.copy(initialName="Weekend crew")
+        val signed=GroupGenesis(named,owner.sign(GroupStatements.genesis(named)))
+        val records=MemoryRecords()
+        assertEquals(GroupApply.ACCEPTED,
+            GroupLedger(records,trust,owner.member.memberId).acceptGenesis(signed))
+        assertEquals("Weekend crew",GroupStatements.decodeState(GroupStatements.bytes(named)).initialName)
+        val added=add(named,owner,person(GroupRole.MEMBER,2))
+        assertEquals("Weekend crew",added.next.initialName)
+        assertFalse(GroupStatements.digest(named).contentEquals(
+            GroupStatements.digest(named.copy(initialName="Different name"))))
+        assertThrows(IllegalArgumentException::class.java) {
+            GroupStatements.validate(named.copy(initialName="Bad\nname"))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            GroupStatements.validate(named.copy(initialName="x".repeat(65)))
+        }
+    }
     private data class Person(val member:GroupMember,val key:KeyPair) {
         fun sign(bytes:ByteArray)=Signature.getInstance("SHA256withECDSA").run {
             initSign(key.private);update(bytes);sign()

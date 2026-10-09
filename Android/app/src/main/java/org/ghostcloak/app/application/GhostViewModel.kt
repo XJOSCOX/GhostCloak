@@ -14,6 +14,8 @@ import org.ghostcloak.identity.DeviceIdentity
 import org.ghostcloak.messaging.*
 import org.ghostcloak.transport.TransportFailure
 
+data class ChatOpening(val conversationId:String,val generation:Long,val firstUnreadId:String?)
+
 data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? = null,
     val ghostCloakId:String?=null,
     val ownProfile:LocalProfile=LocalProfile(),
@@ -28,8 +30,13 @@ data class AppState(val loading: Boolean = true, val identity: DeviceIdentity? =
     val deleteAvailable:Boolean=false,
     val editAvailable:Boolean=false,
     val cachedAttachments: Set<String> = emptySet(),
+    val cachedGroupId:String?=null,
+    val cachedGroupAttachments:Set<String> = emptySet(),
     val disappearingPolicies: Map<String, Int> = emptyMap(),
     val unreadExpiries: Map<String, List<ExpiryDeadline>> = emptyMap(),
+    val groupUnreadExpiries: Map<String, List<ExpiryDeadline>> = emptyMap(),
+    val groupUnreadByConversation: Map<String, Int> = emptyMap(),
+    val directOpening:ChatOpening?=null,val groupOpening:ChatOpening?=null,
     val unreadCount: Int = 0, val unreadByConversation: Map<String, Int> = emptyMap(), val contacts: List<ContactStatus> = emptyList(), val previews: Map<String, Message> = emptyMap(), val messages: List<Message> = emptyList(),
     val error: String? = null, val errorImportant: Boolean = false, val errorTransient: Boolean = false, val card: String = "", val safetyNumber: SafetyNumberPresentation? = null,
     val demo: Boolean = false, val protection: String = "", val ready: Boolean = false,
@@ -44,15 +51,19 @@ class GhostViewModel internal constructor(application: Application, private val 
     val state = mutable.asStateFlow()
     val developerAvailable get() = runtime.developerAvailable
     @Volatile private var selected: String? = null
+    @Volatile private var selectedGroup: String? = null
+    @Volatile private var pendingDirectOpening:Pair<String,Long>?=null
+    @Volatile private var pendingGroupOpening:Pair<String,Long>?=null
+    private var openingGeneration=0L
     private val safetyNumberSelection = SafetyNumberSelection()
     private var workCount = 0
     private val unregisterOwner = (application as? GhostApplication)?.registerUiOwner {
         viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin()
-        selected=null; safetyNumberSelection.clear(); mutable.value=AppState()
+        selected=null; selectedGroup=null; safetyNumberSelection.clear(); mutable.value=AppState()
     }
     override fun onCleared() {
         unregisterOwner?.invoke()
-        selected=null; safetyNumberSelection.clear(); mutable.value=AppState()
+        selected=null; selectedGroup=null; safetyNumberSelection.clear(); mutable.value=AppState()
         super.onCleared()
     }
     init {
@@ -81,16 +92,34 @@ class GhostViewModel internal constructor(application: Application, private val 
                     val active = runtime.currentService()
                     val identity = runtime.open(active)
                     val contacts = if (identity != null) active.contacts() else emptyList()
-                    selected?.takeIf { id -> contacts.any { it.contact.remoteDeviceId == id } }?.let { active.markRead(it) }
+                    val directRequest=pendingDirectOpening?.takeIf { it.first==selected }
+                    val directUnread=directRequest?.let { active.unreadMessageIds(it.first) }
                     val unread = if (identity != null) active.unreadCounts() else emptyMap()
-                    val conversation = loadConversationRefreshSnapshot(contacts, selected, active::messagesForUi)
+                    val groups = if(identity!=null) runtime.groupConversationsForUi(selectedGroup) else emptyList()
+                    val groupRequest=pendingGroupOpening?.takeIf { it.first==selectedGroup }
+                    val groupUnreadIds=groupRequest?.let { runtime.groupUnreadMessageIds(it.first) }
+                    val groupUnread = if(identity!=null) runtime.groupUnreadCounts() else emptyMap()
+                    val conversation = loadConversationRefreshSnapshot(contacts, selected,
+                        active::messagesForUi,active::latestMessageForUi)
+                    val directOpening=directRequest?.let { request ->
+                        ChatOpening(request.first,request.second,conversation.messagesForSelection(request.first)
+                            .firstOrNull { it.localId in directUnread.orEmpty() }?.localId)
+                    }
+                    val groupOpening=groupRequest?.let { request ->
+                        ChatOpening(request.first,request.second,groups.firstOrNull {it.groupId==request.first}
+                            ?.messages?.firstOrNull {it.logicalId in groupUnreadIds.orEmpty()}?.logicalId)
+                    }
                     val reactionsAvailable=selected?.takeIf {id -> contacts.any {it.contact.remoteDeviceId==id && !it.contact.request && !it.contact.blocked}}
                         ?.let {id -> runCatching {active.reactionPeer(id)}.getOrDefault(false)} ?: false
                     val deleteAvailable=selected?.takeIf {id -> contacts.any {it.contact.remoteDeviceId==id && !it.contact.request && !it.contact.blocked}}
                         ?.let {id -> runCatching {active.deletePeer(id)}.getOrDefault(false)} ?: false
                     val editAvailable=selected?.takeIf {id -> contacts.any {it.contact.remoteDeviceId==id && !it.contact.request && !it.contact.blocked}}
                         ?.let {id -> runCatching {active.editPeer(id)}.getOrDefault(false)} ?: false
-                    mutable.value = mutable.value.copy(identity = identity, ghostCloakId=if(identity!=null) runtime.ownGhostCloakId() else null, contacts = contacts, unreadCount = unread.values.sum(), unreadByConversation = unread,
+                    mutable.value = mutable.value.copy(identity = identity, ghostCloakId=if(identity!=null) runtime.ownGhostCloakId() else null, contacts = contacts, unreadCount = unread.values.sum()+groupUnread.values.sum(), unreadByConversation = unread,
+                        groupUnreadByConversation=groupUnread,
+                        directOpening=if(directRequest!=null && pendingDirectOpening==directRequest) directOpening else mutable.value.directOpening,
+                        groupOpening=if(groupRequest!=null && pendingGroupOpening==groupRequest) groupOpening else mutable.value.groupOpening,
+                        groupUnreadExpiries=if(identity!=null) runtime.groupUnreadExpiries() else emptyMap(),
                         ownProfile=if(identity!=null) active.localProfile() else LocalProfile(),
                         privacyDefaults=active.privacyDefaults(),
                         reactionsAvailable=reactionsAvailable,
@@ -99,16 +128,20 @@ class GhostViewModel internal constructor(application: Application, private val 
                         requireRequestConfirmation=active.requireRequestConfirmation(),
                         blockedContacts=if(identity!=null) active.blockedContacts() else emptyList(),
                         groupInvitations=if(identity!=null) runtime.groupInvitations() else emptyList(),
-                        groups=if(identity!=null) runtime.groupConversations() else emptyList(),
+                        groups=groups,
                         groupOwnershipRequests=if(identity!=null) runtime.pendingGroupOwnershipRequests() else emptyList(),
                         forkedGroupCount=if(identity!=null) runtime.forkedGroupCount() else 0,
                         cachedAttachments = runtime.cachedAttachments(selected),
+                        cachedGroupId=selectedGroup,
+                        cachedGroupAttachments=runtime.cachedAttachments(selectedGroup),
                         disappearingPolicies = if (identity != null) active.policies() else emptyMap(),
                         unreadExpiries = if (identity != null) active.unreadExpiries() else emptyMap(),
                         previews = conversation.previews,
                         messages = conversation.messagesForSelection(selected),
                         demo = runtime.inDemo, protection = runtime.protection, ready = true,
                         networkRequiresConnect=runtime.networkRequiresConnect,networkConfigured=runtime.networkConfigured,networkStatus=runtime.networkStatus)
+                    if(pendingDirectOpening==directRequest) pendingDirectOpening=null
+                    if(pendingGroupOpening==groupRequest) pendingGroupOpening=null
                 }
             } catch (e: EndpointStorageFailure) { important = true; failure = "Encrypted storage is unavailable. Your identity was not reset. Close the app and investigate before continuing." }
             catch (e: CryptoFailure) { failure = cryptoError(e.error); important = true }
@@ -164,7 +197,10 @@ class GhostViewModel internal constructor(application: Application, private val 
     }
     fun clearDownloadedCache(done:()->Unit)=run {
         runtime.clearDownloadedCache()
-        withContext(Dispatchers.Main) {done()}
+        withContext(Dispatchers.Main) {
+            getApplication<GhostApplication>().media.photos.clear()
+            done()
+        }
         null
     }
     fun acceptRequest(id: String) = run { runtime.acceptRequest(it,id); pollingWake.trySend(Unit); null }
@@ -173,6 +209,17 @@ class GhostViewModel internal constructor(application: Application, private val 
         val groupId=runtime.createGroupAndInvite(id)
         pollingWake.trySend(Unit)
         withContext(Dispatchers.Main.immediate) {opened(groupId)}
+        null
+    }
+    fun createGroupAndOpen(ids:List<String>,name:String,opened:(String)->Unit)=run {
+        val groupId=runtime.createGroupAndInviteSelected(ids,name)
+        pollingWake.trySend(Unit)
+        withContext(Dispatchers.Main.immediate) {opened(groupId)}
+        null
+    }
+    fun cancelQueuedCreationInvites(id:String)=run {
+        runtime.cancelQueuedCreationInvites(id)
+        pollingWake.trySend(Unit)
         null
     }
     fun sendGroupText(id:String,text:String,success:()->Unit,replyTo:String?=null)=run {
@@ -203,6 +250,7 @@ class GhostViewModel internal constructor(application: Application, private val 
     }
     fun beginGroupManagementSetup(id:String)=groupManagementAction {runtime.beginGroupManagementSetup(id)}
     fun retryGroupManagementSetup(id:String)=groupManagementAction {runtime.retryGroupManagementSetup(id)}
+    fun resendGroupInvitation(id:String)=groupManagementAction {runtime.resendGroupInvitation(id)}
     fun setGroupPostingMode(id:String,mode:GroupPostingModeV1)=groupManagementAction {
         runtime.setGroupPostingMode(id,mode)
     }
@@ -279,8 +327,57 @@ class GhostViewModel internal constructor(application: Application, private val 
             pollingWake.trySend(Unit);null
         } finally {target.delete()}
     }
-    fun select(id: String) { selected = id; safetyNumberSelection.clear(); mutable.value = mutable.value.copy(messages = emptyList(), safetyNumber = null); refresh() }
-    fun leaveConversation(id: String) { if (selected == id) selected = null }
+    fun select(id: String) {
+        if(selected==id && mutable.value.directOpening?.conversationId==id) {refresh();return}
+        selected=id; pendingDirectOpening=id to ++openingGeneration
+        safetyNumberSelection.clear()
+        mutable.value=mutable.value.copy(messages=emptyList(),safetyNumber=null,directOpening=null)
+        refresh()
+    }
+    fun openGroupConversation(id:String) {
+        if(selectedGroup==id && mutable.value.groupOpening?.conversationId==id) {refresh();return}
+        selectedGroup=id; pendingGroupOpening=id to ++openingGeneration
+        mutable.value=mutable.value.copy(groupOpening=null)
+        refresh()
+    }
+    fun closeGroupConversation(id:String) {if(selectedGroup==id) {selectedGroup=null;pendingGroupOpening=null}}
+    fun leaveConversation(id: String) { if (selected == id) {selected=null;pendingDirectOpening=null} }
+    fun markVisibleDirectRead(id:String,visibleIds:Set<String>) {
+        if(selected!=id || visibleIds.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val remaining=runtime.use { service ->
+                    if(selected!=id) return@use null
+                    service.markVisibleRead(id,visibleIds)
+                    service.unreadMessageIds(id).size
+                } ?: return@launch
+                if(selected!=id) return@launch
+                val previous=mutable.value
+                val direct=previous.unreadByConversation+(id to remaining)
+                mutable.value=previous.copy(unreadByConversation=direct,
+                    unreadCount=direct.values.sum()+previous.groupUnreadByConversation.values.sum())
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { refresh() }
+        }
+    }
+    fun markVisibleGroupRead(id:String,visibleIds:Set<String>) {
+        if(selectedGroup!=id || visibleIds.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val remaining=runtime.use {
+                    if(selectedGroup!=id) return@use null
+                    runtime.markVisibleGroupRead(id,visibleIds)
+                    runtime.groupUnreadMessageIds(id).size
+                } ?: return@launch
+                if(selectedGroup!=id) return@launch
+                val previous=mutable.value
+                val groups=previous.groupUnreadByConversation+(id to remaining)
+                mutable.value=previous.copy(groupUnreadByConversation=groups,
+                    unreadCount=groups.values.sum()+previous.unreadByConversation.values.sum())
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { refresh() }
+        }
+    }
     fun exportCard() = run { mutable.value = mutable.value.copy(card = it.exportCard(fresh = true)); null }
     fun importCard(text: String, success: () -> Unit) = run { it.importCard(text); withContext(Dispatchers.Main) { success() }; null }
     fun loadFingerprint(id: String, contactId: String, pending: Boolean): kotlinx.coroutines.Job {
@@ -399,6 +496,10 @@ class GhostViewModel internal constructor(application: Application, private val 
     fun leaveDemo() = run { runtime.leaveDemo(); selected = null; safetyNumberSelection.clear(); mutable.value = mutable.value.copy(card = "", safetyNumber = null); null }
     private fun networkError(error: org.ghostcloak.protocol.ApiFailure) = when {
         error.code == "group_governance_entry_pending" -> "A group update is already pending."
+        error.code == "group_admission_pending" ->
+            "An invitation is still being confirmed. Wait for it to finish before inviting another member or enabling group management."
+        error.code == "group_invite_retry_later" -> "Invitation resent recently. Wait a moment before trying again."
+        error.code == "group_invite_unavailable" -> "That invitation is no longer pending. Sync this group and check its members."
         error.code == "group_management_history_full" -> "Group management history is full."
         error.code == "group_message_already_removed" -> "This message has already been removed."
           error.code == "group_moderation_capability_pending" ->

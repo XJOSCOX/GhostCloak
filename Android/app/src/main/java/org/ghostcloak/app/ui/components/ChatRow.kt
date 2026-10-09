@@ -16,6 +16,7 @@ import org.ghostcloak.messaging.*
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 @Composable fun ChatRow(status: ContactStatus, last: Message?, open: (String) -> Unit, unreadCount: Int = 0) {
     val contact = status.contact
@@ -31,7 +32,7 @@ import java.time.format.DateTimeFormatter
                     if(contact.muted && !contact.request) Text(" · Muted",style=MaterialTheme.typography.labelSmall,
                         color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.semantics { contentDescription="Muted conversation" })
                     last?.let {
-                        Text(DateTimeFormatter.ofPattern(if (Instant.ofEpochMilli(it.timestamp).atZone(ZoneId.systemDefault()).toLocalDate() == java.time.LocalDate.now()) "HH:mm" else "MMM d").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(it.timestamp)),
+                        Text(DateTimeFormatter.ofPattern(if (Instant.ofEpochMilli(it.timestamp).atZone(ZoneId.systemDefault()).toLocalDate() == java.time.LocalDate.now()) "h:mm a" else "MMM d",Locale.US).withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(it.timestamp)),
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }

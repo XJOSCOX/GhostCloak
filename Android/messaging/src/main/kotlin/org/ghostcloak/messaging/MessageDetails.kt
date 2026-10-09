@@ -3,12 +3,13 @@ package org.ghostcloak.messaging
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /** Local presentation only. Never include envelope, routing, submission or device identifiers. */
 object MessageDetails {
     fun fields(message:Message):List<Pair<String,String>> = buildList {
         add("Direction" to if(message.direction==Direction.OUTGOING) "Sent" else "Received")
-        add("Local time" to DateTimeFormatter.ofPattern("MMM d, yyyy · HH:mm")
+        add("Local time" to DateTimeFormatter.ofPattern("MMM d, yyyy · h:mm a",Locale.US)
             .withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(message.timestamp)))
         add("Status" to when(message.state) {
             MessageState.PENDING,MessageState.ENCRYPTED,MessageState.SENT_TO_TRANSPORT -> "Pending"

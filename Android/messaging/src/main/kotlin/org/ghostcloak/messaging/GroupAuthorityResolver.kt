@@ -3,6 +3,7 @@ package org.ghostcloak.messaging
 import kotlinx.serialization.Serializable
 import org.ghostcloak.crypto.EndpointRecords
 import org.ghostcloak.crypto.SecureSessionEngine
+import org.ghostcloak.identity.SessionLifecycle
 import org.ghostcloak.identity.RandomIdentifiers
 import org.ghostcloak.protocol.ApiFailure
 import org.ghostcloak.protocol.ApiRequest
@@ -82,6 +83,97 @@ class GroupAuthorityResolver(private val repository:LocalRepository,private val 
             binding.accountId==candidate.accountId && binding.deviceId==candidate.deviceId &&
             MessageDigest.isEqual(binding.identityDigest,candidate.signalIdentityDigest) &&
             MessageDigest.isEqual(binding.authPublicKey,candidate.authPublicKey)
+    }
+    /** Verify a noncontact candidate only for the exact owner-signed admission parent. */
+    suspend fun verifyOwnerIntroducedCandidate(introduction:GroupOwnerIntroductionV1,
+        parent:GroupState,network:EndpointNetworkState):Boolean {
+        if(!GroupOwnerIntroductionRulesV1.verify(introduction,parent)) return false
+        val candidate=introduction.candidate
+        if(repository.relationshipState(candidate.deviceId)==RelationshipState.BLOCKED) return false
+        val owner=parent.members.single {it.memberId==parent.ownerId}
+        val ownerTrusted=if(owner.deviceId==network.ownDevice())
+            owner.accountId==network.accountId() &&
+                MessageDigest.isEqual(owner.authPublicKey,network.registeredGroupPublicKey()) &&
+                MessageDigest.isEqual(owner.signalIdentityDigest,
+                    DeviceAuth.digest(engine.createIdentity("Local").publicKey))
+        else matchesTrustedMember(owner)
+        if(!ownerTrusted) return false
+        val pinned=engine.trustedRemoteIdentityDigest(candidate.deviceId) ?: return false
+        if(!MessageDigest.isEqual(pinned,candidate.signalIdentityDigest)) return false
+        val response=client.call(ApiRequest.CapabilityLookup(candidate.deviceId,
+            expectedAccountId=candidate.accountId,expectedIdentityDigest=pinned),
+            reportTransientFailure=false)
+        val binding=response.deviceBinding ?: return false
+        val after=engine.trustedRemoteIdentityDigest(candidate.deviceId) ?: return false
+        return repository.relationshipState(candidate.deviceId)!=RelationshipState.BLOCKED &&
+            MessageDigest.isEqual(after,pinned) && binding.version==1 &&
+            binding.accountId==candidate.accountId && binding.deviceId==candidate.deviceId &&
+            MessageDigest.isEqual(binding.identityDigest,candidate.signalIdentityDigest) &&
+            MessageDigest.isEqual(binding.authPublicKey,candidate.authPublicKey)
+    }
+    /** Pre-join Signal setup from owner-signed routes; no Contact or direct profile is written. */
+    suspend fun connectIntroducedRoster(introduction:GroupOwnerIntroductionV1,parent:GroupState,
+        network:EndpointNetworkState):Boolean {
+        if(!GroupOwnerIntroductionRulesV1.verify(introduction,parent) ||
+            introduction.candidate.deviceId!=network.ownDevice() ||
+            introduction.candidate.accountId!=network.accountId() ||
+            !MessageDigest.isEqual(introduction.candidate.authPublicKey,
+                network.registeredGroupPublicKey()) ||
+            !MessageDigest.isEqual(introduction.candidate.signalIdentityDigest,
+                DeviceAuth.digest(engine.createIdentity("Local").publicKey))) return false
+        val owner=parent.members.single {it.memberId==parent.ownerId}
+        if(!matchesTrustedMember(owner)) return false
+        for(member in parent.members) {
+            if(repository.relationshipState(member.deviceId)==RelationshipState.BLOCKED) return false
+            val existing=engine.trustedRemoteIdentityDigest(member.deviceId)
+            if(existing!=null && !MessageDigest.isEqual(existing,member.signalIdentityDigest)) return false
+            val route=introduction.routes.singleOrNull {it.memberId==member.memberId} ?: return false
+            val binding=client.call(ApiRequest.CapabilityLookup(member.deviceId,
+                expectedAccountId=member.accountId,expectedIdentityDigest=member.signalIdentityDigest),
+                reportTransientFailure=false).deviceBinding ?: return false
+            if(binding.version!=1 || binding.accountId!=member.accountId ||
+                binding.deviceId!=member.deviceId ||
+                !MessageDigest.isEqual(binding.identityDigest,member.signalIdentityDigest) ||
+                !MessageDigest.isEqual(binding.authPublicKey,member.authPublicKey)) return false
+            if(existing!=null && network.route(member.deviceId)!=null &&
+                engine.getSessionLifecycle(member.deviceId)==SessionLifecycle.ACTIVE) continue
+            val entry=client.lookup(route.ghostCloakId,
+                network.allocationIdFor(route.ghostCloakId))
+            if(entry.ghostCloakId!=route.ghostCloakId || entry.deviceId!=member.deviceId ||
+                entry.accountId!=member.accountId || entry.bundle.deviceId!=member.deviceId ||
+                !MessageDigest.isEqual(DeviceAuth.digest(entry.bundle.identity),
+                    member.signalIdentityDigest)) return false
+            entry.bundle.validate()
+            if(existing==null) engine.establishSession(entry.bundle.remote())
+            else {
+                engine.validateRetainedIdentity(entry.bundle.remote())
+                if(engine.getSessionLifecycle(member.deviceId)!=SessionLifecycle.ACTIVE)
+                    return false
+            }
+            if(!MessageDigest.isEqual(engine.trustedRemoteIdentityDigest(member.deviceId)
+                    ?: return false,member.signalIdentityDigest)) return false
+            network.remember(entry)
+            network.completeAllocation(route.ghostCloakId)
+        }
+        return true
+    }
+    suspend fun matchesIntroducedRosterMember(introduction:GroupOwnerIntroductionV1,
+        parent:GroupState,member:GroupMember,network:EndpointNetworkState):Boolean {
+        if(!GroupOwnerIntroductionRulesV1.verify(introduction,parent) ||
+            introduction.candidate.deviceId!=network.ownDevice() ||
+            parent.members.none {it.memberId==member.memberId &&
+                it.deviceId==member.deviceId} ||
+            repository.relationshipState(member.deviceId)==RelationshipState.BLOCKED) return false
+        val pinned=engine.trustedRemoteIdentityDigest(member.deviceId) ?: return false
+        if(!MessageDigest.isEqual(pinned,member.signalIdentityDigest)) return false
+        val binding=client.call(ApiRequest.CapabilityLookup(member.deviceId,
+            expectedAccountId=member.accountId,expectedIdentityDigest=pinned),
+            reportTransientFailure=false).deviceBinding ?: return false
+        val after=engine.trustedRemoteIdentityDigest(member.deviceId) ?: return false
+        return MessageDigest.isEqual(after,pinned) && binding.version==1 &&
+            binding.deviceId==member.deviceId && binding.accountId==member.accountId &&
+            MessageDigest.isEqual(binding.identityDigest,member.signalIdentityDigest) &&
+            MessageDigest.isEqual(binding.authPublicKey,member.authPublicKey)
     }
     /** Group-only current binding check. Never records or restores direct-contact acceptance. */
     suspend fun matchesCurrentGroupMember(groupId:String,member:GroupMember):Boolean {

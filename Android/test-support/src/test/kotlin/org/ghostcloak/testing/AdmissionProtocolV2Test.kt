@@ -134,6 +134,16 @@ class AdmissionProtocolV2Test {
         corrupt[index]=0
         assertFalse(ConversationPayload.decode(corrupt).supportsAdmissionV2)
     }
+    @Test fun acceptedContactReplyAdvertisesAdmissionWithDisplayName() {
+        val encoded=ConversationPayload.encode("P13ReplySim2",0,displayName="Simulator2")
+        val decoded=ConversationPayload.decode(encoded)
+        assertEquals(256,encoded.size) // Keep the old decoder's minimum text frame.
+        assertTrue(decoded.supportsGroups)
+        assertTrue(decoded.supportsAdmissionV2)
+        val named=ConversationPayload.decode(ConversationPayload.encode("Hello",0,displayName="Alex"))
+        assertEquals("Alex",named.displayName)
+        assertTrue(named.supportsAdmissionV2)
+    }
     @Test fun replayedAdmissionBeforeLocalRemovalStillAnchorsAtomically() {
         val owner=person();val local=person(2);val candidate=person(3)
         val trust=GroupTrustedPeer {true}

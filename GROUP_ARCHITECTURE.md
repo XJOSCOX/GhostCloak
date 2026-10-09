@@ -1,5 +1,33 @@
 # P12 — private group architecture design
 
+## Current P13 implementation (P13.9 assurance in progress)
+
+Ghost Cloak groups contain at most five members. There is no server-side group
+roster or group message endpoint: each group message or control is independently
+encrypted and sent over the existing pairwise Signal sessions. The backend can
+observe routing, timing, ciphertext sizes and fan-out patterns. A shared group
+media blob can also correlate authenticated downloaders; its key, filename,
+caption, group identity and profile content remain inside E2EE content.
+
+Admission requires every current member's exact signed approval. Governed
+membership, roles, posting policy, profile, timer and moderation changes share
+one retained, bounded signed journal. A current member resyncs the contiguous
+chain; only a newly joining member may start from its owner/coordinator-signed
+admission checkpoint. A missing legacy journal locks management rather than
+reconstructing signatures. Forked groups stay read-only and require a new group.
+
+Governed user messages must match the current head. A delayed message from an
+older head may be lost after a group change; historical-head acceptance is not
+used to recover it. Within one sender and head, text, replies and media carry
+an authenticated sender sequence. Independent senders have no claimed total
+chronology. Each device starts its own disappearing timer for accepted content;
+remote deletion and expiry do not guarantee erasure of copies already seen or
+saved. Local Block suppresses user content while authenticated maintenance
+continues, without exposing the block state to the sender.
+
+The phase notes below record design and rollout history; statements that a
+feature was "deferred" describe that earlier checkpoint, not the current app.
+
 **P13.5 group message controls:** A reply uses a separate `GroupTextV3` Signal
 frame with the target's logical ID; it carries no snapshot of the old text.
 Reactions, own-text edits, and sender deletion use a versioned, authenticated

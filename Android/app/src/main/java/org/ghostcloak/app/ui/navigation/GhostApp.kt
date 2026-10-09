@@ -60,7 +60,7 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
     }
     Scaffold(containerColor = MaterialTheme.colorScheme.background, bottomBar = {
         if (state.identity != null && route in listOf("contacts", "people", "profiles", "settings")) {
-            GhostBottomBar(route) { destination ->
+            GhostBottomBar(route,state.unreadCount) { destination ->
                 if(destination=="settings" && route !in settingsRoutes) settingsReturnRoute=route ?: "contacts"
                 if(destination !in settingsRoutes) lock?.leaveSettings()
                 nav.navigate(destination) { popUpTo("contacts"); launchSingleTop = true }
@@ -76,14 +76,14 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                         openGroup={nav.navigate("group/$it")},
                         showCreateGroup={nav.navigate("group-create")}) }
                     composable("group-create") { CreateGroupScreen(state,{nav.popBackStack()},
-                        {id -> model.createGroupAndOpen(id) {groupId ->
+                        {name,ids -> model.createGroupAndOpen(ids,name) {groupId ->
                             nav.navigate("group/$groupId") {popUpTo("group-create") {inclusive=true}}
                         }},
                         {device -> nav.navigate("conversation/$device")}) }
                     composable("archived") { ContactsScreen(state, {}, { id -> nav.navigate("conversation/$id") },
                         model::connectNetwork,model::syncNetwork,archived=true,
                         unarchive={model.setArchived(it,false)},back={nav.popBackStack()}) }
-                    composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("security/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
+                    composable("people") { ContactsScreen(state, { nav.navigate("add") }, { id -> nav.navigate("conversation/$id") }, model::connectNetwork, model::syncNetwork, directory=true) }
                     composable("add") { AddContactScreen(state, { nav.popBackStack() }, model::exportCard,
                         {name->model.addNetwork(name) {nav.popBackStack()}},model::unblock,{nav.navigate("blocked")},
                         { text -> model.importCard(text) { nav.popBackStack() } },
@@ -139,11 +139,21 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             { target,emoji -> model.react(id,target,emoji) },
                             { localId -> model.retrySubmission(id,localId) },
                             { localId -> model.deleteForEveryone(id,localId) },
-                            { localId,text,done -> model.editMessage(id,localId,text,done) })
+                            { localId,text,done -> model.editMessage(id,localId,text,done) },
+                            {visible -> model.markVisibleDirectRead(id,visible)})
                     }
                     composable("group/{id}") { backStack ->
                         val id=backStack.arguments?.getString("id") ?: return@composable
                         val group=state.groups.firstOrNull {it.groupId==id} ?: return@composable
+                        DisposableEffect(id,lifecycle) {
+                            val observer=androidx.lifecycle.LifecycleEventObserver {_,event ->
+                                if(event==Lifecycle.Event.ON_START) model.openGroupConversation(id)
+                                if(event==Lifecycle.Event.ON_STOP) model.closeGroupConversation(id)
+                            }
+                            lifecycle.addObserver(observer)
+                            if(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) model.openGroupConversation(id)
+                            onDispose {lifecycle.removeObserver(observer);model.closeGroupConversation(id)}
+                        }
                         GroupConversationScreen(state,group,{nav.popBackStack()},
                             {text,done->model.sendGroupText(id,text,done)},
                             {device->model.inviteToGroup(id,device)},
@@ -157,7 +167,8 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             react={target,emoji->model.reactGroupMessage(id,target,emoji)},
                             editOwn={target,text,done->model.editGroupMessage(id,target,text,done)},
                             deleteOwn={target->model.deleteGroupMessage(id,target)},
-                            refreshMedia={model.refresh()})
+                            refreshMedia={model.refresh()},
+                            markVisibleRead={visible -> model.markVisibleGroupRead(id,visible)})
                     }
                     composable("group-info/{id}") { backStack ->
                         val id=backStack.arguments?.getString("id") ?: return@composable
@@ -176,6 +187,8 @@ import org.ghostcloak.app.ui.qr.ContactQrScreen
                             leave={model.leaveGroup(id)},dissolve={model.dissolveGroup(id)},
                             invite={model.inviteToGroup(id,it)},
                             openChat={nav.navigate("conversation/$it")},
+                            cancelQueued={model.cancelQueuedCreationInvites(id)},
+                            resendInvitation={model.resendGroupInvitation(id)},
                             disappearing={model.setGroupDisappearing(id,it)},
                             saveProfile={head,name,about,photo,bytes ->
                                 model.setGroupProfile(id,head,name,about,photo,bytes)

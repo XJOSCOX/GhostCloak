@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collect
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -31,7 +33,8 @@ import org.ghostcloak.protocol.EnvelopeCodec
     sendReply:(String,ReplyReference,()->Unit)->Unit={_,_,_->},
     setPinned:(Boolean)->Unit={},setArchived:(Boolean)->Unit={},setMuted:(Boolean)->Unit={},
     react:(String,String?)->Unit={_,_->},retryMessage:(String)->Unit={},deleteEveryone:(String)->Unit={},
-    editMessage:(String,String,()->Unit)->Unit={_,_,_->}) {
+    editMessage:(String,String,()->Unit)->Unit={_,_,_->},
+    markVisibleRead:(Set<String>)->Unit={}) {
     var draft by remember(status.contact.remoteDeviceId) { mutableStateOf("") }
     var viewOnceText by remember(status.contact.remoteDeviceId) { mutableStateOf(false) }
     var revealed by remember(status.contact.remoteDeviceId) { mutableStateOf<Pair<String,String>?>(null) }
@@ -85,7 +88,33 @@ import org.ghostcloak.protocol.EnvelopeCodec
     }
     val selectedMatch=searchMatches.getOrNull(resultPosition.coerceIn(0,(searchMatches.size-1).coerceAtLeast(0)))
     val list = rememberLazyListState()
-    LaunchedEffect(state.messages.size) { if (state.messages.isNotEmpty()) list.animateScrollToItem(state.messages.lastIndex) }
+    val opening=state.directOpening?.takeIf {it.conversationId==status.contact.remoteDeviceId}
+    val messageIds=remember(state.messages) {state.messages.map {it.localId}}
+    var anchoredGeneration by remember(status.contact.remoteDeviceId) {mutableLongStateOf(-1L)}
+    LaunchedEffect(opening,messageIds) {
+        if(opening!=null && messageIds.isNotEmpty()) {
+            if(anchoredGeneration!=opening.generation) {
+                list.scrollToItem(openingMessageIndex(messageIds,opening.firstUnreadId))
+                anchoredGeneration=opening.generation
+            }
+            val reported=mutableSetOf<String>()
+            snapshotFlow {list.layoutInfo.visibleItemsInfo.mapNotNull {item ->
+                state.messages.getOrNull(item.index)?.takeIf {it.direction==Direction.INCOMING &&
+                    !it.deleted && !it.policyEvent}?.localId
+            }.toSet()}.distinctUntilChanged().collect {visible ->
+                val new=visible-reported
+                if(new.isNotEmpty()) {reported+=new;markVisibleRead(new)}
+            }
+        }
+    }
+    var previousCount by remember(status.contact.remoteDeviceId) {mutableIntStateOf(0)}
+    LaunchedEffect(messageIds.size,opening) {
+        if(opening!=null && anchoredGeneration==opening.generation &&
+            messageIds.size>previousCount && previousCount>0 &&
+            (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= previousCount-1)
+            list.animateScrollToItem(messageIds.lastIndex)
+        previousCount=messageIds.size
+    }
     LaunchedEffect(selectedMatch,searching) { if(searching && selectedMatch!=null) list.animateScrollToItem(selectedMatch) }
     Column(Modifier.fillMaxSize().imePadding()) {
         PageHeader(status.contact.visibleName, subtitle = when {
@@ -94,7 +123,7 @@ import org.ghostcloak.protocol.EnvelopeCodec
             status.contact.request -> "Message request - Unverified"
             !active -> "Session unavailable"
             else -> null
-        }, back = back, avatarName = status.contact.visibleName,
+        }, back = back, avatarName = status.contact.visibleName, onIdentityClick=security,
             avatarPhoto=if(status.contact.request || status.contact.blocked) null else status.sharedPhoto) {
             if(!status.contact.request && !status.contact.blocked)
                 HeaderAction(Glyph.SEARCH,"Search conversation") { searching=!searching;query="";resultPosition=0 }

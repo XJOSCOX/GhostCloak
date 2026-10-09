@@ -78,7 +78,17 @@ class MainActivity : FragmentActivity() {
                 GhostCloakTheme(darkTheme = dark) {
                     val operationState by app.localOperationGate.state.collectAsState()
                     val inactivityAccess by app.inactivity.state.collectAsState()
+                    val lockState by appLock.state.collectAsState()
                     val generation by app.freshGeneration.collectAsState()
+                    LaunchedEffect(lockState.canShowContent,inactivityAccess,operationState) {
+                        if(lockState.canShowContent && app.inactivity.normalAccessAllowed &&
+                            operationState==LocalOperationState.NONE &&
+                            lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+                            // App lock may finish initializing or unlock after onStart. Restore
+                            // foreground media access after the lock observer revoked it.
+                            app.media.start(); runtime.notificationActivityVisible(true)
+                        }
+                    }
                     var lastInactivityAccess by remember { mutableStateOf<org.ghostcloak.app.access.InactivityAccess?>(null) }
                     LaunchedEffect(inactivityAccess) {
                         if(inactivityAccess==org.ghostcloak.app.access.InactivityAccess.TIME_UNCERTAIN) appLock.requireFreshUnlock()

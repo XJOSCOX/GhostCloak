@@ -1,6 +1,8 @@
 package org.ghostcloak.messaging
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import org.ghostcloak.identity.RandomIdentifiers
 import org.ghostcloak.protocol.DeviceAuth
 import org.ghostcloak.protocol.NetworkCodec
@@ -31,10 +33,12 @@ enum class GroupApply { ACCEPTED, DUPLICATE, STALE, NEEDS_RESYNC, FORKED, REJECT
     override fun toString()="GroupMember(redacted)"
 }
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable data class GroupState(val groupId:String,val revision:Long,val epoch:Long,
     val ownerId:String,val coordinatorId:String,val members:List<GroupMember>,
     val previousDigest:ByteArray,val lifecycle:GroupLifecycle=GroupLifecycle.ACTIVE,
-    val profileRevision:Long=0,val profileDigest:ByteArray=ByteArray(32),val disappearingSeconds:Int=0) {
+    val profileRevision:Long=0,val profileDigest:ByteArray=ByteArray(32),val disappearingSeconds:Int=0,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val initialName:String="Group") {
     override fun toString()="GroupState(redacted)"
 }
 
@@ -105,6 +109,7 @@ object GroupStatements {
     private val SIGNING_DOMAINS=setOf(GENESIS_DOMAIN,INVITE_DOMAIN,ACCEPT_DOMAIN,ACTOR_DOMAIN,
         COORDINATOR_DOMAIN,TRANSFER_DOMAIN,ADMISSION_DOMAIN,ADMISSION_PROPOSAL_V2_DOMAIN,
         ADMISSION_APPROVAL_V2_DOMAIN,BASELINE_PROPOSAL_DOMAIN,BASELINE_APPROVAL_DOMAIN,
+        "GhostCloak.GroupOwnerIntroduction.v1",
         "GhostCloak.GroupGovernanceActivationOwner.v1",
         "GhostCloak.GroupGovernanceActivationCoordinator.v1",
         "GhostCloak.GroupGovernanceActivationAck.v1",
@@ -151,6 +156,7 @@ object GroupStatements {
     fun validate(state:GroupState) {
         require(GroupIds.valid(state.groupId) && state.revision in 1..MAX_EVENTS.toLong() && state.epoch in 1..state.revision)
         require(state.previousDigest.size==32 && state.profileDigest.size==32 && state.profileRevision>=0)
+        GroupProfileRulesV1.validate(GroupProfileV1(name=state.initialName))
         require(state.members.size in 1..MAX_MEMBERS)
         require(state.members.map {it.memberId}==state.members.map {it.memberId}.sorted() &&
             state.members.map {it.memberId}.distinct().size==state.members.size)

@@ -38,6 +38,20 @@ import org.ghostcloak.protocol.GhostCloakIds
             }
             Text("Changes affect future requests only. Existing hidden requests remain hidden.",style=MaterialTheme.typography.bodySmall)
         }
+        SettingsGroup("Group invitations") {
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Allow invitations from contacts")
+                    Text("Accepted contacts may invite you to a group. You must still accept each invitation before joining.",
+                        style=MaterialTheme.typography.bodySmall)
+                }
+                Switch(state.privacyDefaults.allowGroupInvitations,
+                    onCheckedChange={change(state.privacyDefaults.copy(allowGroupInvitations=it))},
+                    enabled=!state.loading,modifier=Modifier.testTag("allow-group-invitations"))
+            }
+            Text("Turn off to receive no new group invitations. Existing pending invitations are hidden and cannot be accepted until you turn this back on. Your current groups are unaffected.",
+                style=MaterialTheme.typography.bodySmall)
+        }
         SettingsGroup("Media privacy") {
             ChoiceSetting("Default voice mask",state.privacyDefaults.voiceMask.name.lowercase().replaceFirstChar(Char::uppercase),
                 VoiceMaskPreference.entries.map {it.name.lowercase().replaceFirstChar(Char::uppercase) to it}) {

@@ -30,6 +30,7 @@ object ConversationPayload {
     // This authenticated, fixed-position marker fits the existing 256-byte frame.
     private val compactGroupSupport = "GhostCloak/grp2!".toByteArray(Charsets.US_ASCII)
     private val admissionV2Support = "GC/admission-v2!".toByteArray(Charsets.US_ASCII)
+    private val combinedGroupAdmissionSupport = "GC/ga2!".toByteArray(Charsets.US_ASCII)
     private val baselineV1Support = "GC/baseline-v1!".toByteArray(Charsets.US_ASCII)
     private val governanceV1Support = "GC/governance-v1!".toByteArray(Charsets.US_ASCII)
     private val governanceTextV2Support = "GC/group-text-v2!".toByteArray(Charsets.US_ASCII)
@@ -255,15 +256,14 @@ object ConversationPayload {
                 deleteSupport.size+editSupport.size
             fun groupSpace(profileSize:Int)=paddedSize(profileSize)-
                 (prefixSize+extension.size+profileSize+earlierFlagsSize)
-            // Preserve the legacy display-name extension whenever the compact marker fits.
-            // A very long name is already delivered by the separate encrypted profile update;
-            // omit its redundant copy here only if that lets the full group marker fit.
+            // Preserve the inline legacy name when possible. A separate encrypted
+            // profile update also carries it when this short frame cannot fit it.
             val profile=if(extension.isNotEmpty() && requestedProfile.isNotEmpty() &&
                 groupSpace(requestedProfile.size)<compactGroupSupport.size &&
                 groupSpace(0)>=groupSupport.size) byteArrayOf() else requestedProfile
-            val size = paddedSize(profile.size)
+            val size=paddedSize(profile.size)
             if(size>16384) throw AppFailure(AppError.MESSAGE_TOO_LARGE)
-            // Keep the exact legacy padded size. Older clients ignore this marker inside padding.
+            // Keep 256-byte padding buckets. Older clients ignore the extension markers.
             val media=extension.isNotEmpty() && 16+text.size+replyBytes.size+extension.size+profile.size+mediaSupport.size<=size
             val bytes = ByteArray(size).also { SecureRandom().nextBytes(it) }
             ByteBuffer.wrap(bytes).put(magic).put(1).put(if (control) 2 else if(viewOnce) 5 else if(replyTo!=null) 7 else 1).putShort(0)
@@ -297,6 +297,10 @@ object ConversationPayload {
                 groupOffset+compactGroupSupport.size+admissionV2Support.size+
                     governanceTextV2Support.size<=size ->
                     compactGroupSupport.also {it.copyInto(bytes,groupOffset)}.size
+                groupOffset+compactGroupSupport.size+admissionV2Support.size<=size ->
+                    compactGroupSupport.also {it.copyInto(bytes,groupOffset)}.size
+                groupOffset+combinedGroupAdmissionSupport.size<=size ->
+                    combinedGroupAdmissionSupport.also {it.copyInto(bytes,groupOffset)}.size
                 groupOffset+groupSupport.size<=size -> groupSupport.also {it.copyInto(bytes,groupOffset)}.size
                 groupOffset+compactGroupSupport.size<=size -> compactGroupSupport.also {it.copyInto(bytes,groupOffset)}.size
                 else -> 0
@@ -662,11 +666,17 @@ object ConversationPayload {
             bytes.copyOfRange(offset,offset+groupSupport.size).contentEquals(groupSupport)
         val compactGroups=!fullGroups && supports && bytes.size-offset>=compactGroupSupport.size &&
             bytes.copyOfRange(offset,offset+compactGroupSupport.size).contentEquals(compactGroupSupport)
+        val combinedGroups=!fullGroups && !compactGroups && supports &&
+            bytes.size-offset>=combinedGroupAdmissionSupport.size &&
+            bytes.copyOfRange(offset,offset+combinedGroupAdmissionSupport.size)
+                .contentEquals(combinedGroupAdmissionSupport)
         if(fullGroups) offset+=groupSupport.size
         else if(compactGroups) offset+=compactGroupSupport.size
-        val admissionV2=(fullGroups || compactGroups) && bytes.size-offset>=admissionV2Support.size &&
+        else if(combinedGroups) offset+=combinedGroupAdmissionSupport.size
+        val separateAdmission=(fullGroups || compactGroups) && bytes.size-offset>=admissionV2Support.size &&
             bytes.copyOfRange(offset,offset+admissionV2Support.size).contentEquals(admissionV2Support)
-        if(admissionV2) offset+=admissionV2Support.size
+        val admissionV2=combinedGroups || separateAdmission
+        if(separateAdmission) offset+=admissionV2Support.size
         val governanceTextV2=admissionV2 && bytes.size-offset>=governanceTextV2Support.size &&
             bytes.copyOfRange(offset,offset+governanceTextV2Support.size)
                 .contentEquals(governanceTextV2Support)
@@ -696,7 +706,7 @@ object ConversationPayload {
         return Content(body, seconds, type == 2, supportsAttachments = supports,displayName=name,
             viewOnceKind=if(type==5) ViewOnceKind.TEXT else null,replyTo=reply,supportsMedia=media,
             supportsReactions=reactions,supportsProfiles=profiles,supportsDelete=deletes,supportsEdit=edits,
-            supportsGroups=fullGroups || compactGroups,supportsAdmissionV2=admissionV2,
+            supportsGroups=fullGroups || compactGroups || combinedGroups,supportsAdmissionV2=admissionV2,
             supportsGovernanceTextV2=governanceTextV2,
             supportsDirectOrdering=directOrdering)
     }

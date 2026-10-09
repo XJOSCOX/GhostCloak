@@ -93,4 +93,24 @@ class ConversationRefreshSnapshotTest {
         assertEquals(emptyMap<String, Message>(), snapshot.previews)
         assertEquals(emptyList<Message>(), snapshot.messages)
     }
+
+    @Test fun listPreviewsDoNotRequestFullUnselectedHistories() = runBlocking {
+        val contacts=listOf("alpha","bravo").map { id ->
+            ContactStatus(Contact(id,"account-$id",id,id),null,null)
+        }
+        val full=mutableListOf<String>()
+        val previews=mutableListOf<String>()
+        val snapshot=loadConversationRefreshSnapshot(contacts,"bravo",{ id ->
+            full+=id
+            listOf(Message("$id-1",id,Direction.INCOMING,"one",1,MessageState.RECEIVED),
+                Message("$id-2",id,Direction.INCOMING,"two",2,MessageState.RECEIVED))
+        },{ id ->
+            previews+=id
+            Message("$id-2",id,Direction.INCOMING,"two",2,MessageState.RECEIVED)
+        })
+        assertEquals(listOf("bravo"),full)
+        assertEquals(listOf("alpha"),previews)
+        assertEquals("alpha-2",snapshot.previews["alpha"]?.localId)
+        assertEquals(listOf("bravo-1","bravo-2"),snapshot.messages.map {it.localId})
+    }
 }

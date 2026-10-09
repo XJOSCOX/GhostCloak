@@ -8,6 +8,56 @@ import org.junit.Test
 
 class InlinePhotosTest {
     private suspend fun await(check: () -> Boolean) { withTimeout(5000) { while(!check()) delay(10) } }
+    @Test fun verifiedThumbnailSurvivesChatRevisitButNotRevocationOrBackground()=runBlocking {
+        val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
+        var calls=0; var allowed=true; var available=true
+        val photos=InlinePhotos(scope,{allowed},{_,_->available}) { _,_,verified ->
+            calls++;verified();Bitmap.createBitmap(4,2,Bitmap.Config.ARGB_8888)
+        }
+        try {
+            withContext(Dispatchers.Main) {photos.request("group","photo",true,true)}
+            await {photos.state.value["group" to "photo"]?.stage==PhotoStage.READY}
+            val first=photos.state.value["group" to "photo"]?.bitmap
+            withContext(Dispatchers.Main) {
+                photos.release("group","photo")
+                photos.request("group","photo",true,true)
+            }
+            assertSame(first,photos.state.value["group" to "photo"]?.bitmap)
+            assertEquals(1,calls)
+            withContext(Dispatchers.Main) {
+                photos.release("group","photo")
+                available=false
+                photos.reconcile()
+            }
+            assertTrue(photos.state.value.isEmpty())
+            withContext(Dispatchers.Main) {
+                available=true
+                photos.request("group","photo",true,true)
+            }
+            await {photos.state.value["group" to "photo"]?.stage==PhotoStage.READY}
+            assertEquals(2,calls)
+            withContext(Dispatchers.Main) {allowed=false;photos.clear()}
+            assertTrue(photos.state.value.isEmpty())
+        } finally {withContext(Dispatchers.Main) {photos.clear()};scope.cancel()}
+    }
+    @Test fun foregroundThumbnailCacheEvictsOldInactiveEntries()=runBlocking {
+        val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
+        val photos=InlinePhotos(scope,{true},{_,_->true}) { _,_,verified ->
+            verified();Bitmap.createBitmap(2,2,Bitmap.Config.ARGB_8888)
+        }
+        try {
+            repeat(12) {index ->
+                withContext(Dispatchers.Main) {photos.request("group","$index",true,true)}
+                await {photos.state.value["group" to "$index"]?.stage==PhotoStage.READY}
+                withContext(Dispatchers.Main) {photos.release("group","$index")}
+            }
+            withContext(Dispatchers.Main) {photos.request("group","new",true,true)}
+            await {photos.state.value["group" to "new"]?.stage==PhotoStage.READY}
+            assertEquals(12,photos.state.value.size)
+            assertFalse(photos.state.value.containsKey("group" to "0"))
+            assertTrue(photos.state.value.containsKey("group" to "1"))
+        } finally {withContext(Dispatchers.Main) {photos.clear()};scope.cancel()}
+    }
     @Test fun acceptedPhotoAutoFetchesOnceButRequestsDocumentsAndUnavailableDoNot()=runBlocking {
         val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
         var calls=0; var allowed=true; var available=true

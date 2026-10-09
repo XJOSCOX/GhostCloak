@@ -47,7 +47,9 @@ class ForegroundBudgetTest {
                 now += policy.completed(active)
             }
             assertTrue(windows.values.all { it <= 30 })
-            assertEquals(if (active) 2000L else 5000L, policy.completed(active))
+            // Idle and active foreground traffic have the same cadence, so an
+            // encrypted arrival cannot be inferred from the fetch interval.
+            assertEquals(2000L, policy.completed(active))
             policy.reset(); assertEquals(2000L, policy.completed(false))
         }
     }

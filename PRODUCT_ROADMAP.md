@@ -1,5 +1,12 @@
 # Ghost Cloak product roadmap — Phase P1 (2026-10-05)
 
+> **Current P13 status (2026-10-07):** The Android client implements five-member
+> pairwise-Signal groups with signed governance, group text/media/profile,
+> message controls, local disappearing timers and per-sender ordering. P13.9
+> final assurance is still in progress; see [P13_FINAL_ACCEPTANCE.md](P13_FINAL_ACCEPTANCE.md)
+> for the remaining validation gates. Older roadmap rows and phase snapshots
+> below are historical proposals, not the current feature list.
+
 Planning inventory against reviewed source at `9479a8e4b1503fb069c0fcd2c6d8acb14ac50612`. This is a source/UX review, not a fresh installed-client or VPS audit. Q security remediation and R cleanup are complete for their documented scope. Controlled adversarial A1 has 17 passes and one blocked coverage case; A2+ have **not** run. No feature, protocol, database, deployment or adversarial change is made in P1.
 
 Status means **COMPLETE** for the current one-device product contract, **PARTIAL** for a usable but limited feature, **FOUNDATION ONLY** for code or data structures without an end-to-end user flow, and **MISSING** for no current product flow. It is not a release-quality or security-signoff claim. The server still observes routing, timing, size and network metadata; a Ghost Cloak ID is public pseudonymous addressing, not anonymity or proof of identity.

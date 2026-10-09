@@ -24,13 +24,30 @@ class InlinePhotos(
     val state = mutable.asStateFlow()
     private val jobs = mutableMapOf<Pair<String,String>, Job>()
     private val tokens = mutableMapOf<Pair<String,String>, Any>()
+    private val visible = mutableSetOf<Pair<String,String>>()
+    private val recent = LinkedHashSet<Pair<String,String>>()
     private val serial = Semaphore(1)
     private var generation = 0L
+    private fun discard(key: Pair<String,String>) {
+        visible.remove(key)
+        recent.remove(key)
+        tokens.remove(key)
+        jobs.remove(key)?.cancel()
+        mutable.value=mutable.value-key
+    }
+    private fun touch(key: Pair<String,String>) { recent.remove(key);recent.add(key) }
     fun request(conversation: String, message: String, photo: Boolean, accepted: Boolean, retry: Boolean = false) {
         val key=conversation to message
         if(!photo || !accepted || !allowed() || !available(conversation,message)) return
-        if(jobs[key]?.isActive==true || (!retry && key in mutable.value)) return
-        if(key !in mutable.value && mutable.value.size>=12) return
+        if(!retry && (jobs[key]?.isActive==true || key in mutable.value)) {
+            visible.add(key);touch(key);return
+        }
+        if(retry) discard(key)
+        if(mutable.value.size>=12) {
+            val victim=recent.firstOrNull {it !in visible} ?: return
+            discard(victim)
+        }
+        visible.add(key);touch(key)
         val epoch=generation
         val token=Any(); tokens[key]=token
         fun valid()=epoch==generation && tokens[key]===token && allowed() && available(conversation,message)
@@ -52,18 +69,20 @@ class InlinePhotos(
     }
     fun release(conversation: String, message: String) {
         val key=conversation to message
-        tokens.remove(key)
-        jobs.remove(key)?.cancel()
-        mutable.value=mutable.value-key
+        visible.remove(key)
+        // Keep only verified, bounded thumbnails for a quick revisit in this unlocked foreground session.
+        if(mutable.value[key]?.stage!=PhotoStage.READY || !allowed() || !available(conversation,message))
+            discard(key)
     }
     fun clear() {
         generation++
+        visible.clear();recent.clear()
         tokens.clear()
         jobs.values.forEach { it.cancel() }; jobs.clear()
         mutable.value=emptyMap() // Drop bitmap references; no persistent plaintext thumbnails.
     }
     fun reconcile() {
         mutable.value.keys.filter { !allowed() || !available(it.first,it.second) }
-            .forEach { release(it.first,it.second) }
+            .forEach(::discard)
     }
 }

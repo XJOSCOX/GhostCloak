@@ -8,6 +8,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
 import org.ghostcloak.app.application.*
 import org.ghostcloak.app.ui.screens.*
+import org.ghostcloak.app.ui.navigation.GhostBottomBar
 import org.ghostcloak.app.ui.theme.GhostCloakTheme
 import org.ghostcloak.identity.*
 import org.ghostcloak.messaging.*
@@ -36,6 +37,56 @@ class MessengerDesignTest {
         compose.onNodeWithText("7K4M-9Q2F-X8DR").performClick()
         assertEquals(id, opened)
         compose.onNodeWithContentDescription("2 unread messages", useUnmergedTree = true).assertDoesNotExist()
+    }
+    @Test fun chatTabShowsLiveUnreadCountFromContactsPage() {
+        val unread=mutableStateOf(2)
+        compose.setContent {GhostCloakTheme {GhostBottomBar("people",unread.value,{})}}
+        compose.onNodeWithContentDescription("Chat, 2 unread messages",useUnmergedTree=true)
+            .assertIsDisplayed()
+        compose.onNodeWithText("2").assertIsDisplayed()
+        compose.runOnIdle {unread.value=100}
+        compose.onNodeWithContentDescription("Chat, 100 unread messages",useUnmergedTree=true)
+            .assertIsDisplayed()
+        compose.onNodeWithText("99+").assertIsDisplayed()
+        compose.runOnIdle {unread.value=0}
+        compose.onNodeWithContentDescription("Chat",useUnmergedTree=true).assertIsDisplayed()
+        compose.onNodeWithText("99+").assertDoesNotExist()
+    }
+    @Test fun contactRowOpensConversation() {
+        val accepted=contact.copy(contact=contact.contact.copy(request=false))
+        var opened:String?=null
+        compose.setContent {GhostCloakTheme {
+            ContactsScreen(AppState(loading=false,contacts=listOf(accepted)),{},
+                {opened=it},directory=true)
+        }}
+        compose.onNodeWithText(accepted.contact.visibleName).performClick()
+        assertEquals(id,opened)
+    }
+    @Test fun conversationHeaderOpensContactDetails() {
+        val accepted=contact.copy(contact=contact.contact.copy(request=false))
+        var details=0
+        compose.setContent {GhostCloakTheme {
+            ConversationScreen(AppState(loading=false),accepted,{}, {details++},
+                {_,_->},{})
+        }}
+        compose.onNodeWithTag("contact-header").performClick()
+        assertEquals(1,details)
+    }
+    @Test fun directChatOpensAtLastSeenRowAndOnlyReportsVisibleRows() {
+        val accepted=contact.copy(contact=contact.contact.copy(request=false))
+        val messages=(1..50).map {index -> Message(RandomIdentifiers.create(),id,
+            Direction.INCOMING,"message $index",index.toLong(),MessageState.RECEIVED) }
+        val visible=mutableSetOf<String>()
+        compose.setContent {GhostCloakTheme {
+            ConversationScreen(AppState(loading=false,messages=messages,
+                directOpening=ChatOpening(id,1,messages[10].localId)),accepted,{}, {},{_,_->},{},
+                markVisibleRead={visible+=it})
+        }}
+        compose.waitForIdle()
+        compose.onNodeWithText("message 10").assertIsDisplayed()
+        compose.onNodeWithText("message 50").assertDoesNotExist()
+        assertTrue(messages[9].localId in visible)
+        assertFalse(messages.last().localId in visible)
     }
     @Test fun unreadHeaderReplacesChatsAndMovesSearchLeftUntilAllMessagesAreRead() {
         val unread = mutableStateOf(1)

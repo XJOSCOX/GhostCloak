@@ -23,12 +23,17 @@ data class GroupInfo(
     val governanceSequence:Long=0,val governanceHeadDigest:ByteArray?=null,
     val disappearingTimer:GroupDisappearingPolicyV1=GroupDisappearingPolicyV1(),
     val disappearingCapable:Boolean=false,
+    val queuedInviteCount:Int=0,
+    val queuedInviteStatus:String?=null,
+    val canResendInvitation:Boolean=false,
+    val waitingForAdmissionApproval:Boolean=false,
+    val ownerIntroduced:Boolean=false,
 ) {
     val active get()=status==GroupLocalStatus.ACTIVE
     val ready get()=active && managementStatus==GroupManagementStatus.READY
     val canManage get()=ready && !pending && !journalFull && capable
     val canInvite get()=active && !pending && !journalFull && capable &&
-        !invitationPending && members.size<GroupStatements.MAX_MEMBERS &&
+        !invitationPending && queuedInviteCount==0 && members.size<GroupStatements.MAX_MEMBERS &&
         managementStatus in setOf(GroupManagementStatus.NOT_CONFIGURED,GroupManagementStatus.READY) &&
         localRole in setOf(GroupRole.OWNER,GroupRole.ADMIN)
     val canChangePosting get()=canManage && localRole in setOf(GroupRole.OWNER,GroupRole.ADMIN)

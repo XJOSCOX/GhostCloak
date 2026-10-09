@@ -7,6 +7,7 @@ import android.app.Notification
 import androidx.test.core.app.ApplicationProvider
 import android.content.Context
 import org.ghostcloak.app.application.AppState
+import org.ghostcloak.app.application.ChatOpening
 import org.ghostcloak.app.application.AndroidLocalNotifications
 import org.ghostcloak.app.ui.screens.ContactsScreen
 import org.ghostcloak.app.ui.screens.CreateGroupScreen
@@ -29,11 +30,33 @@ import org.ghostcloak.messaging.GroupPostingModeV1
 import org.ghostcloak.messaging.GroupModerationState
 import org.ghostcloak.attachments.AttachmentKind
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
+import java.time.LocalDate
+import java.time.ZoneId
 
 class GroupInvitationScreenTest {
     @get:Rule val compose=createComposeRule()
+
+    @Test fun groupChatOpensAtLastSeenRowAndOnlyReportsVisibleRows() {
+        val id=GroupIds.create();val sender=GroupIds.create()
+        val messages=(1..50).map {index -> GroupChatMessage(id,GroupIds.create(),2,
+            sender,false,"message $index",index.toLong()) }
+        val group=GroupMembershipTransport.Conversation(id,GroupLocalStatus.ACTIVE,2,
+            mapOf(sender to "peer-device"),messages)
+        val visible=mutableSetOf<String>()
+        compose.setContent {GhostCloakTheme {
+            GroupConversationScreen(AppState(loading=false,groupOpening=ChatOpening(id,1,messages[10].logicalId)),
+                group,{},{_,_->},{},markVisibleRead={visible+=it})
+        }}
+        compose.waitForIdle()
+        compose.onNodeWithText("message 10").assertIsDisplayed()
+        compose.onNodeWithText("message 50").assertDoesNotExist()
+        assertTrue(messages[9].logicalId in visible)
+        assertFalse(messages.last().logicalId in visible)
+    }
 
     @Test fun groupMediaComposerRespectsCapabilityAndPostingRestriction() {
         val id=GroupIds.create();val own=GroupIds.create();val peer=GroupIds.create()
@@ -71,7 +94,9 @@ class GroupInvitationScreenTest {
         val message=GroupChatMessage(id,messageId,2,own,true,"",1,
             recipients=listOf(GroupRecipient("peer-device",GroupRecipientState.SENT)),
             mediaKind=AttachmentKind.DOCUMENT,mediaCaption="Project notes",
-            mediaFilename="notes.pdf",mediaBytes=2048)
+            mediaFilename="notes.pdf",mediaBytes=2048,
+            timestamp=LocalDate.of(2026,10,7).atTime(15,4)
+                .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
         compose.setContent {GhostCloakTheme {
             GroupConversationScreen(AppState(loading=false,networkConfigured=true),
                 GroupMembershipTransport.Conversation(id,GroupLocalStatus.ACTIVE,2,
@@ -81,6 +106,7 @@ class GroupInvitationScreenTest {
         compose.onNodeWithText("notes.pdf").assertExists()
         compose.onNodeWithText("Project notes").assertExists()
         compose.onNodeWithText("Sent to 1").assertExists()
+        compose.onNodeWithText("3:04 PM").assertExists()
         compose.onNodeWithText("notes.pdf").performTouchInput {longClick()}
         compose.onNodeWithText("Edit").assertDoesNotExist()
         compose.onNodeWithText("Delete for everyone").assertExists()
@@ -99,17 +125,17 @@ class GroupInvitationScreenTest {
 
     @Test fun createGroupPageExplainsMissingAuthenticatedPeerSupportAndOpensChat() {
         val contact=ContactStatus(Contact("local","account","Peer","device"),null,SessionLifecycle.ACTIVE)
-        var opened="";var created=""
+        var opened="";var created=emptyList<String>()
         compose.setContent {GhostCloakTheme {
             CreateGroupScreen(AppState(loading=false,contacts=listOf(contact)),{},
-                {created=it},{opened=it})
+                {_,ids->created=ids},{opened=it})
         }}
         compose.onNodeWithText("Search contacts").assertExists()
         compose.onNodeWithText("Waiting for group support confirmation").assertExists()
         compose.onNodeWithText("No contacts are ready yet.",substring=true).assertExists()
         compose.onNodeWithText("Open chat").performClick()
         assertEquals("device",opened)
-        assertEquals("",created)
+        assertTrue(created.isEmpty())
     }
 
     @Test fun createGroupPageSearchesAndSelectsAuthenticatedCapableContact() {
@@ -117,15 +143,48 @@ class GroupInvitationScreenTest {
             SessionLifecycle.ACTIVE,groupCapable=true)
         val other=ContactStatus(Contact("other","account-2","Other","device-2"),null,
             SessionLifecycle.ACTIVE,groupCapable=true)
-        var created=""
+        var created=emptyList<String>()
         compose.setContent {GhostCloakTheme {
             CreateGroupScreen(AppState(loading=false,contacts=listOf(contact,other)),{},
-                {created=it},{})
+                {_,ids->created=ids},{})
         }}
         compose.onNodeWithText("Search contacts").performTextInput("pee")
         compose.onNodeWithText("Other").assertDoesNotExist()
         compose.onNodeWithText("Peer").performClick()
-        assertEquals("device",created)
+        compose.onNodeWithText("Create group with 1 contact").performClick()
+        assertEquals(listOf("device"),created)
+    }
+
+    @Test fun createGroupPageSelectsSeveralContactsInOneStep() {
+        val contacts=listOf("Alice","Bob","Charlie").mapIndexed {index,name ->
+            ContactStatus(Contact("local-$index","account-$index",name,"device-$index"),null,
+                SessionLifecycle.ACTIVE,groupCapable=true)
+        }
+        var created=emptyList<String>()
+        compose.setContent {GhostCloakTheme {
+            CreateGroupScreen(AppState(loading=false,contacts=contacts),{},
+                {_,ids->created=ids},{})
+        }}
+        compose.onNodeWithText("Select all").performClick()
+        compose.onNodeWithText("3 selected").assertExists()
+        compose.onNodeWithText("Create group with 3 contacts").performClick()
+        assertEquals(listOf("device-0","device-1","device-2"),created)
+    }
+
+    @Test fun createGroupSelectAllRespectsFiveMemberCapacity() {
+        val contacts=(0 until 5).map {index ->
+            ContactStatus(Contact("local-$index","account-$index","Peer $index",
+                "device-$index"),null,SessionLifecycle.ACTIVE,groupCapable=true)
+        }
+        var created=emptyList<String>()
+        compose.setContent {GhostCloakTheme {
+            CreateGroupScreen(AppState(loading=false,contacts=contacts),{},
+                {_,ids->created=ids},{})
+        }}
+        compose.onNodeWithText("Select all").performClick()
+        compose.onNodeWithText("4 selected").assertExists()
+        compose.onNodeWithText("Create group with 4 contacts").performClick()
+        assertEquals(listOf("device-0","device-1","device-2","device-3"),created)
     }
 
     @Test fun validatedInvitationIsActionableOnItsGroupPage() {
@@ -194,7 +253,7 @@ class GroupInvitationScreenTest {
             ContactsScreen(AppState(loading=false,contacts=listOf(contact),groups=listOf(group)),{},{},
                 openGroup={opened=it})
         }}
-        compose.onNodeWithText("Group conversation").performClick()
+        compose.onNodeWithText("Group").performClick()
         assertEquals(groupId,opened)
     }
     @Test fun textChatShowsPartialFanoutHonestly() {

@@ -4,7 +4,9 @@ import org.ghostcloak.attachments.AttachmentDescriptor
 import org.ghostcloak.attachments.AttachmentFormat
 import org.ghostcloak.attachments.AttachmentKind
 import org.ghostcloak.crypto.EndpointRecords
+import org.ghostcloak.crypto.SignalProtocolEngine
 import org.ghostcloak.identity.RandomIdentifiers
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -65,6 +67,99 @@ class GroupOrderingV1Test {
         assertEquals(labels,GroupChatStore(records).messages(group).map {it.text})
         assertFalse(accept(store,values[0]))
         assertEquals(10,GroupChatStore(records).messages(group).size)
+        assertEquals(values.last().logicalId,GroupChatStore(records).latestMessage(group)?.logicalId)
+    }
+
+    @Test fun localUnreadTracksDistinctVisibleRowsAcrossOrderingReplayAndRestart() {
+        val records=Records();val store=GroupChatStore(records)
+        val values=(1..20).map {text(it.toLong(),"message $it")}
+        assertTrue(accept(store,values[2]))
+        assertEquals(1,store.unreadCount(group))
+        assertTrue(accept(store,values[1]))
+        assertEquals(2,store.unreadCount(group))
+        assertFalse(accept(store,values[1]))
+        assertEquals(2,store.unreadCount(group))
+        for(index in listOf(0)+(3..19).toList()) assertTrue(accept(store,values[index]))
+        assertEquals(20,GroupChatStore(records).unreadCount(group))
+        assertEquals((1..20).map {"message $it"},store.messages(group).map {it.text})
+        store.markRead(group)
+        assertEquals(0,GroupChatStore(records).unreadCount(group))
+        assertTrue(records.keys("app/notification/$group/").isEmpty())
+        assertFalse(accept(store,values[0]))
+        assertEquals(0,store.unreadCount(group))
+        val next=text(21,"new")
+        assertTrue(accept(store,next))
+        assertEquals(1,store.unreadCount(group))
+        assertTrue(store.deleteBySender(group,next.logicalId,alice))
+        assertEquals(0,store.unreadCount(group))
+        val moderated=text(22,"moderated")
+        assertTrue(accept(store,moderated))
+        assertEquals(1,store.unreadCount(group))
+        assertTrue(store.moderate(group,moderated.logicalId))
+        assertEquals(0,store.unreadCount(group))
+    }
+
+    @Test fun readingVisibleRowsLeavesTheRestOfAnOfflineBacklogUnread() {
+        val records=Records();val store=GroupChatStore(records)
+        val values=(1..20).map {text(it.toLong(),"message $it")}
+        values.forEach {assertTrue(accept(store,it))}
+        val firstFive=values.take(5).map {it.logicalId}.toSet()
+        store.markVisibleRead(group,firstFive)
+        assertEquals(values.drop(5).map {it.logicalId},GroupChatStore(records).unreadMessages(group).map {it.logicalId})
+        assertTrue(firstFive.none { records.read("app/notification/$group/$it")!=null })
+        assertTrue(values.drop(5).all { records.read("app/notification/$group/${it.logicalId}")!=null })
+        GroupChatStore(records).markVisibleRead(group,firstFive)
+        assertEquals(15,GroupChatStore(records).unreadCount(group))
+        GroupChatStore(records).markVisibleRead(group,values.drop(5).map {it.logicalId}.toSet())
+        assertEquals(0,GroupChatStore(records).unreadCount(group))
+    }
+
+    @Test fun upgradeBaselinesExistingHistoryOnlyOnceBeforeNewArrivals() {
+        val records=Records();val store=GroupChatStore(records)
+        records.write("local/device",RandomIdentifiers.create().encodeToByteArray())
+        assertTrue(accept(store,text(1,"old")))
+        assertEquals(1,store.unreadCount(group))
+        store.initializeUnreadBaseline()
+        assertEquals(0,store.unreadCount(group))
+        assertTrue(records.keys("app/notification/$group/").isEmpty())
+        assertTrue(accept(store,text(2,"new")))
+        GroupChatStore(records).initializeUnreadBaseline()
+        assertEquals(1,GroupChatStore(records).unreadCount(group))
+    }
+
+    @Test fun unreadUpgradeLeavesFreshStoreEmptyForIdentityCreation()=runBlocking {
+        val records=Records()
+        GroupChatStore(records).initializeUnreadBaseline()
+        assertTrue(records.keys("").isEmpty())
+        assertNotNull(SignalProtocolEngine(records).createIdentity("Fresh"))
+        assertNull(records.read("app/group-text/read-v1-initialized"))
+    }
+
+    @Test fun incomingMediaCountsOnceAndOpeningConversationReadsIt() {
+        val records=Records();val store=GroupChatStore(records)
+        val photo=media(1,AttachmentKind.IMAGE)
+        val voice=media(2,AttachmentKind.VOICE_NOTE)
+        val document=media(3,AttachmentKind.DOCUMENT)
+        assertTrue(accept(store,photo));assertTrue(accept(store,voice));assertTrue(accept(store,document))
+        assertEquals(3,store.unreadCount(group))
+        assertFalse(accept(store,photo))
+        assertEquals(3,store.unreadCount(group))
+        GroupChatStore(records).markRead(group)
+        assertEquals(0,store.unreadCount(group))
+    }
+
+    @Test fun acceptedGroupTimePersistsWhileLegacyRowsRemainUnknown() {
+        val records=Records()
+        val receivedAt=1_728_048_240_000L
+        val store=GroupChatStore(records,ExpiryClock(wall={receivedAt}))
+        val incoming=text(1,"new")
+        assertTrue(accept(store,incoming))
+        assertEquals(receivedAt,GroupChatStore(records).message(group,incoming.logicalId)?.timestamp)
+
+        val legacyId=GroupIds.create()
+        store.create(GroupChatMessage(group,legacyId,2,alice,true,"old",store.nextOrder(),
+            recipients=listOf(GroupRecipient(senderDevice))))
+        assertEquals(0L,GroupChatStore(records).message(group,legacyId)?.timestamp)
     }
 
     @Test fun gapsNeverBlockAndConflictFailsClosed() {

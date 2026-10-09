@@ -33,6 +33,21 @@ class EndpointStorageTest {
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private fun name() = "t-${UUID.randomUUID()}"
 
+    @Test fun indexedPrefixLookupMatchesExactEncryptedStoreKeysAcrossReopen() {
+        val endpoint=name()
+        val names=listOf("app/message/a/2","app/message/a/1","app/message/ab/1",
+            "app/messagf/a/1","app/message/a", "é/private")
+        EncryptedEndpointStore.open(context,endpoint).use { store ->
+            names.forEachIndexed { index,key -> store.write(key,byteArrayOf(index.toByte())) }
+        }
+        EncryptedEndpointStore.open(context,endpoint).use { store ->
+            for(prefix in listOf("", "app/", "app/message/a/", "app/message/ab/", "é/")) {
+                assertEquals(names.filter {it.startsWith(prefix)},store.keys(prefix))
+            }
+            assertTrue(store.keys("app/message/b/").isEmpty())
+        }
+    }
+
     @Test fun identityAndRatchetSurviveEncryptedDatabaseReopen() = runBlocking {
         val aName = name(); val bName = name()
         val aStore = EncryptedEndpointStore.open(context, aName)

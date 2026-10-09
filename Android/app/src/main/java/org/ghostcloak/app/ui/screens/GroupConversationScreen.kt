@@ -6,6 +6,9 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -13,6 +16,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import org.ghostcloak.app.application.AppState
 import org.ghostcloak.app.ui.components.*
@@ -31,8 +36,12 @@ import org.ghostcloak.attachments.AttachmentKind
 import org.ghostcloak.app.application.GhostApplication
 import org.ghostcloak.messaging.GroupChatMessage
 import org.ghostcloak.messaging.DownloadPreference
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
-/** P13.3 deliberately exposes only text and sequential invitation management. */
+/** Local group conversation presentation; authenticated group state controls available actions. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable fun GroupConversationScreen(state:AppState,group:GroupMembershipTransport.Conversation,
     back:()->Unit,send:(String,()->Unit)->Unit,invite:(String)->Unit,openChat:(String)->Unit={},
@@ -41,7 +50,8 @@ import org.ghostcloak.messaging.DownloadPreference
     sendReply:(String,String,()->Unit)->Unit={_,_,_->},
     react:(String,String?)->Unit={_,_->},
     editOwn:(String,String,()->Unit)->Unit={_,_,_->},
-    deleteOwn:(String)->Unit={},refreshMedia:()->Unit={}) {
+    deleteOwn:(String)->Unit={},refreshMedia:()->Unit={},
+    markVisibleRead:(Set<String>)->Unit={}) {
     var draft by remember(group.groupId) {mutableStateOf("")}
     var inviting by remember {mutableStateOf(false)}
     var selectedMessage by remember(group.groupId) {mutableStateOf<String?>(null)}
@@ -49,6 +59,36 @@ import org.ghostcloak.messaging.DownloadPreference
     var confirmingSenderDelete by remember(group.groupId) {mutableStateOf<String?>(null)}
     var replyingTo by remember(group.groupId) {mutableStateOf<String?>(null)}
     var editing by remember(group.groupId) {mutableStateOf<String?>(null)}
+    val requestedPhotos=remember(group.groupId) {mutableStateMapOf<String,Boolean>()}
+    val list=rememberLazyListState()
+    val opening=state.groupOpening?.takeIf {it.conversationId==group.groupId}
+    val messageIds=remember(group.messages) {group.messages.map {it.logicalId}}
+    var anchoredGeneration by remember(group.groupId) {mutableLongStateOf(-1L)}
+    LaunchedEffect(opening,messageIds,inviting) {
+        if(!inviting && opening!=null && messageIds.isNotEmpty()) {
+            if(anchoredGeneration!=opening.generation) {
+                list.scrollToItem(openingMessageIndex(messageIds,opening.firstUnreadId))
+                anchoredGeneration=opening.generation
+            }
+            val reported=mutableSetOf<String>()
+            snapshotFlow {list.layoutInfo.visibleItemsInfo.mapNotNull {item ->
+                group.messages.getOrNull(item.index)?.takeIf {!it.outgoing &&
+                    it.moderationState==GroupModerationState.NONE && it.expiryState!=GroupExpiryState.EXPIRED}
+                    ?.logicalId
+            }.toSet()}.distinctUntilChanged().collect {visible ->
+                val new=visible-reported
+                if(new.isNotEmpty()) {reported+=new;markVisibleRead(new)}
+            }
+        }
+    }
+    var previousCount by remember(group.groupId) {mutableIntStateOf(0)}
+    LaunchedEffect(messageIds.size,opening,inviting) {
+        if(!inviting && opening!=null && anchoredGeneration==opening.generation &&
+            messageIds.size>previousCount && previousCount>0 &&
+            (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1)>=previousCount-1)
+            list.animateScrollToItem(messageIds.lastIndex)
+        previousCount=messageIds.size
+    }
     val canModerate=group.info?.canModerate==true
     val canUseControls=group.info?.canUseMessageControls==true
     val canSend=group.status==GroupLocalStatus.ACTIVE && group.sendRestriction==null
@@ -70,7 +110,9 @@ import org.ghostcloak.messaging.DownloadPreference
                         val mine=target.reactions.any {it.emoji==emoji && it.mine}
                         react(target.logicalId,if(mine) null else emoji)
                         selectedMessage=null
-                    }) {Text(emoji)}
+                    },modifier=Modifier.semantics {contentDescription=if(
+                        target.reactions.any {it.emoji==emoji && it.mine})
+                            "Remove $emoji reaction" else "React with $emoji"}) {Text(emoji)}
                 }
             }
             if(canUseControls && target.outgoing && target.mediaKind==null &&
@@ -165,14 +207,14 @@ import org.ghostcloak.messaging.DownloadPreference
         return
     }
     Column(Modifier.fillMaxSize().imePadding().testTag("group-page")) {
-        PageHeader(if(invitation!=null) "Group invitation" else group.info?.profile?.name ?: "Group",
-            back=back,avatarName=group.info?.profile?.name ?: "Group",
+        PageHeader(if(invitation!=null) "${group.name ?: "Group"} invitation" else group.info?.profile?.name ?: group.name ?: "Group",
+            back=back,avatarName=group.info?.profile?.name ?: group.name ?: "Group",
             avatarPhoto=group.info?.verifiedPhoto,leading={
                 Column(Modifier.clickable(enabled=invitation==null && group.info!=null) {openInfo()}
                     .testTag("group-info-entry")) {
-                    Text(if(invitation!=null) "Group invitation" else group.info?.profile?.name ?: "Group",
+                    Text(if(invitation!=null) "${group.name ?: "Group"} invitation" else group.info?.profile?.name ?: group.name ?: "Group",
                         style=MaterialTheme.typography.titleMedium)
-                    Text(if(invitation!=null) "Not a member yet" else "${group.memberCount} members · Group info",
+                    Text(if(invitation!=null) "Not a member yet" else "${memberCountLabel(group.memberCount)} · Group info",
                         style=MaterialTheme.typography.labelSmall,
                         color=MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -213,7 +255,7 @@ import org.ghostcloak.messaging.DownloadPreference
                 TextButton(onClick={declineInvitation(invitation.id)},enabled=!state.loading) {Text("Decline")}
             }
         }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(),contentPadding=PaddingValues(
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(),state=list,contentPadding=PaddingValues(
             horizontal=GhostLayout.pageInset,vertical=GhostDimensions.regular),
             verticalArrangement=Arrangement.spacedBy(GhostDimensions.medium)) {
             if(active && group.messages.isEmpty()) item {
@@ -241,17 +283,7 @@ import org.ghostcloak.messaging.DownloadPreference
                                 val original=group.messages.firstOrNull {
                                     it.logicalId==message.replyToLogicalId
                                 }
-                                val preview=when(original?.moderationState) {
-                                    GroupModerationState.REMOVED_BY_ADMIN -> "Message removed by an admin"
-                                    GroupModerationState.DELETED_BY_SENDER -> "Original message deleted"
-                                    GroupModerationState.NONE -> if(original.mediaKind!=null)
-                                        if(original.expiryState==GroupExpiryState.EXPIRED)
-                                            "Original message expired" else groupMediaLabel(original) + original.mediaCaption?.takeIf {it.isNotBlank()}
-                                            ?.let {": ${it.take(60)}"}.orEmpty()
-                                        else if(original.expiryState==GroupExpiryState.EXPIRED)
-                                            "Original message expired" else original.text.take(80)
-                                    null -> "Original message unavailable"
-                                }
+                                val preview=groupReplyPreview(original)
                                 val label=if(original?.outgoing==true) "You" else
                                     original?.senderMemberId?.let {memberId ->
                                         group.memberDevices[memberId]?.let {device ->
@@ -265,7 +297,12 @@ import org.ghostcloak.messaging.DownloadPreference
                             }
                             if(message.moderationState==GroupModerationState.NONE &&
                                 message.expiryState==GroupExpiryState.ACTIVE && message.mediaKind!=null)
-                                GroupMediaContent(group.groupId,message,active)
+                                GroupMediaContent(group.groupId,message,active,
+                                    state.privacyDefaults.photos==DownloadPreference.AUTOMATIC,
+                                    state.cachedGroupId==group.groupId &&
+                                        message.logicalId in state.cachedGroupAttachments,
+                                    requestedPhotos[message.logicalId]==true,
+                                    {requestedPhotos[message.logicalId]=true})
                             else Text(if(message.moderationState==GroupModerationState.REMOVED_BY_ADMIN)
                                 "Message removed by an admin" else if(message.moderationState==
                                 GroupModerationState.DELETED_BY_SENDER) "This message was deleted" else if(
@@ -276,6 +313,12 @@ import org.ghostcloak.messaging.DownloadPreference
                                 message.expiryState==GroupExpiryState.ACTIVE && message.editRevision>0)
                                 Text("Edited",style=MaterialTheme.typography.labelSmall,
                                     color=if(message.outgoing) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant)
+                            if(message.timestamp>0) Text(
+                                DateTimeFormatter.ofPattern("h:mm a",Locale.US).withZone(ZoneId.systemDefault())
+                                    .format(Instant.ofEpochMilli(message.timestamp)),
+                                Modifier.align(Alignment.End),style=MaterialTheme.typography.labelSmall,
+                                color=if(message.outgoing) MaterialTheme.colorScheme.onPrimary.copy(alpha=0.7f)
                                     else MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
@@ -325,7 +368,7 @@ import org.ghostcloak.messaging.DownloadPreference
                 if(replyingTo!=null || editing!=null) Row(Modifier.fillMaxWidth(),
                     verticalAlignment=Alignment.CenterVertically) {
                     val target=group.messages.firstOrNull {it.logicalId==(editing ?: replyingTo)}
-                    Text(if(editing!=null) "Editing message" else "Replying to ${if(target?.outgoing==true) "You" else "group member"}: ${target?.text?.take(60) ?: "Original message unavailable"}",
+                    Text(if(editing!=null) "Editing message" else "Replying to ${if(target?.outgoing==true) "You" else "group member"}: ${groupReplyPreview(target)}",
                         Modifier.weight(1f),style=MaterialTheme.typography.labelSmall)
                     TextButton(onClick={replyingTo=null;editing=null;draft=""}) {Text("Cancel")}
                 }
@@ -378,7 +421,17 @@ private fun groupMediaLabel(message:GroupChatMessage):String=when(message.mediaK
     else -> "Attachment"
 }
 
-@Composable private fun GroupMediaContent(groupId:String,message:GroupChatMessage,enabled:Boolean) {
+internal fun groupReplyPreview(message:GroupChatMessage?):String=when {
+    message==null -> "Original message unavailable"
+    message.moderationState==GroupModerationState.REMOVED_BY_ADMIN -> "Message removed by an admin"
+    message.moderationState==GroupModerationState.DELETED_BY_SENDER -> "Original message deleted"
+    message.expiryState==GroupExpiryState.EXPIRED -> "Original message expired"
+    message.mediaKind!=null -> groupMediaLabel(message)
+    else -> message.text.take(80)
+}
+
+@Composable private fun GroupMediaContent(groupId:String,message:GroupChatMessage,enabled:Boolean,
+    autoLoadPhotos:Boolean,cached:Boolean,requested:Boolean,onRequest:()->Unit) {
     val owner=(LocalContext.current.applicationContext as GhostApplication).media
     val kind=message.mediaKind ?: return
     Column(verticalArrangement=Arrangement.spacedBy(GhostDimensions.tiny)) {
@@ -405,7 +458,8 @@ private fun groupMediaLabel(message:GroupChatMessage):String=when(message.mediaK
             }
             AttachmentKind.IMAGE,AttachmentKind.DOCUMENT ->
                 if(kind==AttachmentKind.IMAGE)
-                    GroupInlinePhoto(groupId,message.logicalId,enabled)
+                    GroupInlinePhoto(groupId,message.logicalId,enabled,
+                        message.outgoing,autoLoadPhotos,cached,requested,onRequest)
                 else TextButton(onClick={owner.download(groupId,message.logicalId,
                     false,message.mediaFilename ?: "Document")}) {Text("Download / open")}
             else -> Unit
@@ -413,24 +467,22 @@ private fun groupMediaLabel(message:GroupChatMessage):String=when(message.mediaK
     }
 }
 
-@Composable private fun GroupInlinePhoto(groupId:String,messageId:String,enabled:Boolean) {
+@Composable private fun GroupInlinePhoto(groupId:String,messageId:String,enabled:Boolean,
+    outgoing:Boolean,autoLoadPhotos:Boolean,cached:Boolean,requested:Boolean,onRequest:()->Unit) {
     val app=LocalContext.current.applicationContext as GhostApplication
     val owner=app.media
     val photos by owner.photos.state.collectAsState()
     val session by owner.presentationSession.collectAsState()
-    var automatic by remember(groupId,messageId) {mutableStateOf(false)}
-    var requested by remember(groupId,messageId) {mutableStateOf(false)}
-    LaunchedEffect(groupId,messageId,enabled) {
-        automatic=enabled && runCatching {
-            app.runtime.privacyDefaults().photos==DownloadPreference.AUTOMATIC
-        }.getOrDefault(false)
+    val accessRevision by app.runtime.attachmentAccessRevision.collectAsState()
+    val load=enabled && (outgoing || autoLoadPhotos || cached || requested)
+    val available=remember(groupId,messageId,accessRevision,session) {
+        app.runtime.attachmentAvailableNow(groupId,messageId)
     }
-    val load=enabled && (automatic || requested)
-    DisposableEffect(groupId,messageId,load,session) {
-        if(load) owner.photos.request(groupId,messageId,true,true)
+    DisposableEffect(groupId,messageId,load,available,session) {
+        if(load && available) owner.photos.request(groupId,messageId,true,true)
         onDispose {owner.photos.release(groupId,messageId)}
     }
-    if(!load) TextButton(onClick={requested=true}) {Text("Load photo")}
+    if(!load) TextButton(onClick=onRequest) {Text("Load photo")}
     else InlinePhotoContent(photos[groupId to messageId],enabled,
         retry={owner.photos.request(groupId,messageId,true,enabled,retry=true)},
         open={owner.download(groupId,messageId,true,"Photo")})

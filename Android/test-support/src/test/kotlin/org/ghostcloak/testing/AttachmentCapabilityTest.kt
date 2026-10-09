@@ -20,7 +20,10 @@ class AttachmentCapabilityTest {
         assertFalse(ConversationPayload.decode(legacy).supportsAttachments)
         val quoted=ConversationPayload.encode("GhostCloak/padding/attachments/v1!",0)
         quoted.fill(0,16+"GhostCloak/padding/attachments/v1!".length,quoted.size)
-        assertFalse(ConversationPayload.decode(quoted).supportsAttachments)
+        // Remove the current extra capability bucket as an older minimal frame would.
+        // A nonminimal all-zero extended frame is invalid, not evidence of support.
+        val legacyQuoted=quoted.copyOf(256)
+        assertFalse(ConversationPayload.decode(legacyQuoted).supportsAttachments)
     }
     @Test fun oldTextLimitsAndPaddingBoundariesRemainValid() {
         for(length in listOf(1,208,224,239,240,241,16368)) {

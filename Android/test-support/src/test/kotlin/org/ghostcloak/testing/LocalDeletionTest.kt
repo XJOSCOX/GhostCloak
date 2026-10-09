@@ -9,6 +9,24 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LocalDeletionTest {
+    @Test fun readingVisibleDirectRowsDoesNotConsumeAnUnseenBacklog() {
+        val records=MemoryRecords();val repository=LocalRepository(records)
+        repository.save(Contact("peer","account","Peer","peer"))
+        val ids=(1..20).map {"incoming-$it"}
+        ids.forEachIndexed {index,id ->
+            repository.saveAccepted(Message(id,"peer",Direction.INCOMING,"text",index.toLong(),
+                MessageState.RECEIVED,id),byteArrayOf(1))
+        }
+        repository.markVisibleRead("peer",ids.take(5).toSet())
+        assertEquals(ids.drop(5),repository.unreadMessages("peer").map {it.localId})
+        assertTrue(ids.take(5).all { records.read("app/notification/peer/$it")==null })
+        assertTrue(ids.drop(5).all { records.read("app/notification/peer/$it")!=null })
+        repository.markVisibleRead("peer",ids.take(5).toSet())
+        assertEquals(15,repository.unreadCount("peer"))
+        repository.markVisibleRead("peer",ids.drop(5).toSet())
+        assertEquals(0,repository.unreadCount("peer"))
+    }
+
     @Test fun deleteAndClearAtomicallyRemoveReadAndAllNotificationStatesOnlyForSelectedContent() {
         for (state in listOf(NotificationLedger.PENDING, NotificationLedger.POSTING, NotificationLedger.ANNOUNCED)) {
             val records = MemoryRecords(); val repo = LocalRepository(records); val ledger = NotificationLedger(records)

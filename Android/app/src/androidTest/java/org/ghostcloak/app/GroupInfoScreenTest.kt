@@ -142,6 +142,8 @@ class GroupInfoScreenTest {
             })
         compose.setContent {GhostCloakTheme {GroupInfoScreen(state,info,{},actions)}}
         compose.onNodeWithText("Family").assertExists()
+        compose.onNodeWithTag("group-about-card").assertExists()
+        compose.onNodeWithText("About").assertExists()
         compose.onNodeWithText("Private chat").assertExists()
         compose.onNodeWithTag("edit-group").performClick()
         compose.onNodeWithTag("group-name").performTextReplacement("Friends")

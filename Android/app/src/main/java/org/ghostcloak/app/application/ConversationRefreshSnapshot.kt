@@ -16,17 +16,27 @@ internal class ConversationRefreshSnapshot(
 }
 
 internal suspend fun loadConversationRefreshSnapshot(
+    contacts: List<ContactStatus>, selected: String?,
+    messagesForUi: suspend (String) -> List<Message>
+): ConversationRefreshSnapshot = loadConversationRefreshSnapshot(contacts,selected,messagesForUi) {
+    messagesForUi(it).lastOrNull()
+}
+
+internal suspend fun loadConversationRefreshSnapshot(
     contacts: List<ContactStatus>,
     selected: String?,
-    messagesForUi: suspend (String) -> List<Message>
+    messagesForUi: suspend (String) -> List<Message>,
+    latestForUi: suspend (String) -> Message?
 ): ConversationRefreshSnapshot {
     val previews = linkedMapOf<String, Message>()
     var selectedMessages: List<Message> = emptyList()
     contacts.forEach { status ->
         val id = status.contact.remoteDeviceId
-        val messages = messagesForUi(id)
-        messages.lastOrNull()?.let { previews[id] = it }
-        if (id == selected) selectedMessages = messages
+        if (id == selected) {
+            val messages=messagesForUi(id)
+            messages.lastOrNull()?.let { previews[id] = it }
+            selectedMessages=messages
+        } else latestForUi(id)?.let { previews[id] = it }
     }
     return ConversationRefreshSnapshot(previews, selectedMessages, selected)
 }

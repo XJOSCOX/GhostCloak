@@ -68,6 +68,7 @@ data class GroupReactionBadge(val emoji:String,val count:Int,val mine:Boolean)
     @EncodeDefault(EncodeDefault.Mode.NEVER) val orderingGovernanceSequence:Long?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val orderingHeadDigest:ByteArray?=null,
     @EncodeDefault(EncodeDefault.Mode.NEVER) val senderSequence:Long?=null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val timestamp:Long=0,
     @kotlinx.serialization.Transient val reactions:List<GroupReactionBadge> = emptyList()) {
     override fun toString()="GroupChatMessage(redacted)"
 }
@@ -108,6 +109,60 @@ internal fun mergePresentation(rows:List<GroupChatMessage>):List<GroupChatMessag
 
 /** All rows live in the existing SQLCipher endpoint store and are destroyed with it. */
 class GroupChatStore(private val records:EndpointRecords,private val clock:ExpiryClock=ExpiryClock()) {
+    /** Runs once on opening an upgraded endpoint, before any network fetch. */
+    fun initializeUnreadBaseline()=records.transaction {
+        val marker="app/group-text/read-v1-initialized"
+        if(records.read(marker)!=null) return@transaction
+        // Identity creation rejects any pre-existing endpoint record. A fresh
+        // install has no history to baseline, so leave its store untouched.
+        if(records.read("local/device")==null) return@transaction
+        val groups=mutableSetOf<String>()
+        records.keys("app/group-text/message/").map(::decodeMessage).forEach {message ->
+            if(!message.outgoing) {
+                records.write(readKey(message.groupId,message.logicalId),byteArrayOf(1))
+                groups+=message.groupId
+            }
+        }
+        groups.forEach {NotificationLedger.clear(records,it)}
+        records.write(marker,byteArrayOf(1))
+    }
+    private fun readKey(groupId:String,logicalId:String):String {
+        require(GroupIds.valid(groupId) && GroupIds.valid(logicalId))
+        return "app/group-text/read/$groupId/$logicalId"
+    }
+
+    /** Local-only read markers are bounded by the 4,096 stored message rows. */
+    fun unreadMessages(groupId:String):List<GroupChatMessage> = records.transaction {
+        require(GroupIds.valid(groupId))
+        expire(groupId)
+        val read=records.keys("app/group-text/read/$groupId/").toSet()
+        records.keys("app/group-text/message/$groupId/").map(::decodeMessage).filter { message ->
+            !message.outgoing && message.moderationState==GroupModerationState.NONE &&
+                message.expiryState!=GroupExpiryState.EXPIRED &&
+                readKey(groupId,message.logicalId) !in read
+        }
+    }
+    fun unreadCount(groupId:String):Int=unreadMessages(groupId).size
+    fun markVisibleRead(groupId:String,visibleIds:Set<String>)=records.transaction {
+        require(GroupIds.valid(groupId))
+        if(visibleIds.isEmpty()) return@transaction
+        val unread=unreadMessages(groupId).map { it.logicalId }.toSet()
+        visibleIds.intersect(unread).forEach { id ->
+            records.write(readKey(groupId,id),byteArrayOf(1))
+            NotificationLedger.remove(records,groupId,id)
+        }
+    }
+    fun markRead(groupId:String)=records.transaction {
+        require(GroupIds.valid(groupId))
+        expire(groupId)
+        val read=records.keys("app/group-text/read/$groupId/").toSet()
+        records.keys("app/group-text/message/$groupId/").map(::decodeMessage)
+            .filter { !it.outgoing }.forEach { message ->
+            val key=readKey(groupId,message.logicalId)
+            if(key !in read) records.write(key,byteArrayOf(1))
+        }
+        NotificationLedger.clear(records,groupId)
+    }
     private fun hex(bytes:ByteArray)=bytes.joinToString("") {"%02x".format(it)}
     private fun counterKey(groupId:String,memberId:String)="app/group-text/sender-counter/$groupId/$memberId"
     /** Called inside the same endpoint transaction that creates the logical message. */
@@ -417,6 +472,12 @@ class GroupChatStore(private val records:EndpointRecords,private val clock:Expir
         }
         mergePresentation(rows)
     }
+    /** Chat-list preview preserves presentation order without resolving reactions on every row. */
+    fun latestMessage(groupId:String):GroupChatMessage? = records.transaction {
+        require(GroupIds.valid(groupId))
+        expire(groupId)
+        mergePresentation(records.keys("app/group-text/message/$groupId/").map(::decodeMessage)).lastOrNull()
+    }
     fun message(groupId:String,id:String):GroupChatMessage?=records.transaction {
         expire(groupId)
         records.read(messageKey(groupId,id))?.let {NetworkCodec.decode<GroupChatMessage>(it,8192)}
@@ -617,6 +678,7 @@ class GroupChatStore(private val records:EndpointRecords,private val clock:Expir
         val order=nextOrder()
         records.write(messageKey(value.groupId,value.logicalId),NetworkCodec.encode(GroupChatMessage(
             value.groupId,value.logicalId,value.epoch,value.senderMemberId,false,"",order,
+            timestamp=clock.now().wall,
             moderationState=when {
                 moderated -> GroupModerationState.REMOVED_BY_ADMIN
                 senderDeleted -> GroupModerationState.DELETED_BY_SENDER
@@ -849,7 +911,7 @@ class GroupChatStore(private val records:EndpointRecords,private val clock:Expir
         }
         records.write(messageKey(value.groupId,value.logicalId),NetworkCodec.encode(GroupChatMessage(
             value.groupId,value.logicalId,value.epoch,value.senderMemberId,false,
-            if(moderated || senderDeleted) "" else value.text,order,moderationState=when {
+            if(moderated || senderDeleted) "" else value.text,order,timestamp=clock.now().wall,moderationState=when {
                 moderated -> GroupModerationState.REMOVED_BY_ADMIN
                 senderDeleted -> GroupModerationState.DELETED_BY_SENDER
                 else -> GroupModerationState.NONE
@@ -885,7 +947,7 @@ class GroupChatStore(private val records:EndpointRecords,private val clock:Expir
         val moderated=isModerated(value.groupId,value.logicalId)
         records.write(messageKey(value.groupId,value.logicalId),NetworkCodec.encode(GroupChatMessage(
             value.groupId,value.logicalId,value.epoch,value.senderMemberId,false,
-            if(moderated) "" else value.text,order,moderationState=if(moderated)
+            if(moderated) "" else value.text,order,timestamp=clock.now().wall,moderationState=if(moderated)
                 GroupModerationState.REMOVED_BY_ADMIN else GroupModerationState.NONE)))
         records.write(replay,byteArrayOf(1))
         if(!moderated) NotificationLedger.acceptedGroup(records,value.groupId,value.logicalId)

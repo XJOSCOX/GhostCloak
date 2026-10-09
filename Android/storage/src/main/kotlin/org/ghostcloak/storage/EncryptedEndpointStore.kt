@@ -29,7 +29,9 @@ interface RecordDao {
     @Query("SELECT value FROM endpoint_records WHERE name = :name") fun read(name: String): ByteArray?
     @Insert(onConflict = OnConflictStrategy.REPLACE) fun put(record: SecretRecord)
     @Query("DELETE FROM endpoint_records WHERE name = :name") fun remove(name: String)
-    @Query("SELECT name FROM endpoint_records") fun keys(): List<String>
+    @Query("SELECT name FROM endpoint_records ORDER BY rowid") fun keys(): List<String>
+    @Query("SELECT name FROM endpoint_records WHERE name >= :start AND name < :end ORDER BY rowid")
+    fun keysInRange(start: String, end: String): List<String>
 }
 @Database(entities = [SecretRecord::class], version = 1, exportSchema = true)
 abstract class EndpointDatabase : RoomDatabase() { abstract fun records(): RecordDao }
@@ -48,7 +50,17 @@ class EncryptedEndpointStore private constructor(private val db: EndpointDatabas
         try { db.records().put(SecretRecord(key, copy)) } finally { copy.fill(0) }
     }
     override fun remove(key: String) = guarded { db.records().remove(key) }
-    override fun keys(prefix: String) = guarded { db.records().keys().filter { it.startsWith(prefix) } }
+    override fun keys(prefix: String) = guarded {
+        // Record namespaces use ASCII. A bounded primary-key range avoids reading
+        // every encrypted record name for each conversation or group lookup.
+        // Retain the exact prefix semantics for empty/non-ASCII callers.
+        if (prefix.isEmpty() || prefix.any { it.code !in 1..126 })
+            db.records().keys().filter { it.startsWith(prefix) }
+        else {
+            val end=prefix.dropLast(1)+(prefix.last().code+1).toChar()
+            db.records().keysInRange(prefix,end)
+        }
+    }
     override fun close() { try { db.close() } finally { databaseSecret.fill(0) } }
 
     companion object {

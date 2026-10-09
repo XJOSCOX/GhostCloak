@@ -119,11 +119,14 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
     suspend fun blockedContacts():List<Contact> = action {repository.listBlocked()}
     suspend fun unblock(id:String) = action {repository.unblock(id)}
     suspend fun messages(id: String) = action { repository.contact(id); repository.messages(id) }
-    suspend fun messagesForUi(id:String) = action {
+    suspend fun messagesForUi(id:String) = messagesForUi(id,false)
+    suspend fun latestMessageForUi(id:String):Message? = messagesForUi(id,true).singleOrNull()
+    private suspend fun messagesForUi(id:String,previewOnly:Boolean) = action {
         val contact = repository.contact(id)
         if(contact.request && (!repository.requestActive(id) || repository.requestHidden(id) || (repository.request(id).acceptedAt!=null && repository.serverNow()==null))) return@action emptyList<Message>()
-        val reactions=if(contact.request || contact.blocked) emptyMap() else repository.reactionSnapshot(id)
-        repository.messages(id).map { message ->
+        val reactions=if(previewOnly || contact.request || contact.blocked) emptyMap() else repository.reactionSnapshot(id)
+        val stored=repository.messages(id)
+        (if(previewOnly) stored.takeLast(1) else stored).map { message ->
             if(message.deleted) return@map message.copy(body="This message was deleted",attachment=null)
             repository.attachment(id,message.localId)?.let { descriptor ->
                 val summary = if (contact.request) AttachmentSummary(false,"Attachment",0)
@@ -258,6 +261,11 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         repository.messages(id).firstOrNull {it.localId==submission} ?: message
     }
     suspend fun attachment(id:String,localId:String)=action {
+        if(GroupIds.valid(id)) {
+            if(!repository.attachmentAvailable(id,localId))
+                throw AppFailure(AppError.CONTACT_UNAVAILABLE)
+            return@action repository.attachment(id,localId)
+        }
         networkAllowed(id)
         require(repository.messages(id).any {it.localId==localId})
         repository.attachment(id,localId)
@@ -458,61 +466,83 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 }
             }
             if(content.groupText!=null) {
-                if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
-                    repository.isActiveContact(contact.remoteDeviceId))
-                    repository.queueGroupText(contact.remoteDeviceId,envelope.envelopeId,content.groupText)
+                if((!contact.request && repository.isActiveContact(contact.remoteDeviceId)) ||
+                    repository.groupScopedCurrentSender(content.groupText.groupId,
+                        contact.remoteDeviceId,directIdentityDigest))
+                    repository.queueGroupText(contact.remoteDeviceId,envelope.envelopeId,
+                        content.groupText,directIdentityDigest)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
             if(content.groupTextV2!=null) {
-                if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
-                    repository.isActiveContact(contact.remoteDeviceId))
-                    repository.queueGroupTextV2(contact.remoteDeviceId,envelope.envelopeId,content.groupTextV2)
+                if((!contact.request && repository.isActiveContact(contact.remoteDeviceId)) ||
+                    repository.groupScopedCurrentSender(content.groupTextV2.groupId,
+                        contact.remoteDeviceId,directIdentityDigest))
+                    repository.queueGroupTextV2(contact.remoteDeviceId,envelope.envelopeId,
+                        content.groupTextV2,directIdentityDigest)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
             if(content.groupTextV3!=null) {
-                if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
-                    repository.isActiveContact(contact.remoteDeviceId))
-                    repository.queueGroupTextV3(contact.remoteDeviceId,envelope.envelopeId,content.groupTextV3)
+                if((!contact.request && repository.isActiveContact(contact.remoteDeviceId)) ||
+                    repository.groupScopedCurrentSender(content.groupTextV3.groupId,
+                        contact.remoteDeviceId,directIdentityDigest))
+                    repository.queueGroupTextV3(contact.remoteDeviceId,envelope.envelopeId,
+                        content.groupTextV3,directIdentityDigest)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
             if(content.groupTextV4!=null) {
-                if(!contact.request && repository.isActiveContact(contact.remoteDeviceId))
-                    repository.queueGroupTextV4(contact.remoteDeviceId,envelope.envelopeId,content.groupTextV4)
+                if((!contact.request && repository.isActiveContact(contact.remoteDeviceId)) ||
+                    repository.groupScopedCurrentSender(content.groupTextV4.groupId,
+                        contact.remoteDeviceId,directIdentityDigest))
+                    repository.queueGroupTextV4(contact.remoteDeviceId,envelope.envelopeId,
+                        content.groupTextV4,directIdentityDigest)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
             if(content.groupTextV5!=null) {
-                if(!contact.request && repository.isActiveContact(contact.remoteDeviceId))
-                    repository.queueGroupTextV5(contact.remoteDeviceId,envelope.envelopeId,content.groupTextV5)
+                if((!contact.request && repository.isActiveContact(contact.remoteDeviceId)) ||
+                    repository.groupScopedCurrentSender(content.groupTextV5.groupId,
+                        contact.remoteDeviceId,directIdentityDigest))
+                    repository.queueGroupTextV5(contact.remoteDeviceId,envelope.envelopeId,
+                        content.groupTextV5,directIdentityDigest)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
             if(content.groupMedia!=null) {
-                if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
-                    repository.isActiveContact(contact.remoteDeviceId))
-                    repository.queueGroupMedia(contact.remoteDeviceId,envelope.envelopeId,content.groupMedia)
+                if((!contact.request && repository.isActiveContact(contact.remoteDeviceId)) ||
+                    repository.groupScopedCurrentSender(content.groupMedia.groupId,
+                        contact.remoteDeviceId,directIdentityDigest))
+                    repository.queueGroupMedia(contact.remoteDeviceId,envelope.envelopeId,
+                        content.groupMedia,directIdentityDigest)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
             if(content.groupMediaV2!=null) {
-                if(!contact.request && repository.isActiveContact(contact.remoteDeviceId))
-                    repository.queueGroupMediaV2(contact.remoteDeviceId,envelope.envelopeId,content.groupMediaV2)
+                if((!contact.request && repository.isActiveContact(contact.remoteDeviceId)) ||
+                    repository.groupScopedCurrentSender(content.groupMediaV2.groupId,
+                        contact.remoteDeviceId,directIdentityDigest))
+                    repository.queueGroupMediaV2(contact.remoteDeviceId,envelope.envelopeId,
+                        content.groupMediaV2,directIdentityDigest)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
             if(content.groupMediaV3!=null) {
-                if(!contact.request && repository.isActiveContact(contact.remoteDeviceId))
-                    repository.queueGroupMediaV3(contact.remoteDeviceId,envelope.envelopeId,content.groupMediaV3)
+                if((!contact.request && repository.isActiveContact(contact.remoteDeviceId)) ||
+                    repository.groupScopedCurrentSender(content.groupMediaV3.groupId,
+                        contact.remoteDeviceId,directIdentityDigest))
+                    repository.queueGroupMediaV3(contact.remoteDeviceId,envelope.envelopeId,
+                        content.groupMediaV3,directIdentityDigest)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
             if(content.groupMessageControl!=null) {
-                if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
-                    repository.isActiveContact(contact.remoteDeviceId))
-                    repository.queueGroupMessageControl(contact.remoteDeviceId,envelope.envelopeId,content.groupMessageControl)
+                if((!contact.request && repository.isActiveContact(contact.remoteDeviceId)) ||
+                    repository.groupScopedCurrentSender(content.groupMessageControl.groupId,
+                        contact.remoteDeviceId,directIdentityDigest))
+                    repository.queueGroupMessageControl(contact.remoteDeviceId,envelope.envelopeId,
+                        content.groupMessageControl,directIdentityDigest)
                 repository.saveEnvelopeReceipt(contact.remoteDeviceId,envelope.envelopeId,hash)
                 return@decryptAndCommit
             }
@@ -520,7 +550,12 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
                 // Authentication and ratchet/replay receipt commit together. Authority resolution
                 // can require a network request, so the control remains encrypted locally and
                 // invisible to UI until a later trusted-binding pass validates it.
-                if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
+                if(contact.request && content.groupControl.kind in setOf(
+                        GroupControlKind.OWNER_INTRO_HELLO_V1,
+                        GroupControlKind.OWNER_INTRO_ACK_V1)) {
+                    repository.queueOwnerIntroducedHandshake(contact.remoteDeviceId,
+                        envelope.envelopeId,content.groupControl)
+                } else if(!contact.request && contacts.any {it.remoteDeviceId==contact.remoteDeviceId} &&
                     repository.isActiveContact(contact.remoteDeviceId)) {
                     repository.groupPeer(contact.remoteDeviceId,true)
                     repository.queueGroupControl(contact.remoteDeviceId,envelope.envelopeId,
@@ -664,6 +699,10 @@ class ConversationService(private val engine: SecureSessionEngine, private val r
         }
     }
     suspend fun markRead(id: String) = action { if(!repository.contact(id).request) repository.markRead(id) }
+    suspend fun unreadMessageIds(id:String):Set<String> = action { repository.unreadMessageIds(id) }
+    suspend fun markVisibleRead(id:String,visibleIds:Set<String>) = action {
+        repository.markVisibleRead(id,visibleIds)
+    }
     suspend fun queuedSubmissions() = action {
         val serverNow=repository.serverNow()
         repository.contacts().flatMap { repository.messages(it.remoteDeviceId) }

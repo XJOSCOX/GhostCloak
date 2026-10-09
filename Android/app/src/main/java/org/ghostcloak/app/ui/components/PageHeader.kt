@@ -1,12 +1,16 @@
 package org.ghostcloak.app.ui.components
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
@@ -24,11 +28,28 @@ import org.ghostcloak.app.ui.theme.GhostLayout
 
 /** Shared by root and detail pages; accessible targets remain larger than the visible icons. */
 @Composable fun PageHeader(title: String, subtitle: String? = null, back: (() -> Unit)? = null,
-    avatarName: String? = null, avatarPhoto:ByteArray?=null, center: String? = null, leading: (@Composable () -> Unit)? = null, actions: @Composable RowScope.() -> Unit = {}) {
+    avatarName: String? = null, avatarPhoto:ByteArray?=null, center: String? = null, leading: (@Composable () -> Unit)? = null,
+    onIdentityClick:(() -> Unit)?=null, actions: @Composable RowScope.() -> Unit = {}) {
     Column(Modifier.fillMaxWidth().testTag("page-header")) {
         Row(Modifier.fillMaxWidth().heightIn(min = GhostLayout.headerHeight).padding(horizontal = GhostLayout.headerOuterInset),
             verticalAlignment = Alignment.CenterVertically) {
             if (back != null) HeaderAction(Glyph.BACK, "Back", back)
+            if(onIdentityClick!=null && avatarName!=null && leading==null) {
+                Row(Modifier.weight(1f).heightIn(min=GhostLayout.touchTarget)
+                    .clickable(role=Role.Button,onClick=onIdentityClick)
+                    .semantics {contentDescription="Contact details"}.testTag("contact-header"),
+                    verticalAlignment=Alignment.CenterVertically) {
+                    Avatar(avatarName,Modifier.size(GhostLayout.headerAvatar),avatarPhoto)
+                    Spacer(Modifier.width(GhostLayout.headerAvatarGap))
+                    Column(Modifier.weight(1f)) {
+                        Text(title,style=MaterialTheme.typography.titleMedium,maxLines=1,
+                            overflow=TextOverflow.Ellipsis)
+                        if(!subtitle.isNullOrEmpty()) Text(subtitle,style=MaterialTheme.typography.labelSmall,
+                            color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=2,
+                            overflow=TextOverflow.Ellipsis)
+                    }
+                }
+            } else {
             if (avatarName != null) {
                 Avatar(avatarName, Modifier.size(GhostLayout.headerAvatar),avatarPhoto)
                 Spacer(Modifier.width(GhostLayout.headerAvatarGap))
@@ -38,6 +59,7 @@ import org.ghostcloak.app.ui.theme.GhostLayout
                 Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (!subtitle.isNullOrEmpty()) Text(subtitle, style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
             }
             if (center != null) Text(center, modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary, textAlign = androidx.compose.ui.text.style.TextAlign.Center)

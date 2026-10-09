@@ -50,7 +50,7 @@ import org.ghostcloak.messaging.Message
             PhotoStage.EXPIRED -> Text("Photo unavailable")
             else -> {
                 Text(when(value?.stage) {
-                    PhotoStage.FETCHING -> "Fetching photo…"
+                    PhotoStage.FETCHING -> "Opening photo…"
                     PhotoStage.VERIFYING -> "Preparing verified photo…"
                     else -> "Waiting for photo…"
                 },style=MaterialTheme.typography.labelMedium)

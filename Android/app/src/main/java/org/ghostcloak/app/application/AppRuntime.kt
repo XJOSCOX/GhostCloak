@@ -35,10 +35,27 @@ class AppRuntime internal constructor(
     private val expiryChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
     val expiryRevision: kotlinx.coroutines.flow.StateFlow<Long> get() = expiryChanges
     fun expiryNow() = expiryClock.now()
-    suspend fun reconcileLocalExpiry() { if (canOpenExisting()) use { } }
+    suspend fun reconcileLocalExpiry() {
+        if (!canOpenExisting()) return
+        // The second-by-second timer needs expiry checks, not the full post-operation
+        // attachment/contact scan. A real deletion still takes the normal cleanup path.
+        if (local == null) { use { }; return }
+        guarded {
+            withContext(Dispatchers.IO) {
+                mutex.withLock {
+                    requireNormal()
+                    if (local!!.reconcileExpiry() > 0) {
+                        expiryChanges.value++
+                        refreshAttachmentUiAccess()
+                        reconcileAttachmentReferences()
+                    }
+                }
+            }
+        }
+    }
     private val mutex = Mutex()
     private var store: EncryptedEndpointStore? = null
-    private var local: ConversationService? = null
+    @Volatile private var local: ConversationService? = null
     private var network: NetworkController? = null
     private var notificationLedger: NotificationLedger? = null
     private var attachments: org.ghostcloak.attachments.AttachmentStore? = null
@@ -47,6 +64,8 @@ class AppRuntime internal constructor(
     private class AttachmentUiAccess(val accountEligible: Boolean = false,
         val messages: Map<Pair<String,String>,ExpiryDeadline?> = emptyMap())
     @Volatile private var attachmentUiAccess = AttachmentUiAccess()
+    private val attachmentAccessChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
+    internal val attachmentAccessRevision: kotlinx.coroutines.flow.StateFlow<Long> get() = attachmentAccessChanges
     private val notificationGate = Any()
     @Volatile private var activityVisible = false
     val syncActive get() = network?.syncActive == true
@@ -183,6 +202,7 @@ class AppRuntime internal constructor(
                             android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0))
                             else org.ghostcloak.transport.FetchCooldown()
                         network=NetworkController(records,engine,apiOrigin,connection,cooldown, ::requireNormal, operationGate, expiryClock)
+                        if(networkConfigured) network?.initializeGroupUnreadBaseline()
                         local = ConversationService(engine, LocalRepository(records, expiryClock),
                             org.ghostcloak.app.attachments.ProfilePhotoPreparation::valid)
                         notificationLedger = NotificationLedger(records, expiryClock)
@@ -203,13 +223,16 @@ class AppRuntime internal constructor(
                         refreshAttachmentUiAccess()
                         reconcileBackground()
                         reconcileNotifications()
-                        attachments?.reconcileReferences(
-                            LocalRepository(store!!,expiryClock).retainedAttachmentReferences(),
-                            store!!.transaction { store!!.keys("outbox/").map { it.removePrefix("outbox/") }.toSet() })
+                        reconcileAttachmentReferences()
                     }
                 }
             }
         }
+    }
+    private fun reconcileAttachmentReferences() {
+        attachments?.reconcileReferences(
+            LocalRepository(store!!,expiryClock).retainedAttachmentReferences(),
+            store!!.transaction { store!!.keys("outbox/").map { it.removePrefix("outbox/") }.toSet() })
     }
     suspend fun open(service: ConversationService): DeviceIdentity? = service.open().also { identity ->
         if (!inDemo && !networkConfigured && identity != null && !attached) { service.attach(router.register(identity.deviceId)); attached = true }
@@ -260,6 +283,18 @@ class AppRuntime internal constructor(
         if(networkConfigured && !inDemo) network?.groupInvitations().orEmpty() else emptyList()
     fun groupConversations():List<org.ghostcloak.messaging.GroupMembershipTransport.Conversation> =
         if(networkConfigured && !inDemo) network?.groupConversations().orEmpty() else emptyList()
+    fun groupConversationsForUi(selectedGroup:String?):List<org.ghostcloak.messaging.GroupMembershipTransport.Conversation> =
+        if(networkConfigured && !inDemo) network?.groupConversationsForUi(selectedGroup).orEmpty() else emptyList()
+    fun groupUnreadCounts():Map<String,Int> =
+        if(networkConfigured && !inDemo) network?.groupUnreadCounts().orEmpty() else emptyMap()
+    fun groupUnreadMessageIds(id:String):Set<String> =
+        if(networkConfigured && !inDemo) network?.groupUnreadMessageIds(id).orEmpty() else emptySet()
+    fun groupUnreadExpiries():Map<String,List<org.ghostcloak.messaging.ExpiryDeadline>> =
+        if(networkConfigured && !inDemo) network?.groupUnreadExpiries().orEmpty() else emptyMap()
+    fun markGroupRead(id:String) { if(networkConfigured && !inDemo) network?.markGroupRead(id) }
+    fun markVisibleGroupRead(id:String,visibleIds:Set<String>) {
+        if(networkConfigured && !inDemo) network?.markVisibleGroupRead(id,visibleIds)
+    }
     fun pendingGroupOwnershipRequests():List<org.ghostcloak.messaging.GroupOwnershipRequestV1> =
         if(networkConfigured && !inDemo) network?.pendingGroupOwnershipRequests().orEmpty() else emptyList()
     private fun activeGroupNetwork():NetworkController {
@@ -268,6 +303,7 @@ class AppRuntime internal constructor(
     }
     suspend fun beginGroupManagementSetup(id:String)=activeGroupNetwork().beginGroupManagementSetup(id)
     suspend fun retryGroupManagementSetup(id:String)=activeGroupNetwork().retryGroupManagementSetup(id)
+    suspend fun resendGroupInvitation(id:String)=activeGroupNetwork().resendGroupInvitation(id)
     suspend fun setGroupPostingMode(id:String,mode:org.ghostcloak.messaging.GroupPostingModeV1)=
         activeGroupNetwork().setGroupPostingMode(id,mode)
     suspend fun setGroupDisappearing(id:String,seconds:Int)=
@@ -306,6 +342,14 @@ class AppRuntime internal constructor(
         check(networkConfigured && !inDemo)
         return network!!.createGroupAndInvite(id)
     }
+    suspend fun createGroupAndInviteSelected(ids:List<String>,name:String):String {
+        check(networkConfigured && !inDemo)
+        return network!!.createGroupAndInviteSelected(ids,name)
+    }
+    suspend fun cancelQueuedCreationInvites(id:String) {
+        check(networkConfigured && !inDemo)
+        network!!.cancelQueuedCreationInvites(id)
+    }
     suspend fun acceptGroupInvite(id:String) {
         check(networkConfigured && !inDemo)
         network!!.acceptGroupInvite(id)
@@ -336,7 +380,10 @@ class AppRuntime internal constructor(
         val pending=repository.pendingAutoDownloads()
         if(pending.isEmpty()) {autoDownloadCursor=0;return}
         val start=autoDownloadCursor%pending.size
-        val candidates=(pending.drop(start)+pending.take(start)).take(4)
+        // This runs under the runtime's encrypted-store mutex. Bound each sync
+        // to one transfer so opening an already-stored conversation is not held
+        // behind several network downloads.
+        val candidates=(pending.drop(start)+pending.take(start)).take(1)
         autoDownloadCursor=(start+candidates.size)%pending.size
         val cached=attachments!!.cachedReferences()
         for((conversation,message) in candidates) {
@@ -407,7 +454,10 @@ class AppRuntime internal constructor(
                 it.identity?.trustState!=org.ghostcloak.identity.IdentityTrustState.CHANGED }.map {it.contact.remoteDeviceId}.toSet()
             val messages=if(eligible) repository.attachmentAccessExpiries(contacts) else emptyMap()
             attachmentContacts=contacts
+            val previous=attachmentUiAccess
             attachmentUiAccess=AttachmentUiAccess(eligible,messages)
+            if(previous.accountEligible!=eligible || previous.messages!=messages)
+                attachmentAccessChanges.value++
         } catch(failure: Exception) {
             attachmentUiAccess=AttachmentUiAccess()
             throw failure
@@ -417,7 +467,7 @@ class AppRuntime internal constructor(
     internal suspend fun attachmentDuration(conversation:String):Int=use { it.policies()[conversation] ?: 0 }
     internal suspend fun supportsGroupMedia(groupId:String):Boolean=use {
         network?.groupInfo(groupId)?.let {info -> info.canUseMedia &&
-            network?.groupConversations()?.firstOrNull {it.groupId==groupId}?.sendRestriction==null
+            network?.groupConversationsForUi(groupId)?.firstOrNull {it.groupId==groupId}?.sendRestriction==null
         }==true
     }
     internal suspend fun discardAttachment(id:String) { use { attachments?.entry(id)?.takeIf { it.references.isEmpty() }?.let { attachments?.remove(id) } } }
@@ -463,8 +513,16 @@ class AppRuntime internal constructor(
         val allowed = { attachmentAllowed() &&
             (conversation in attachmentContacts || org.ghostcloak.messaging.GroupIds.valid(conversation)) &&
             LocalRepository(store!!,expiryClock).attachmentAvailable(conversation,message) }
-        attachments!!.download(descriptor,"$conversation/$message",network!!.blobClient(allowed,{check(allowed())}),allowed).also {
-            LocalRepository(store!!,expiryClock).clearPendingAutoDownload(conversation,message)
+        val verified=attachments!!.download(descriptor,"$conversation/$message",
+            network!!.blobClient(allowed,{check(allowed())}),allowed)
+        try {
+            withContext(Dispatchers.IO) {
+                LocalRepository(store!!,expiryClock).clearPendingAutoDownload(conversation,message)
+            }
+        } catch(failure:Throwable) {
+            verified.close()
+            throw failure
         }
+        verified
     }
 }

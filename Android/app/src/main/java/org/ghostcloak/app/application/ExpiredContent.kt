@@ -8,17 +8,21 @@ internal fun AppState.withoutExpired(now: ExpiryMoment): AppState {
     val counts = unreadByConversation.mapValues { (id, count) ->
         (count - unreadExpiries[id].orEmpty().count { it.reached(now) }).coerceAtLeast(0)
     }
+    val groupCounts = groupUnreadByConversation.mapValues { (id, count) ->
+        (count - groupUnreadExpiries[id].orEmpty().count { it.reached(now) }).coerceAtLeast(0)
+    }
     return copy(messages = messages.filterNot { it.activeExpiry?.reached(now) == true },
         previews = previews.filterValues { it.activeExpiry?.reached(now) != true },
         groups=groups.map {group -> group.copy(messages=group.messages.map {message ->
             if(message.expiry?.reached(now)==true && message.expiryState!=GroupExpiryState.EXPIRED)
                 message.copy(text="",mediaCaption=null,mediaFilename=null,
                     expiryState=GroupExpiryState.EXPIRED,reactions=emptyList()) else message
-        })},unreadByConversation = counts, unreadCount = counts.values.sum())
+        })},unreadByConversation = counts,groupUnreadByConversation=groupCounts,
+        unreadCount = counts.values.sum()+groupCounts.values.sum())
 }
 internal fun AppState.nextExpiryUiDelay(now: ExpiryMoment): Long =
     (messages.mapNotNull { it.activeExpiry } + previews.values.mapNotNull { it.activeExpiry } +
-        unreadExpiries.values.flatten() + groups.flatMap {group -> group.messages.mapNotNull {
+        unreadExpiries.values.flatten() + groupUnreadExpiries.values.flatten() + groups.flatMap {group -> group.messages.mapNotNull {
             if(it.expiryState==GroupExpiryState.EXPIRED) null else it.expiry
         }})
         .filterNot { it.reached(now) }.minOfOrNull {
